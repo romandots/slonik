@@ -324,7 +324,7 @@ services:
   # MCP server — собственная прослойка для LLM-агентов
   # ---------------------------------------------------------------------------
   mcp-kanban:
-    image: slonk/mcp-kanban:dev
+    image: slonk/mcp-kanban:${SLONK_MCP_IMAGE_TAG:-1.0.0}
     build:
       context: ./mcp-kanban
       dockerfile: Dockerfile

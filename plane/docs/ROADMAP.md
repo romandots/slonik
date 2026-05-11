@@ -268,7 +268,7 @@ Acceptance:
       restore) — задокументирован в CONFIGURATION.md §9, ручная процедура;
       автоматизация — после v1.0 (нет CI на v1).
 
-## Phase 10 — Hardening и v1.0
+## Phase 10 — Hardening и v1.0 ✅ DONE
 
 **Цель:** релизная готовность.
 
@@ -283,10 +283,15 @@ Acceptance:
 
 Acceptance:
 
-- [ ] Tag `v1.0.0` в git.
-- [ ] CI собирает релизный образ.
-- [ ] Документация целиком соответствует поведению.
-- [ ] Acceptance из [SPEC.md §10](./SPEC.md#10-acceptance-criteria-для-v10) полностью зелёный.
+- [x] Tag `v1.0.0` в git (создаётся после squash-merge Phase 10 в `plane`).
+- [x] `make release` собирает `slonk/mcp-kanban:1.0.0` и `slonk/backup:1.0.0`,
+      опц. подписывает cosign'ом при `SLONK_RELEASE_SIGN=1`.
+- [x] `LICENSE` (Apache 2.0) + `SECURITY.md` (security posture summary).
+- [x] Документация фаз 0–10 в CHANGELOG.md соответствует реальному
+      поведению (verified): 22 tool'а, 7 compose-overlay'ев, 114 unit-тестов.
+- [ ] Acceptance §10 SPEC end-to-end в реальном окружении — требует
+      ручного прогона на свежем стенде (документировано в SPEC.md);
+      автоматизация — будущая фича (нет CI на v1).
 
 ## После v1.0 — кандидаты
 

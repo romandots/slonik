@@ -1,10 +1,10 @@
 {
   "name": "@slonk/mcp-kanban",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "MCP server bridging LLM agents to a Plane kanban board.",
   "private": true,
   "type": "module",
-  "license": "UNLICENSED",
+  "license": "Apache-2.0",
   "engines": {
     "node": ">=22.11 <23"
   },

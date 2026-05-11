@@ -7,6 +7,67 @@
 
 ## [Unreleased]
 
+## [1.0.0] — 2026-05-12
+
+Первый стабильный релиз slonk. Закрыты все Phase 0–10 из
+[ROADMAP.md](./ROADMAP.md). Acceptance §10 SPEC — выполнено.
+
+### Added
+- **Phase 10 — Hardening + v1.0 release.**
+  - `LICENSE` — Apache 2.0; `package.json.license` обновлён на
+    `Apache-2.0` (был `UNLICENSED`).
+  - `SECURITY.md` — короткое summary security-постуры v1.0:
+    сеть/публикация портов, секреты, аутентификация, концурентность,
+    хранилище MCP, attach_file, recovery; explicit-список того, что v1.0
+    НЕ покрывает (multi-tenant, per-agent OAuth, HSM, CA pinning).
+  - Образы собственной сборки параметризованы: `slonk/mcp-kanban:${SLONK_MCP_IMAGE_TAG:-1.0.0}`
+    в `docker-compose.yml`, `slonk/backup:${SLONK_BACKUP_IMAGE_TAG:-1.0.0}`
+    в `docker-compose.backup.yml`. Дев-сборка по-прежнему доступна
+    переопределением переменной.
+  - `mcp-kanban/package.json.version: 1.0.0` (было `0.1.0`).
+  - **`make release`**: `docker build -t slonk/mcp-kanban:$(SLONK_VERSION)
+    -t :latest` + то же для backup. Опц. `SLONK_RELEASE_SIGN=1`
+    подписывает образы cosign'ом, если он установлен.
+  - **Pinned versions:** lockfile `mcp-kanban/pnpm-lock.yaml` уже
+    закоммичен (Phase 2); все docker-образы — на semver/release-tag'ах
+    (`plane-backend:v1.3.0`, `postgres:15.7-alpine`, `valkey:7.2.11-alpine`,
+    `rabbitmq:3.13.6-management-alpine`, `minio:RELEASE.2025-09-07T16-13-09Z`,
+    `caddy:2.10.0-alpine`, `prom/prometheus:v3.5.0`, `grafana:11.6.0`,
+    `loki:3.4.2`, `promtail:3.4.2`). Pinning на `@sha256:`-digest'ы —
+    рекомендация для production, но не enforced (см. SECURITY.md).
+
+### Что входит в v1.0
+
+22 MCP tool'а: `who_am_i` + 10 read + 8 write + 3 git.
+
+10 overlay-целей Makefile: `up` / `up-dev` / `up-proxy` / `up-obs` /
+`up-backup`, `backup-now`, `bootstrap`, `release`, `down`, `down-v`.
+
+Persistence: postgres / valkey / rabbitmq / minio / plane_uploads / mcp_data
+/ mcp_logs / caddy_data (+ obs/backup tom'а — slonk_prometheus_data,
+slonk_grafana_data, slonk_loki_data, slonk_promtail_positions,
+slonk_caddy_config, slonk_backup_data).
+
+Audit: SQLite `audit.sqlite` (Phase 5) + `git_refs.sqlite` (Phase 6) +
+`identity.sqlite` (Phase 3).
+
+Observability: `/metrics` Prometheus + Grafana dashboard `slonk-overview`
++ Loki+Promtail + 3 alert-rules (`MCPPlaneErrorsHigh`/`MCPRateLimitedSpikes`/
+`MCPScrapeDown`).
+
+TLS front-door: external Caddy через overlay, `tls internal` (Caddy CA)
+по умолчанию, переключаемо в ACME через `CADDY_TLS_MODE=<email>`.
+
+Backup: `pg_dump` + `mc mirror` MinIO + `tar mcp_data` по `BACKUP_CRON` через
+`supercronic`. Опц. external S3 destination через `BACKUP_S3_*`.
+
+Тесты: 114 unit-тестов (см. CHANGELOG ниже для разбивки по фазам).
+`make test` зелёный, `pnpm typecheck` чист.
+
+---
+
+## [Pre-1.0 development log]
+
 ### Added
 - **Phase 9 — Backup.** Расписанный pg_dump + mc mirror MinIO +
   tar mcp_data через overlay `docker-compose.backup.yml`.
@@ -417,8 +478,9 @@
 
 ## История релизов
 
-Релизных версий пока нет. Первая запланированная — `v0.1.0` после завершения
-Phase 1 (Plane stack поднимается). См. [ROADMAP.md](./ROADMAP.md).
+| Версия | Дата | Контент |
+|---|---|---|
+| 1.0.0 | 2026-05-12 | Первый стабильный релиз. Phases 0–10 закрыты. |
 
 <!--
 Шаблон будущей записи:

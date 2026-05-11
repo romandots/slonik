@@ -17,7 +17,7 @@
 
 services:
   backup:
-    image: slonk/backup:dev
+    image: slonk/backup:${SLONK_BACKUP_IMAGE_TAG:-1.0.0}
     build:
       context: ./backup
     restart: unless-stopped

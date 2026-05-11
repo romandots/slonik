@@ -25,7 +25,7 @@ ifeq ($(backup),1)
 	COMPOSE_FILES += -f docker-compose.backup.yml
 endif
 
-.PHONY: help up up-dev up-proxy up-obs up-backup backup-now down down-v logs ps smoke test build bootstrap config pull
+.PHONY: help up up-dev up-proxy up-obs up-backup backup-now down down-v logs ps smoke test build release bootstrap config pull
 
 help: ## Показать доступные цели
 	@awk 'BEGIN { FS = ":.*##"; printf "Доступные цели:\n" } \
@@ -106,6 +106,26 @@ test: ## Запустить unit-тесты MCP-сервера
 
 build: ## Собрать Docker-образ mcp-kanban
 	$(COMPOSE) $(COMPOSE_FILES) build mcp-kanban
+
+# slonk-релиз: версии берутся из переменной SLONK_VERSION (default 1.0.0).
+# Собирает оба собственных образа (mcp-kanban + backup) и тегирует их
+# `slonk/<svc>:${SLONK_VERSION}` + `slonk/<svc>:latest`. Подпись cosign'ом
+# — опц., через SLONK_RELEASE_SIGN=1 (требует cosign в PATH).
+SLONK_VERSION ?= 1.0.0
+release: ## Собрать релизные образы slonk/mcp-kanban + slonk/backup на SLONK_VERSION
+	@echo "[release] building slonk/mcp-kanban:$(SLONK_VERSION)"
+	docker build -t slonk/mcp-kanban:$(SLONK_VERSION) -t slonk/mcp-kanban:latest ./mcp-kanban
+	@echo "[release] building slonk/backup:$(SLONK_VERSION)"
+	docker build -t slonk/backup:$(SLONK_VERSION) -t slonk/backup:latest ./backup
+ifneq ($(SLONK_RELEASE_SIGN),)
+	@echo "[release] cosign sign"
+	cosign sign --yes slonk/mcp-kanban:$(SLONK_VERSION)
+	cosign sign --yes slonk/backup:$(SLONK_VERSION)
+endif
+	@echo
+	@echo "Done. Образы:"
+	@docker images --format 'table {{.Repository}}:{{.Tag}}\t{{.Size}}' \
+		| grep -E '^slonk/(mcp-kanban|backup):' || true
 
 bootstrap: ## Идемпотентная инициализация Plane (workspace/project/states/labels/identities)
 	$(COMPOSE) $(COMPOSE_FILES) run --rm mcp-kanban node dist/server.js bootstrap
