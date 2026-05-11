@@ -34,6 +34,11 @@ const ConfigSchema = z.object({
   PLANE_API_BASE_URL: z.string().url(),
   PLANE_API_KEY: optionalNonEmpty,
 
+  // MinIO (для attach_file presign — Phase 5)
+  MINIO_BUCKET_MCP: z.string().min(1).default('mcp-artifacts'),
+  MINIO_INTERNAL_ENDPOINT: z.string().url().default('http://minio:9000'),
+  PLANE_SIGNED_URL_EXPIRATION: PositiveInt.default(3600),
+
   // Бизнес-логика
   MCP_DEFAULT_WORKSPACE: z.string().min(1).default('agents'),
   MCP_DEFAULT_PROJECT: z.string().min(1).default('code-agents'),

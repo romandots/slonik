@@ -8,6 +8,106 @@
 ## [Unreleased]
 
 ### Added
+- **Phase 5 — Write MCP tools (без git).** 8 tool'ов для модификации
+  состояния доски, atomic claim, audit log, rate limiting.
+  - **Tools:** `create_issue`, `update_issue`, `transition_issue`,
+    `claim_issue`, `release_issue`, `block_issue`, `comment_issue`,
+    `attach_file` (двухфазный presign / complete для MinIO).
+  - **Atomic claim** через таблицу `claim_lock` в `mcp_data/audit.sqlite`:
+    UNIQUE-constraint `issue_id` — single serialization point. Параллельный
+    `claim_issue` двух identity на одну задачу даёт ровно 1 успех + 1
+    `CONFLICT`. При сбое Plane patch'а — claim откатывается, повторный
+    вызов возможен.
+  - **Audit log** (`mcp_data/audit.sqlite`, таблица `audit_log`): пишется
+    `trace_id, ts, identity, tool, input_hash, outcome, error_code, event,
+    issue_id` для **каждой** write-операции (успех/ошибка/rate-limit).
+    Rate-limit error пишется отдельной записью.
+  - **Rate limiter** (`src/rate-limit.ts`): token-bucket in-memory с двумя
+    bucket'ами — глобальный (`MCP_RL_GLOBAL_RPS`, default 20) и
+    per-identity (`MCP_RL_IDENTITY_RPS`, default 5). Превышение →
+    `RATE_LIMITED` с `retry_after_ms` в message.
+  - **Префикс комментариев** `[<role>]:` (через `formatComment`) во всех
+    tool'ах, что пишут в Plane comments (`comment_issue`,
+    `transition_issue`, `claim_issue`, `block_issue`, `attach_file`).
+    HTML-экранирование пользовательского ввода.
+  - **MCP_BUCKET для attach_file** — добавлены конфиг-ключи
+    `MINIO_BUCKET_MCP` (default `mcp-artifacts`),
+    `MINIO_INTERNAL_ENDPOINT` (default `http://minio:9000`),
+    `PLANE_SIGNED_URL_EXPIRATION` (default 3600 сек).
+  - **Тесты:** 19 новых unit-тестов: rate-limit (4 — global/identity/refill/cross),
+    audit (4 — record/atomic-claim/release/hash), claim_issue (3 —
+    happy-path/race-CONFLICT/rollback), release_issue (2 — own/foreign),
+    create_issue (2 — happy/unknown-label), comment_issue (2 —
+    format/post), attach_file (2 — presign/complete). Race-тест
+    выполняет 2 параллельных `claim_issue` через `Promise.allSettled` и
+    проверяет 1 fulfilled + 1 rejected с `code=CONFLICT`.
+- **Phase 4 — Read-only MCP tools.** 10 read-tool'ов для чтения состояния
+  доски, meta-блок парсер, in-memory кеш.
+  - **Tools:** `list_workspaces`, `list_projects`, `list_states`,
+    `list_labels`, `list_cycles`, `list_modules`, `list_issues`,
+    `get_issue`, `search_issues`, `get_issue_history`. Все
+    зарегистрированы в `src/tools/registry.ts`; имена возвращаются через
+    `/mcp/tools`.
+  - **Parser `<!-- slonk:meta v1 -->`** (`src/meta-block.ts`): идемпотентный
+    разбор description'а Plane-задачи на body + YAML meta-блок с
+    `repos[]`. Повреждённый блок не разрушается — поднимается флаг
+    `meta_corrupt:true` (вызывающий обязан пометить `needs-human`).
+    Helpers `upsertGitRef` / `removeGitRef` для будущего Phase 6.
+  - **In-memory кеш** (`src/cache.ts`): TTL=10 сек по
+    `tool+inputHash`. Read-tools мемоизируют Plane-ответы; write-tools
+    вызывают `cache.clear()` после успеха.
+  - **Schema-валидация входа** — zod-схемы (`src/tools/<tool>/schema.ts`)
+    конвертируются MCP SDK в JSON Schema автоматически. Filtering в
+    `list_issues` — `state`, `label`, `assignee`, `cycle`, `module`,
+    `priority`, `limit` (с string→id-резолвом по `listStates`/`listLabels`).
+  - **`get_issue`** возвращает meta-блок отдельным полем `meta`, body —
+    в `description_body`. Поддерживает оба формата issue_id: uuid и
+    `SLONK-123` (через `parseIssueRef`).
+  - **Тесты:** 16 новых unit-тестов: meta-block (11 — parse/serialize/
+    upsert/remove/corruption), cache (5 — ttl/expire/memoize/clear/hash),
+    list_issues (4 — filters/allow-list/cache-hit), get_issue (3 —
+    meta-extraction/corrupt/not-found), list_states (1 — smoke),
+    search_issues (1).
+- **Phase 3 — Bootstrap.** Идемпотентная инициализация Plane workspace /
+  project / states / labels / identities из YAML-манифеста.
+  - **CLI** `mcp-kanban bootstrap` (через `node dist/server.js bootstrap`):
+    диспатч из `src/server.ts` загружает `bootstrap/manifest.yaml`,
+    валидирует через zod (`src/bootstrap/manifest.ts`), запускает
+    `runBootstrap` и печатает многострочный отчёт + `BOOTSTRAP OK`.
+    `make bootstrap` дёргает CLI внутри `docker compose run --rm`.
+  - **Plane REST-клиент** (`src/plane-client.ts`): полная обёртка над
+    `/workspaces/` / `/projects/` / `/states/` / `/labels/` / `/cycles/` /
+    `/modules/` / `/issues/` / `/activities/` / `/comments/` /
+    `/members/` / `/invitations/` с единой retry-логикой (3 попытки,
+    exponential backoff на 429/5xx), таймаутом
+    `MCP_PLANE_TIMEOUT_MS` и `X-Api-Key`-аутентификацией.
+  - **Идемпотентный runner** (`src/bootstrap/runner.ts`): get-by-slug /
+    get-by-identifier / list+diff-by-name для каждой коллекции; создаёт
+    только недостающее. Повторный запуск против заполненного Plane —
+    `created: 0` по всем категориям.
+  - **Identities**: per_user-режим инвайтит каждого `*-agent` через
+    `POST /workspaces/<slug>/invitations/` и пишет маппинг
+    `role → plane_user_id` в SQLite. При любой ошибке инвайта — fallback
+    на `single_bot` (single Plane user, dispatch по префиксу комментария
+    `[<role>]:`), warning в логе и `fallback_reason` в отчёте.
+  - **SQLite-стор identity** (`src/bootstrap/store.ts`): файл
+    `mcp_data/identity.sqlite`, таблицы `identity_mapping` +
+    `bootstrap_meta`. `IdentityStore.upsert()` идемпотентен; close()
+    обязателен.
+  - **Манифест** (`mcp-kanban/bootstrap/manifest.yaml`): workspace
+    `agents`, project `SLONK / code-agents` (modules: cycles/modules/views/
+    pages), 11 states (Backlog→Cancelled), 14 labels, 6 identities — точно
+    по [CONFIGURATION.md §4](./CONFIGURATION.md#4-bootstrap-plane).
+  - **Stack-deps:** `better-sqlite3@^11.7` (native: `apk add python3 make g++`
+    в builder-stage Dockerfile, `pnpm-workspace.yaml.onlyBuiltDependencies`
+    разрешает postinstall),`yaml@^2.6`, `@types/better-sqlite3@^7.6`.
+    Compose-volume'ы `mcp_data` + `mcp_logs` для SQLite/логов.
+  - **Тесты:** 12 unit-тестов: manifest-загрузка (3 — shipped/bad-group/
+    bad-color), identity-store (4 — upsert/overwrite/sort/meta), runner
+    (4 — fresh/idempotent/fallback/single_bot-explicit) с in-memory
+    fake-PlaneClient.
+
+### Added
 - **Phase 2 — MCP server skeleton.** Контейнер `mcp-kanban`
   (TypeScript / Node 22 LTS / pnpm 11) запускается, отвечает на `/health`
   и регистрирует один tool `who_am_i` через MCP-протокол.
