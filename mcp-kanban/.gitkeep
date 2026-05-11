@@ -1,4 +1,0 @@
-# mcp-kanban — MCP-сервер
-# Заполняется в Phase 2 (см. plane/docs/ROADMAP.md).
-# Стек: TypeScript / Node 20 LTS + @modelcontextprotocol/sdk + fastify + zod
-# + better-sqlite3 + pino (см. plane/docs/CONVENTIONS.md §2).

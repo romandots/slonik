@@ -46,7 +46,8 @@
 | Пакетный менеджер | `pnpm` (lockfile commit'ится) |
 
 Node-версия — pinned через `.nvmrc` и `engines.node` в `package.json`. v1 целит
-на `20.x LTS`.
+на `22.x LTS` (актуальный Active LTS на момент Phase 2; Node 20 в Maintenance —
+причина: pnpm 11.x требует Node ≥ 22 из-за используемых встроенных модулей).
 
 Альтернативный стек (Python / Go) допустим только при явном решении в
 [CHANGELOG.md](./CHANGELOG.md). Смена стека после Phase 4 — отдельная инициатива.
