@@ -70,6 +70,5 @@ test: ## Запустить unit-тесты MCP-сервера
 build: ## Собрать Docker-образ mcp-kanban
 	$(COMPOSE) $(COMPOSE_FILES) build mcp-kanban
 
-bootstrap: ## Идемпотентная инициализация Plane (реализуется в Phase 3)
-	@echo "make bootstrap: цель будет реализована в Phase 3 (см. plane/docs/ROADMAP.md)"
-	@exit 1
+bootstrap: ## Идемпотентная инициализация Plane (workspace/project/states/labels/identities)
+	$(COMPOSE) $(COMPOSE_FILES) run --rm mcp-kanban node dist/server.js bootstrap

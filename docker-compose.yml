@@ -348,6 +348,14 @@ services:
       MCP_METRICS_ENABLED: ${MCP_METRICS_ENABLED}
       PLANE_API_BASE_URL: ${PLANE_API_BASE_URL}
       PLANE_API_KEY: ${PLANE_API_KEY:-}
+      # Phase 5: attach_file использует bundled-MinIO как S3 backend.
+      MINIO_BUCKET_MCP: ${MINIO_BUCKET_MCP}
+      MINIO_INTERNAL_ENDPOINT: http://minio:9000
+      PLANE_SIGNED_URL_EXPIRATION: ${PLANE_SIGNED_URL_EXPIRATION}
+    volumes:
+      # Phase 3+: SQLite-стор (identity-map, audit, git_refs) и опц. логи.
+      - mcp_data:/mcp_data
+      - mcp_logs:/var/log/mcp
     ports:
       - "${MCP_SERVER_PORT}:${MCP_SERVER_PORT}"
     depends_on:
@@ -439,3 +447,7 @@ volumes:
     name: slonk_minio_data
   plane_uploads:
     name: slonk_plane_uploads
+  mcp_data:
+    name: slonk_mcp_data
+  mcp_logs:
+    name: slonk_mcp_logs

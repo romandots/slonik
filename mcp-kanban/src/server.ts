@@ -11,20 +11,40 @@ import { McpError } from './errors.js';
 import { createLogger, type Logger } from './logger.js';
 import { PlaneClient } from './plane-client.js';
 import { registerTools, REGISTERED_TOOL_NAMES } from './tools/registry.js';
+import { TtlCache } from './cache.js';
 import { isAgentIdentity, type AgentIdentity } from './identity.js';
+import { IdentityStore } from './bootstrap/store.js';
+import { BOOTSTRAP_STORE_DEFAULT_PATH } from './bootstrap/cli.js';
+import { AuditLog } from './audit.js';
+import { RateLimiter } from './rate-limit.js';
 
 const SERVER_VERSION = readPackageVersion();
 
 export interface BuildServerOptions {
   config: Config;
   logger?: Logger;
+  /**
+   * Путь к SQLite-стору (`identity.sqlite`). По умолчанию — общий стор по
+   * пути в томе `mcp_data`. Тесты могут передать `:memory:` или путь во
+   * временной директории.
+   */
+  identityStorePath?: string;
+  /** Путь к audit-логу (`audit.sqlite`). По умолчанию — в томе `mcp_data`. */
+  auditStorePath?: string;
 }
+
+export const AUDIT_STORE_DEFAULT_PATH = '/mcp_data/audit.sqlite';
 
 export interface BuiltServer {
   app: FastifyInstance;
   config: Config;
   logger: Logger;
-  /** Closes Fastify and all open MCP transports. */
+  plane: PlaneClient;
+  cache: TtlCache;
+  identityStore: IdentityStore;
+  audit: AuditLog;
+  rateLimiter: RateLimiter;
+  /** Closes Fastify, MCP transports, and SQLite stores. */
   close: () => Promise<void>;
 }
 
@@ -49,6 +69,18 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
   });
 
   const plane = new PlaneClient({ config, logger });
+  const cache = new TtlCache({ ttlMs: 10_000 });
+  // Identity store открываем «лениво-безопасно»: если файла нет — better-sqlite3
+  // создаст пустую БД (и identity mode по факту окажется default из конфига).
+  // Bootstrap сам наполнит файл.
+  const identityStore = new IdentityStore({
+    path: opts.identityStorePath ?? BOOTSTRAP_STORE_DEFAULT_PATH,
+  });
+  const audit = new AuditLog({ path: opts.auditStorePath ?? AUDIT_STORE_DEFAULT_PATH });
+  const rateLimiter = new RateLimiter({
+    globalRps: config.MCP_RL_GLOBAL_RPS,
+    identityRps: config.MCP_RL_IDENTITY_RPS,
+  });
 
   // ---------------- /health ----------------
   // Без авторизации; пингует Plane по корневому URL.
@@ -113,7 +145,24 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
       registerTools(mcp, {
         config,
         serverVersion: SERVER_VERSION,
+        plane,
+        cache,
+        logger,
         resolveIdentity: () => identity,
+        resolveIdentityMode: () => {
+          const stored = identityStore.getMeta('identity_mode');
+          if (stored === 'per_user' || stored === 'single_bot') return stored;
+          return config.MCP_AGENT_IDENTITY_MODE;
+        },
+        defaultWorkspace: config.MCP_DEFAULT_WORKSPACE,
+        defaultProjectSlug: config.MCP_DEFAULT_PROJECT,
+        allowedProjects: config.MCP_ALLOWED_PROJECTS,
+        audit,
+        rateLimiter,
+        resolvePlaneUserId: () => identityStore.get(identity)?.plane_user_id ?? null,
+        minioBucket: config.MINIO_BUCKET_MCP,
+        minioEndpoint: config.MINIO_INTERNAL_ENDPOINT,
+        signedUrlExpirationSec: config.PLANE_SIGNED_URL_EXPIRATION,
       });
       // MCP SDK типы внутри Transport объявляют onclose: () => void как
       // обязательный, а StreamableHTTPServerTransport — как optional;
@@ -166,9 +215,19 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
     }
     sessions.clear();
     await app.close();
+    try {
+      identityStore.close();
+    } catch {
+      // store уже мог быть закрыт; не критично
+    }
+    try {
+      audit.close();
+    } catch {
+      // best-effort
+    }
   };
 
-  return { app, config, logger, close };
+  return { app, config, logger, plane, cache, identityStore, audit, rateLimiter, close };
 }
 
 function headerString(v: string | string[] | undefined): string | undefined {
@@ -217,11 +276,29 @@ async function main(): Promise<void> {
   );
 }
 
+// CLI-диспетчер: первая позиционная команда (если есть) определяет режим.
+//   (нет)         — запуск HTTP-сервера (см. main()).
+//   bootstrap     — идемпотентный bootstrap Plane.
+async function dispatch(): Promise<void> {
+  const cmd = process.argv[2];
+  if (cmd === 'bootstrap') {
+    const { bootstrapCli } = await import('./bootstrap/cli.js');
+    await bootstrapCli();
+    return;
+  }
+  if (cmd !== undefined && cmd !== '') {
+    // eslint-disable-next-line no-console
+    console.error(`Unknown command: ${cmd}`);
+    process.exit(2);
+  }
+  await main();
+}
+
 // Запускаем только если файл — entrypoint (не импортируется из тестов).
 const isEntrypoint = process.argv[1] !== undefined
   && import.meta.url === `file://${process.argv[1]}`;
 if (isEntrypoint) {
-  main().catch((err) => {
+  dispatch().catch((err) => {
     // eslint-disable-next-line no-console
     console.error('Fatal startup error:', err);
     process.exit(1);

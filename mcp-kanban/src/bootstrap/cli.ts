@@ -1,0 +1,74 @@
+import { loadConfig } from '../config.js';
+import { createLogger } from '../logger.js';
+import { PlaneClient } from '../plane-client.js';
+import { loadManifest } from './manifest.js';
+import { IdentityStore } from './store.js';
+import { runBootstrap, type BootstrapReport } from './runner.js';
+
+// Entrypoint для `mcp-kanban bootstrap`. Вызывается из server.ts через
+// dispatch'ера CLI-аргументов. Выходит с кодом 0 при успехе, 1 при любой
+// неустранимой ошибке.
+
+export const BOOTSTRAP_STORE_DEFAULT_PATH = '/mcp_data/identity.sqlite';
+
+export interface BootstrapCliOptions {
+  manifestPath?: string;
+  storePath?: string;
+}
+
+export async function bootstrapCli(opts: BootstrapCliOptions = {}): Promise<void> {
+  const config = loadConfig();
+  const logger = createLogger(config).child({ component: 'bootstrap' });
+  const manifest = loadManifest({ ...(opts.manifestPath !== undefined ? { path: opts.manifestPath } : {}) });
+
+  if (config.PLANE_API_KEY === undefined) {
+    logger.error(
+      'PLANE_API_KEY is not set; bootstrap cannot authenticate against Plane. ' +
+        'Generate the key in Plane UI (Settings → API Tokens) and set it in .env.',
+    );
+    throw new Error('PLANE_API_KEY required for bootstrap');
+  }
+
+  const plane = new PlaneClient({ config, logger });
+  const store = new IdentityStore({ path: opts.storePath ?? BOOTSTRAP_STORE_DEFAULT_PATH });
+  try {
+    const report = await runBootstrap({
+      plane,
+      store,
+      logger,
+      manifest,
+      config,
+    });
+    printReport(report);
+  } finally {
+    store.close();
+  }
+}
+
+function printReport(report: BootstrapReport): void {
+  const lines: string[] = [];
+  lines.push('---');
+  lines.push(`workspace: ${report.workspace.slug} (${report.workspace.created ? 'created' : 'exists'})`);
+  for (const p of report.projects) {
+    lines.push(`project:   ${p.identifier} / ${p.slug} (${p.created ? 'created' : 'exists'})`);
+  }
+  lines.push(
+    `states:    ${report.states.created} created, ${report.states.existing} existing (of ${report.states.total})`,
+  );
+  lines.push(
+    `labels:    ${report.labels.created} created, ${report.labels.existing} existing (of ${report.labels.total})`,
+  );
+  lines.push(
+    `identity:  mode=${report.identities.mode} invited=${report.identities.invited} skipped=${report.identities.skipped}` +
+      (report.identities.fallback_reason !== undefined
+        ? ` fallback_reason="${report.identities.fallback_reason}"`
+        : ''),
+  );
+  lines.push(`duration:  ${report.duration_ms} ms`);
+  lines.push('BOOTSTRAP OK');
+
+  // Намеренно через console.log: bootstrap — CLI, отчёт идёт в stdout
+  // пользователю, не в structured-логи.
+  // eslint-disable-next-line no-console
+  console.log(lines.join('\n'));
+}

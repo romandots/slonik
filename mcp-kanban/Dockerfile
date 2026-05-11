@@ -5,6 +5,10 @@ FROM node:22.13-alpine AS builder
 
 WORKDIR /app
 
+# Build-toolchain для нативных модулей (better-sqlite3 → node-gyp).
+# Удаляются после pnpm prune --prod, в runtime-слой не попадают.
+RUN apk add --no-cache python3 make g++
+
 # corepack pinning — версия pnpm должна совпадать с package.json
 # "packageManager". В node:22.13-alpine corepack ещё содержит устаревший
 # набор доверенных ключей и не верифицирует pnpm 11.1.0 — обновляем до
@@ -15,17 +19,16 @@ RUN npm install -g corepack@latest \
  && corepack enable pnpm \
  && corepack prepare pnpm@11.1.0 --activate
 
-# Сначала только lockfile + manifest — кешируем зависимости отдельно.
-# --ignore-scripts: postinstall-скрипты не нужны для prod-сборки. esbuild
-# (через vitest) использует pre-built бинари per-platform, его postinstall
-# скрипт мы пропускаем — это devDependency, в финальный runtime-слой не
-# попадает после pnpm prune --prod ниже.
-COPY package.json pnpm-lock.yaml ./
-RUN pnpm install --frozen-lockfile --ignore-scripts
+# Lockfile + manifest + workspace (для onlyBuiltDependencies allowlist).
+# Native postinstall'ы для better-sqlite3/esbuild разрешены через
+# pnpm-workspace.yaml.
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+RUN pnpm install --frozen-lockfile
 
-# Исходники + tsconfig (vitest.config.ts не копируем — не нужно для сборки)
+# Исходники + tsconfig + bootstrap manifest
 COPY tsconfig.json ./
 COPY src ./src
+COPY bootstrap ./bootstrap
 
 # Сборка TS → dist/
 RUN pnpm run build
@@ -47,10 +50,11 @@ ENV NODE_ENV=production
 # MCP_LOG_FILE намеренно не задан — пустое значение фейлит zod-валидацию.
 # Если нужен файловый sink, переопределите MCP_LOG_FILE при docker run.
 
-# Готовый билд + production-зависимости
+# Готовый билд + production-зависимости + bootstrap-manifest
 COPY --chown=node:node --from=builder /app/node_modules ./node_modules
 COPY --chown=node:node --from=builder /app/dist ./dist
 COPY --chown=node:node --from=builder /app/package.json ./package.json
+COPY --chown=node:node --from=builder /app/bootstrap ./bootstrap
 
 # Healthcheck — встроенный node-script, нет зависимости от curl/wget
 HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=5 \

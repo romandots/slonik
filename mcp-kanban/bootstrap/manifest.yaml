@@ -1,0 +1,56 @@
+# slonk bootstrap manifest
+#
+# Single source of truth for Plane bootstrap. Bootstrap reads this file and
+# idempotently brings Plane to the described state: workspace, projects,
+# states, labels, agent identities.
+#
+# Loader: mcp-kanban/src/bootstrap/manifest.ts (validates via zod, fails
+# loudly on schema drift). Editors: keep keys in this exact order; the diff
+# in `bootstrap` output is line-oriented.
+
+workspace:
+  slug: agents
+  name: "Code Agents"
+
+projects:
+  - slug: code-agents
+    name: "Code Agents — Default Project"
+    identifier: SLONK
+    modules: [cycles, modules, views, pages]
+
+states:
+  - { name: "Backlog",         group: backlog,    color: "#94a3b8", order: 1,  default: true }
+  - { name: "To Do",           group: unstarted,  color: "#3b82f6", order: 2 }
+  - { name: "Analysis",        group: started,    color: "#a855f7", order: 3 }
+  - { name: "Development",     group: started,    color: "#22c55e", order: 4 }
+  - { name: "Security Review", group: started,    color: "#ef4444", order: 5 }
+  - { name: "Code Review",     group: started,    color: "#f59e0b", order: 6 }
+  - { name: "Testing",         group: started,    color: "#06b6d4", order: 7 }
+  - { name: "Documenting",     group: started,    color: "#0ea5e9", order: 8 }
+  - { name: "Blocked",         group: started,    color: "#64748b", order: 9 }
+  - { name: "Done",            group: completed,  color: "#16a34a", order: 10 }
+  - { name: "Cancelled",       group: cancelled,  color: "#dc2626", order: 11 }
+
+labels:
+  - { name: agent-ready,    color: "#3b82f6" }
+  - { name: agent-claimed,  color: "#22c55e" }
+  - { name: agent-blocked,  color: "#64748b" }
+  - { name: needs-human,    color: "#ef4444" }
+  - { name: needs-review,   color: "#f59e0b" }
+  - { name: needs-tests,    color: "#06b6d4" }
+  - { name: bug,            color: "#dc2626" }
+  - { name: feature,        color: "#16a34a" }
+  - { name: refactoring,    color: "#a855f7" }
+  - { name: docs,           color: "#0ea5e9" }
+  - { name: infra,          color: "#475569" }
+  - { name: security,       color: "#7f1d1d" }
+  - { name: high-priority,  color: "#b91c1c" }
+  - { name: low-priority,   color: "#94a3b8" }
+
+identities:
+  - { role: analyst-agent,          email: analyst-agent@slonk.local,          first_name: Analyst,         last_name: Agent, default_state: "Analysis" }
+  - { role: developer-agent,        email: developer-agent@slonk.local,        first_name: Developer,       last_name: Agent, default_state: "Development" }
+  - { role: security-auditor-agent, email: security-auditor-agent@slonk.local, first_name: SecurityAuditor, last_name: Agent, default_state: "Security Review" }
+  - { role: code-review-agent,      email: code-review-agent@slonk.local,      first_name: CodeReview,      last_name: Agent, default_state: "Code Review" }
+  - { role: qa-agent,               email: qa-agent@slonk.local,               first_name: QA,              last_name: Agent, default_state: "Testing" }
+  - { role: doc-agent,              email: doc-agent@slonk.local,              first_name: Doc,             last_name: Agent, default_state: "Documenting" }
