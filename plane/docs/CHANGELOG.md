@@ -8,6 +8,16 @@
 ## [Unreleased]
 
 ### Added
+- **Phase 0 — Скелет репозитория.** Корневой `README.md` как точка входа в
+  `plane/docs/`, `.gitignore` (секреты, ноды-артефакты, docker-volume'ы,
+  бэкапы, SQLite), `.editorconfig` (UTF-8/LF/без trailing ws),
+  `.nvmrc` (Node 20 LTS), `.env.example` (стартовый набор переменных с
+  заглушками для секретов), пустая директорная структура
+  (`mcp-kanban/`, `caddy/`, `prometheus/`, `grafana/`, `loki/`,
+  `promtail/`, `backup/`) с `.gitkeep`-маркерами фазы заполнения,
+  `Makefile` с целями-заглушками `up`/`down`/`logs`/`test`/`bootstrap` и
+  default-целью `help`, которая печатает список доступных команд
+  (см. [ROADMAP.md §Phase 0](./ROADMAP.md#phase-0--скелет-репозитория)).
 - Документация проекта (`README.md`, `SPEC.md`, `ARCHITECTURE.md`,
   `CONFIGURATION.md`, `ROADMAP.md`, `CONVENTIONS.md`, `CHANGELOG.md`),
   собранная из исходного `BRIEF.md`.
@@ -30,6 +40,16 @@
   `MCP_AGENT_IDENTITY_MODE` (см. [SPEC.md §5.5](./SPEC.md#55-agent-identity)).
 
 ### Decisions
+- **CI:** отказались от GitHub Actions / GitLab CI на этапе v1 — проект
+  ведётся локально, без публичного зеркала. Линтеры и тесты запускаются
+  вручную через `make` цели. Может быть пересмотрено перед v1.0.0.
+- **Branching:** ветка `plane` — основная для разработки v1; merge в `main`
+  не делаем до выхода v1.0.0. Фазы из ROADMAP.md идут как
+  `feature/phase-<N>-<slug>` от `plane` → squash-merge обратно в `plane`.
+- **Plane:** на этапе Phase 1 закрепляем образы Plane на стабильном
+  semver-тэге `v1.3.0` (актуальный stable upstream-релиз на момент старта
+  фазы) вместо плавающего `latest-stable`. Конкретные digest'ы будут
+  закреплены позже.
 - **Stack:** TypeScript/Node для MCP — выбран ради зрелого MCP SDK и нативной
   JSON-работы с Plane REST. Альтернативы (Python/Go) отложены.
 - **Storage:** локальный SQLite внутри MCP для audit-log, git-refs-индекса
