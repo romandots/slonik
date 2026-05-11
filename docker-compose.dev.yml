@@ -1,0 +1,33 @@
+# slonk — dev overlay
+#
+# Включается через:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+#
+# Публикует на хост порты, которые в базовом compose недоступны — для
+# отладки БД/кэша/брокера/object storage и прямого попадания в plane-api в
+# обход plane-proxy.
+#
+# В прод-режиме НЕ применять (см. plane/docs/CONVENTIONS.md §14).
+
+services:
+  postgres:
+    ports:
+      - "5432:5432"
+
+  redis:
+    ports:
+      - "6379:6379"
+
+  rabbitmq:
+    ports:
+      - "5672:5672"       # AMQP
+      - "15672:15672"     # management UI
+
+  minio:
+    ports:
+      - "9000:9000"       # S3 API
+      - "9001:9001"       # console UI
+
+  plane-api:
+    ports:
+      - "8000:8000"

@@ -1,0 +1,394 @@
+# slonk — базовый compose-стек
+#
+# Поднимает Plane v1.3.0 в self-hosted конфигурации + инфра-сервисы. Один
+# контейнер plane-proxy служит входной точкой (host: PLANE_HOST_PORT → 80),
+# фронтенды (web/admin/space/live) и backend (api/worker/beat) общаются
+# через path-based fan-out внутри internal_net.
+#
+# Архитектура — plane/docs/ARCHITECTURE.md, переменные — .env.example.
+
+# -----------------------------------------------------------------------------
+# Anchors: общий блок env для всех plane-backend контейнеров (api/worker/beat/
+# migrator). Один источник правды — меняем здесь, применяется ко всем.
+# -----------------------------------------------------------------------------
+x-plane-backend-env: &plane-backend-env
+  # Django core
+  SECRET_KEY: ${PLANE_SECRET_KEY}
+  DEBUG: ${PLANE_DEBUG}
+  CORS_ALLOWED_ORIGINS: ${PLANE_CORS_ALLOWED_ORIGINS}
+  WEB_URL: ${PLANE_DOMAIN}
+  GUNICORN_WORKERS: ${PLANE_GUNICORN_WORKERS}
+  API_KEY_RATE_LIMIT: ${PLANE_API_KEY_RATE_LIMIT}
+  HARD_DELETE_AFTER_DAYS: ${PLANE_HARD_DELETE_AFTER_DAYS}
+
+  # Database — Plane читает преимущественно DATABASE_URL.
+  DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}
+  POSTGRES_DB: ${POSTGRES_DB}
+  POSTGRES_USER: ${POSTGRES_USER}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+  POSTGRES_HOST: ${POSTGRES_HOST}
+  POSTGRES_PORT: ${POSTGRES_PORT}
+  PGHOST: ${POSTGRES_HOST}
+  PGDATABASE: ${POSTGRES_DB}
+
+  # Redis / Valkey
+  REDIS_URL: redis://${REDIS_HOST}:${REDIS_PORT}/
+  REDIS_HOST: ${REDIS_HOST}
+  REDIS_PORT: ${REDIS_PORT}
+
+  # RabbitMQ — Celery broker
+  AMQP_URL: amqp://${RABBITMQ_DEFAULT_USER}:${RABBITMQ_DEFAULT_PASS}@${RABBITMQ_HOST}:${RABBITMQ_PORT}/${RABBITMQ_DEFAULT_VHOST}
+  RABBITMQ_HOST: ${RABBITMQ_HOST}
+  RABBITMQ_PORT: ${RABBITMQ_PORT}
+  RABBITMQ_USER: ${RABBITMQ_DEFAULT_USER}
+  RABBITMQ_PASSWORD: ${RABBITMQ_DEFAULT_PASS}
+  RABBITMQ_VHOST: ${RABBITMQ_DEFAULT_VHOST}
+
+  # S3 / MinIO. Plane использует boto3-совместимый клиент; AWS_*-имена — это
+  # как раз то, что он читает.
+  USE_MINIO: ${MINIO_USE}
+  AWS_REGION: ${MINIO_REGION}
+  AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+  AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+  AWS_S3_ENDPOINT_URL: http://minio:9000
+  AWS_S3_BUCKET_NAME: ${MINIO_BUCKET_PLANE}
+  BUCKET_NAME: ${MINIO_BUCKET_PLANE}
+  FILE_SIZE_LIMIT: ${PLANE_FILE_SIZE_LIMIT}
+  SIGNED_URL_EXPIRATION: ${PLANE_SIGNED_URL_EXPIRATION}
+  MINIO_ENDPOINT_SSL: ${MINIO_ENDPOINT_SSL}
+
+  # Base URLs (для генерации ссылок в письмах и редиректов).
+  APP_BASE_URL: ${PLANE_APP_BASE_URL}
+  APP_BASE_PATH: ${PLANE_APP_BASE_PATH}
+  ADMIN_BASE_URL: ${PLANE_ADMIN_BASE_URL}
+  ADMIN_BASE_PATH: ${PLANE_ADMIN_BASE_PATH}
+  SPACE_BASE_URL: ${PLANE_SPACE_BASE_URL}
+  SPACE_BASE_PATH: ${PLANE_SPACE_BASE_PATH}
+  LIVE_BASE_URL: ${PLANE_LIVE_BASE_URL}
+  LIVE_BASE_PATH: ${PLANE_LIVE_BASE_PATH}
+
+  # Shared secret api ↔ live
+  LIVE_SERVER_SECRET_KEY: ${PLANE_LIVE_SECRET_KEY}
+
+# Общий restart-policy для длительных сервисов.
+x-restart-policy: &restart-policy
+  restart: unless-stopped
+
+# Общие настройки логирования (json-file с rotation).
+x-logging: &logging
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "5"
+
+services:
+  # ---------------------------------------------------------------------------
+  # Инфраструктура
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:15.7-alpine
+    <<: [*restart-policy, *logging]
+    command: postgres -c max_connections=1000
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      internal_net:
+        # Plane-upstream Caddyfile ожидает hostname plane-db; алиас для
+        # обратной совместимости с возможными upstream-конфигами.
+        aliases: [plane-db]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  redis:
+    image: valkey/valkey:7.2.11-alpine
+    <<: [*restart-policy, *logging]
+    volumes:
+      - redis_data:/data
+    networks:
+      internal_net:
+        aliases: [plane-redis]
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  rabbitmq:
+    image: rabbitmq:3.13.6-management-alpine
+    <<: [*restart-policy, *logging]
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS}
+      RABBITMQ_DEFAULT_VHOST: ${RABBITMQ_DEFAULT_VHOST}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      internal_net:
+        aliases: [plane-mq]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    <<: [*restart-policy, *logging]
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_REGION: ${MINIO_REGION}
+    volumes:
+      - minio_data:/data
+    networks:
+      internal_net:
+        # plane-proxy ожидает hostname `plane-minio` в Caddyfile.
+        aliases: [plane-minio]
+    healthcheck:
+      test: ["CMD-SHELL", "mc ready local || curl -fsS http://localhost:9000/minio/health/live || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+
+  # ---------------------------------------------------------------------------
+  # Plane backend: API, Celery worker, Celery beat, one-shot migrator
+  # ---------------------------------------------------------------------------
+  plane-migrator:
+    image: makeplane/plane-backend:${PLANE_IMAGE_TAG}
+    <<: *logging
+    restart: "no"
+    command: ./bin/docker-entrypoint-migrator.sh
+    environment:
+      <<: *plane-backend-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - internal_net
+
+  plane-api:
+    image: makeplane/plane-backend:${PLANE_IMAGE_TAG}
+    <<: [*restart-policy, *logging]
+    command: ./bin/docker-entrypoint-api.sh
+    environment:
+      <<: *plane-backend-env
+    volumes:
+      - plane_uploads:/code/plane/media
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      plane-migrator:
+        condition: service_completed_successfully
+    networks:
+      internal_net:
+        # plane-proxy резолвит api по hostname `api`.
+        aliases: [api]
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://localhost:8000/', timeout=3).status==200 else sys.exit(1)\""]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 60s
+
+  plane-worker:
+    image: makeplane/plane-backend:${PLANE_IMAGE_TAG}
+    <<: [*restart-policy, *logging]
+    command: ./bin/docker-entrypoint-worker.sh
+    environment:
+      <<: *plane-backend-env
+    depends_on:
+      plane-api:
+        condition: service_healthy
+      plane-migrator:
+        condition: service_completed_successfully
+    networks:
+      - internal_net
+
+  plane-beat:
+    image: makeplane/plane-backend:${PLANE_IMAGE_TAG}
+    <<: [*restart-policy, *logging]
+    command: ./bin/docker-entrypoint-beat.sh
+    environment:
+      <<: *plane-backend-env
+    depends_on:
+      plane-api:
+        condition: service_healthy
+      plane-migrator:
+        condition: service_completed_successfully
+    networks:
+      - internal_net
+
+  # ---------------------------------------------------------------------------
+  # Plane frontends: web (главное UI), admin (god-mode), space (публичные
+  # views), live (realtime collaboration)
+  # ---------------------------------------------------------------------------
+  plane-web:
+    image: makeplane/plane-frontend:${PLANE_IMAGE_TAG}
+    <<: [*restart-policy, *logging]
+    depends_on:
+      plane-api:
+        condition: service_healthy
+    networks:
+      internal_net:
+        aliases: [web]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  plane-admin:
+    image: makeplane/plane-admin:${PLANE_IMAGE_TAG}
+    <<: [*restart-policy, *logging]
+    depends_on:
+      plane-api:
+        condition: service_healthy
+    networks:
+      internal_net:
+        aliases: [admin]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  plane-space:
+    image: makeplane/plane-space:${PLANE_IMAGE_TAG}
+    <<: [*restart-policy, *logging]
+    depends_on:
+      plane-api:
+        condition: service_healthy
+    networks:
+      internal_net:
+        aliases: [space]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/spaces/"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  plane-live:
+    image: makeplane/plane-live:${PLANE_IMAGE_TAG}
+    <<: [*restart-policy, *logging]
+    environment:
+      REDIS_URL: redis://${REDIS_HOST}:${REDIS_PORT}/
+      API_BASE_URL: http://api:8000
+      WEB_BASE_URL: ${PLANE_APP_BASE_URL}
+      LIVE_SERVER_SECRET_KEY: ${PLANE_LIVE_SECRET_KEY}
+    depends_on:
+      plane-api:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      internal_net:
+        aliases: [live]
+    # plane-live отдаёт 404 на любой path (не предполагает прямого захода),
+    # поэтому healthcheck проверяет только что HTTP-сервер отвечает (любой
+    # статус-код = healthy, отказ соединения = unhealthy).
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'node -e "require(''http'').get(''http://localhost:3000/'',r=>process.exit(0)).on(''error'',()=>process.exit(1))"'
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # ---------------------------------------------------------------------------
+  # Plane front-door: Caddy с path-based fan-out
+  # ---------------------------------------------------------------------------
+  # Внимание: фронтенды Plane (web/admin/space) собраны со same-origin
+  # routing — все XHR-вызовы идут на текущий origin с path-префиксами
+  # (/api/*, /god-mode/*, /spaces/*, /live/*, /${BUCKET_NAME}/*). Без
+  # plane-proxy фронтенды не работают. В Phase 7 поверх plane-proxy
+  # добавляется внешний caddy с TLS.
+  plane-proxy:
+    image: makeplane/plane-proxy:${PLANE_IMAGE_TAG}
+    <<: [*restart-policy, *logging]
+    environment:
+      APP_DOMAIN: ${PLANE_APP_DOMAIN}
+      SITE_ADDRESS: ${PLANE_SITE_ADDRESS}
+      BUCKET_NAME: ${MINIO_BUCKET_PLANE}
+      FILE_SIZE_LIMIT: ${PLANE_FILE_SIZE_LIMIT}
+      LISTEN_HTTP_PORT: 80
+      LISTEN_HTTPS_PORT: 443
+    ports:
+      - "${PLANE_HOST_PORT}:80"
+    depends_on:
+      plane-web:
+        condition: service_healthy
+      plane-api:
+        condition: service_healthy
+      plane-admin:
+        condition: service_healthy
+      plane-live:
+        condition: service_healthy
+      plane-space:
+        condition: service_healthy
+    networks:
+      - public_net
+      - internal_net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:80/ -O /dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
+
+# =============================================================================
+# Networks
+# =============================================================================
+# public_net — наружу публикуемые сервисы (plane-proxy и, начиная с Phase 2,
+# mcp-kanban).
+# internal_net — БД/кэш/брокер/object storage и внутренние Plane-сервисы.
+# Изоляция от хоста достигается отсутствием ports: в этой compose-секции;
+# dev-overlay (docker-compose.dev.yml) при необходимости публикует их порты.
+# =============================================================================
+networks:
+  public_net:
+    name: slonk_public_net
+    driver: bridge
+  internal_net:
+    name: slonk_internal_net
+    driver: bridge
+
+# =============================================================================
+# Volumes — персистентность всех данных Plane
+# =============================================================================
+volumes:
+  postgres_data:
+    name: slonk_postgres_data
+  redis_data:
+    name: slonk_redis_data
+  rabbitmq_data:
+    name: slonk_rabbitmq_data
+  minio_data:
+    name: slonk_minio_data
+  plane_uploads:
+    name: slonk_plane_uploads
