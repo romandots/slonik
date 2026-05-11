@@ -1,0 +1,229 @@
+import Fastify, { type FastifyBaseLogger, type FastifyInstance } from 'fastify';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+import { authenticate, type AuthedRequest } from './auth.js';
+import { loadConfig, type Config } from './config.js';
+import { McpError } from './errors.js';
+import { createLogger, type Logger } from './logger.js';
+import { PlaneClient } from './plane-client.js';
+import { registerTools, REGISTERED_TOOL_NAMES } from './tools/registry.js';
+import { isAgentIdentity, type AgentIdentity } from './identity.js';
+
+const SERVER_VERSION = readPackageVersion();
+
+export interface BuildServerOptions {
+  config: Config;
+  logger?: Logger;
+}
+
+export interface BuiltServer {
+  app: FastifyInstance;
+  config: Config;
+  logger: Logger;
+  /** Closes Fastify and all open MCP transports. */
+  close: () => Promise<void>;
+}
+
+/**
+ * Создаёт Fastify-приложение и подключает MCP-транспорт. Не запускает
+ * listen() — вызывающий код сам решает, на каком порту слушать (в тестах
+ * это `fastify.inject`, в продакшне — `app.listen({ port, host })`).
+ */
+export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer> {
+  const { config } = opts;
+  const logger = opts.logger ?? createLogger(config);
+  // Подключаем наш pino-инстанс. Типы Fastify FastifyBaseLogger строже
+  // pino.Logger в одном поле (msgPrefix) — в рантайме они совместимы,
+  // поэтому приводим через unknown.
+  const app = Fastify({
+    loggerInstance: logger as unknown as FastifyBaseLogger,
+    genReqId: () => randomUUID(),
+    requestIdHeader: 'x-request-id',
+    requestIdLogLabel: 'trace_id',
+    disableRequestLogging: false,
+    trustProxy: true,
+  });
+
+  const plane = new PlaneClient({ config, logger });
+
+  // ---------------- /health ----------------
+  // Без авторизации; пингует Plane по корневому URL.
+  app.get('/health', async () => {
+    const planeHealth = await plane.checkHealth();
+    return {
+      status: 'ok',
+      service: 'mcp-kanban',
+      version: SERVER_VERSION,
+      plane_reachable: planeHealth.reachable,
+      plane_status: planeHealth.status,
+      plane_latency_ms: planeHealth.latencyMs,
+    };
+  });
+
+  // ---------------- /mcp/tools (debug) ----------------
+  // Возвращает имена зарегистрированных tool'ов. Требует Bearer-токен;
+  // identity не обязательна (это диагностический endpoint, не вызов tool'а).
+  app.get('/mcp/tools', async (request, reply) => {
+    authenticate(request, reply, { expectedToken: config.MCP_AUTH_TOKEN, requireIdentity: false });
+    return { tools: [...REGISTERED_TOOL_NAMES] };
+  });
+
+  // ---------------- /mcp ----------------
+  // Основной MCP endpoint. StreamableHTTP-транспорт MCP SDK обслуживает
+  // и POST (JSON-RPC), и GET/SSE-апгрейд в одном маршруте.
+  //
+  // Каждый POST с initialize создаёт новую сессию (новая пара
+  // McpServer+transport); далее клиент пересылает mcp-session-id и
+  // последующие запросы попадают в ту же транспортную сессию.
+  const sessions = new Map<string, StreamableHTTPServerTransport>();
+
+  app.all('/mcp', async (request, reply) => {
+    authenticate(request, reply, { expectedToken: config.MCP_AUTH_TOKEN });
+    const identity = (request as unknown as AuthedRequest).identity;
+
+    const sessionId = headerString(request.headers['mcp-session-id']);
+    let transport = sessionId !== undefined ? sessions.get(sessionId) : undefined;
+
+    if (transport === undefined) {
+      const newTransport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => randomUUID(),
+        onsessioninitialized: (sid: string) => {
+          sessions.set(sid, newTransport);
+          logger.info({ session: sid, identity }, 'mcp session opened');
+        },
+      });
+      newTransport.onclose = () => {
+        const sid = newTransport.sessionId;
+        if (sid !== undefined) {
+          sessions.delete(sid);
+          logger.info({ session: sid }, 'mcp session closed');
+        }
+      };
+      const mcp = new McpServer(
+        { name: 'slonk-mcp-kanban', version: SERVER_VERSION },
+        { capabilities: { tools: {} } },
+      );
+      // Identity для tool'ов — берём из замыкания. Если в будущем
+      // потребуется per-call идентичность, transport содержит request
+      // context — этот hook расширим тогда.
+      registerTools(mcp, {
+        config,
+        serverVersion: SERVER_VERSION,
+        resolveIdentity: () => identity,
+      });
+      // MCP SDK типы внутри Transport объявляют onclose: () => void как
+      // обязательный, а StreamableHTTPServerTransport — как optional;
+      // при exactOptionalPropertyTypes: true это разъезжается. В
+      // рантайме они полностью совместимы, поэтому cast через Parameters.
+      await mcp.connect(newTransport as Parameters<typeof mcp.connect>[0]);
+      transport = newTransport;
+    }
+
+    // Передаём управление транспорту. Fastify видит `reply.raw` — он
+    // напрямую работает с node http ServerResponse. После этого
+    // отвечать через `reply` нельзя — транспорт сам закроет соединение.
+    reply.hijack();
+    await transport.handleRequest(request.raw, reply.raw, request.body);
+  });
+
+  // ---------------- error handling ----------------
+  app.setErrorHandler((err, request, reply) => {
+    if (err instanceof McpError) {
+      logger.warn(
+        { trace_id: request.id, code: err.code, err: err.message },
+        'mcp error response',
+      );
+      reply.status(err.httpStatus).send({
+        error: {
+          code: err.code,
+          message: err.message,
+          trace_id: typeof request.id === 'string' ? request.id : undefined,
+        },
+      });
+      return;
+    }
+    logger.error({ trace_id: request.id, err }, 'unexpected error');
+    reply.status(500).send({
+      error: {
+        code: 'INTERNAL',
+        message: 'Internal server error',
+        trace_id: typeof request.id === 'string' ? request.id : undefined,
+      },
+    });
+  });
+
+  const close = async (): Promise<void> => {
+    for (const [, t] of sessions) {
+      try {
+        await t.close();
+      } catch {
+        // best-effort: продолжаем закрывать остальные
+      }
+    }
+    sessions.clear();
+    await app.close();
+  };
+
+  return { app, config, logger, close };
+}
+
+function headerString(v: string | string[] | undefined): string | undefined {
+  if (typeof v === 'string') return v;
+  if (Array.isArray(v) && v.length > 0) return v[0];
+  return undefined;
+}
+
+function readPackageVersion(): string {
+  try {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const pkgPath = join(here, '..', 'package.json');
+    const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as { version?: string };
+    return pkg.version ?? '0.0.0-dev';
+  } catch {
+    return '0.0.0-dev';
+  }
+}
+
+// Re-export для использования в тестах
+export { isAgentIdentity, type AgentIdentity };
+
+// ---------------- bootstrap ----------------
+async function main(): Promise<void> {
+  const config = loadConfig();
+  const logger = createLogger(config);
+  const built = await buildServer({ config, logger });
+
+  const shutdown = async (signal: string): Promise<void> => {
+    logger.info({ signal }, 'shutting down');
+    try {
+      await built.close();
+      process.exit(0);
+    } catch (err) {
+      logger.error({ err }, 'shutdown error');
+      process.exit(1);
+    }
+  };
+  process.on('SIGTERM', () => void shutdown('SIGTERM'));
+  process.on('SIGINT', () => void shutdown('SIGINT'));
+
+  await built.app.listen({ port: config.MCP_SERVER_PORT, host: '0.0.0.0' });
+  logger.info(
+    { port: config.MCP_SERVER_PORT, version: SERVER_VERSION },
+    'mcp-kanban listening',
+  );
+}
+
+// Запускаем только если файл — entrypoint (не импортируется из тестов).
+const isEntrypoint = process.argv[1] !== undefined
+  && import.meta.url === `file://${process.argv[1]}`;
+if (isEntrypoint) {
+  main().catch((err) => {
+    // eslint-disable-next-line no-console
+    console.error('Fatal startup error:', err);
+    process.exit(1);
+  });
+}
