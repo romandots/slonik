@@ -1,0 +1,3 @@
+# promtail — агент сбора логов
+# Заполняется в Phase 8 (см. plane/docs/ROADMAP.md).
+# Тейлит stdout всех контейнеров через docker-socket и пушит в Loki.

@@ -1,0 +1,3 @@
+# prometheus — конфиг сбора метрик
+# Заполняется в Phase 8 (см. plane/docs/ROADMAP.md).
+# Скрейпит /metrics MCP-сервера (если MCP_METRICS_ENABLED=true).
