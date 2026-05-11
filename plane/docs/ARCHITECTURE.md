@@ -8,26 +8,35 @@ slonk — это монолитный single-tenant стек на одном doc
 TLS и observability/backup-стек.
 
 ```text
-                          ┌─────────────────────────────────┐
-                          │           Хост (Docker)         │
-                          │                                 │
-   browser ─────────┐     │  ┌──────────┐    ┌───────────┐  │
-   (Plane UI)       ├──TLS┤  │  caddy   │───▶│ plane-web │  │
-                    │     │  └────┬─────┘    └─────┬─────┘  │
-                    │     │       │                ▼        │
-   MCP client ──────┘     │       │           ┌─────────┐   │
-   (Claude / Codex)       │       └──────────▶│plane-api│   │
-                          │                   └────┬────┘   │
-                          │       ┌─────────┐      │        │
-                          │       │mcp-kanban│◀────┘        │
-                          │       └────┬─────┘              │
-                          │            │                    │
-                          │   ┌────────┼────────┐           │
-                          │   ▼        ▼        ▼           │
-                          │ postgres  redis  rabbitmq       │
-                          │              minio              │
-                          └─────────────────────────────────┘
+                       ┌──────────────────────────────────────────┐
+                       │              Хост (Docker)               │
+                       │                                          │
+  browser ────TLS───┐  │  ┌───────┐    ┌─────────────┐            │
+  (Plane UI)        ├──┼─▶│ caddy │───▶│ plane-proxy │ (path fan-out)
+                    │  │  └───┬───┘    └──────┬──────┘            │
+                    │  │      │               ├──▶ plane-web      │
+                    │  │      │               ├──▶ plane-admin    │
+                    │  │      │               ├──▶ plane-space    │
+                    │  │      │               ├──▶ plane-live     │
+                    │  │      │               ├──▶ plane-api ───┐ │
+                    │  │      │               └──▶ minio        │ │
+  MCP client ───────┘  │      └───────────▶ mcp-kanban ◀────────┘ │
+  (Claude / Codex)     │                          │               │
+                       │                          ▼               │
+                       │             ┌──────────────────────┐     │
+                       │             │  plane-api (REST)    │     │
+                       │             └──────────┬───────────┘     │
+                       │                        │                 │
+                       │   ┌──────────┬─────────┼─────────┐       │
+                       │   ▼          ▼         ▼         ▼       │
+                       │ postgres   redis   rabbitmq   minio      │
+                       │   (Valkey)                               │
+                       │   + plane-worker, plane-beat, migrator   │
+                       └──────────────────────────────────────────┘
 ```
+
+`caddy` (Phase 7) — внешний TLS-шлюз. `plane-proxy` (Phase 1) — внутренний
+fan-out по path-префиксам, требуется upstream Plane v1.3.0.
 
 ## 2. Логические слои
 
@@ -45,23 +54,32 @@ TLS и observability/backup-стек.
 
 ### 3.1 `public_net`
 
-Bridge-сеть, через которую разрешён трафик с хоста (а через прокси — и
-извне). На ней живут только публикуемые сервисы:
+Bridge-сеть, через которую разрешён трафик с хоста (а через внешний caddy —
+и извне). На ней живут только публикуемые наружу сервисы:
 
-- `caddy` (если включён) — единственный, кто публикует `:80`/`:443`.
-- Без `caddy` (dev-режим): `plane-web` публикует `:3000`, `mcp-kanban` — `:8787`.
-- `minio` — публикует только `:9001` (console), и **только в dev-overlay**.
+- `plane-proxy` (Phase 1, базовый compose) — публикует `${PLANE_HOST_PORT}:80`
+  (default `3000:80`). Единственный front-door всего стека Plane.
+- `mcp-kanban` (Phase 2+) — публикует `${MCP_SERVER_PORT}:8787` для агентов.
+- Внешний `caddy` (Phase 7, overlay `--profile proxy`) перехватывает `:80`/`:443`
+  и проксирует на `plane-proxy` + `mcp-kanban`.
 
 ### 3.2 `internal_net`
 
-Internal bridge, без `external` и без публикации портов на хост. Сюда подключены:
+Bridge-сеть без публикации портов на хост в базовом compose. На ней живут:
 
-- `postgres`, `redis`, `rabbitmq`, `minio` — exclusive.
-- `plane-api`, `plane-worker`, `plane-beat`, `mcp-kanban` — оба network'а
-  (нужны и для агентов снаружи, и для доступа к Postgres внутри).
+- Данные: `postgres`, `redis`, `rabbitmq`, `minio` — exclusive.
+- Plane backend: `plane-api`, `plane-worker`, `plane-beat`, `plane-migrator` —
+  exclusive (наружу выходят через `plane-proxy`).
+- Plane frontends: `plane-web`, `plane-admin`, `plane-space`, `plane-live` —
+  exclusive.
+- `mcp-kanban` — оба network'а (наружу для агентов, внутрь для Plane API).
+- `plane-proxy` — оба network'а (наружу для пользователей, внутрь для
+  fan-out по plane-web/api/admin/space/live/minio).
 
-Plane UI (`plane-web`) тоже на обоих, потому что обращается к API через
-internal hostname.
+В dev-overlay (`docker-compose.dev.yml`) на хост дополнительно публикуются:
+`postgres:5432`, `redis:6379`, `rabbitmq:5672` + `:15672` (management),
+`minio:9000` + `:9001` (console), `plane-api:8000`. В прод-режиме эти
+порты остаются изолированными в `internal_net`.
 
 ### 3.3 Hostname'ы
 
@@ -79,16 +97,21 @@ internal hostname.
 
 | Сервис | Базовый образ | Restart | Зависимости |
 |---|---|---|---|
-| `plane-web` | `makeplane/plane-frontend:<ver>` | `unless-stopped` | `plane-api` |
-| `plane-api` | `makeplane/plane-backend:<ver>` | `unless-stopped` | `postgres`, `redis`, `rabbitmq`, `minio` |
-| `plane-worker` | `makeplane/plane-backend:<ver>` | `unless-stopped` | те же |
-| `plane-beat` | `makeplane/plane-backend:<ver>` | `unless-stopped` | те же |
-| `postgres` | `postgres:16-alpine` | `unless-stopped` | — |
-| `redis` | `valkey/valkey:7-alpine` | `unless-stopped` | — |
-| `rabbitmq` | `rabbitmq:3-management-alpine` | `unless-stopped` | — |
-| `minio` | `minio/minio:RELEASE.2025-…` | `unless-stopped` | — |
+| `plane-proxy` | `makeplane/plane-proxy:v1.3.0` | `unless-stopped` | `plane-web`, `plane-api`, `plane-admin`, `plane-live`, `plane-space` |
+| `plane-web` | `makeplane/plane-frontend:v1.3.0` | `unless-stopped` | `plane-api` (healthy) |
+| `plane-admin` | `makeplane/plane-admin:v1.3.0` | `unless-stopped` | `plane-api` (healthy) |
+| `plane-space` | `makeplane/plane-space:v1.3.0` | `unless-stopped` | `plane-api` (healthy) |
+| `plane-live` | `makeplane/plane-live:v1.3.0` | `unless-stopped` | `plane-api` (healthy), `redis` |
+| `plane-api` | `makeplane/plane-backend:v1.3.0` | `unless-stopped` | `postgres`, `redis`, `rabbitmq`, `minio` (все healthy), `plane-migrator` (completed) |
+| `plane-worker` | `makeplane/plane-backend:v1.3.0` | `unless-stopped` | `plane-api`, `plane-migrator` |
+| `plane-beat` | `makeplane/plane-backend:v1.3.0` | `unless-stopped` | `plane-api`, `plane-migrator` |
+| `plane-migrator` | `makeplane/plane-backend:v1.3.0` | `"no"` (one-shot) | `postgres`, `redis` (healthy) |
+| `postgres` | `postgres:15.7-alpine` | `unless-stopped` | — |
+| `redis` | `valkey/valkey:7.2.11-alpine` | `unless-stopped` | — |
+| `rabbitmq` | `rabbitmq:3.13.6-management-alpine` | `unless-stopped` | — |
+| `minio` | `minio/minio:RELEASE.2025-09-07T16-13-09Z` | `unless-stopped` | — |
 | `mcp-kanban` | локальный build из `mcp-kanban/` | `unless-stopped` | `plane-api` |
-| `caddy` | `caddy:2-alpine` | `unless-stopped` | `plane-web`, `mcp-kanban` |
+| `caddy` | `caddy:2-alpine` | `unless-stopped` | `plane-proxy`, `mcp-kanban` |
 | `prometheus` | `prom/prometheus:v2` | `unless-stopped` | — |
 | `grafana` | `grafana/grafana:11` | `unless-stopped` | `prometheus`, `loki` |
 | `loki` | `grafana/loki:3` | `unless-stopped` | — |
@@ -97,16 +120,42 @@ internal hostname.
 
 Все pinned образы и тэги — обязательно явные (никаких `:latest`).
 
+**Plane backend под капотом — один образ.** Сервисы `plane-api`, `plane-worker`,
+`plane-beat`, `plane-migrator` поднимаются из одного и того же
+`makeplane/plane-backend:v1.3.0`; различаются только командой entrypoint'а
+(`docker-entrypoint-{api,worker,beat,migrator}.sh`).
+
+**plane-proxy — обязательный front-door, не опциональный.** Фронтенды Plane
+(`plane-web`/`plane-admin`/`plane-space`) собраны со same-origin routing —
+все XHR-вызовы идут на текущий origin с path-префиксами (`/api/*`,
+`/god-mode/*`, `/spaces/*`, `/live/*`, `/${BUCKET_NAME}/*`). Без plane-proxy
+фронтенды не работают. В Phase 7 поверх plane-proxy ставится внешний `caddy`
+для TLS и публичного DNS.
+
+**Network-aliases для plane-proxy.** Bundled Caddyfile внутри `plane-proxy`
+жёстко ссылается на hostname'ы `api`, `web`, `admin`, `space`, `live`,
+`plane-minio`. Наши сервисы в compose именуются по конвенции (`plane-api`,
+`plane-web`, …); внутри `internal_net` для них прописаны network-aliases,
+чтобы Caddy резолвил backends без модификации образа.
+
 Healthchecks:
 
-- `plane-api`: `wget -qO- http://localhost:8000/api/v1/health`
-- `mcp-kanban`: `wget -qO- http://localhost:8787/health`
-- `postgres`: `pg_isready -U $POSTGRES_USER`
-- `redis`: `valkey-cli ping`
-- `rabbitmq`: `rabbitmq-diagnostics ping`
-- `minio`: `curl -fsS http://localhost:9000/minio/health/ready`
+- `plane-api`: `python3 -c "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://localhost:8000/', timeout=3).status==200 else sys.exit(1)"`
+  (upstream Plane не отдаёт `/api/v1/health`; работающий health-эндпоинт — `GET /` → `{"status":"OK"}`).
+- `plane-web` / `plane-admin`: `curl -fsS http://127.0.0.1:3000/` (встроены в Dockerfile upstream).
+- `plane-space`: `curl -fsS http://127.0.0.1:3000/spaces/` (встроен в Dockerfile upstream).
+- `plane-live`: `wget -qO- http://localhost:3000/live/`.
+- `plane-proxy`: `wget -qO- http://localhost:80/`.
+- `plane-worker` / `plane-beat`: healthcheck не настроен, полагаемся на `restart: unless-stopped`.
+- `plane-migrator`: one-shot; используется `depends_on: condition: service_completed_successfully`.
+- `mcp-kanban`: `wget -qO- http://localhost:8787/health`.
+- `postgres`: `pg_isready -U $POSTGRES_USER -d $POSTGRES_DB`.
+- `redis` (Valkey): `valkey-cli ping`.
+- `rabbitmq`: `rabbitmq-diagnostics -q ping`.
+- `minio`: `curl -fsS http://localhost:9000/minio/health/live`.
 
-`depends_on` использует `condition: service_healthy` для всех зависимостей.
+`depends_on` использует `condition: service_healthy` для длительных сервисов и
+`condition: service_completed_successfully` для one-shot `plane-migrator`.
 
 ## 5. Volumes
 

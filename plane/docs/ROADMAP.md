@@ -34,24 +34,47 @@ Acceptance:
 
 **Цель:** Plane поднимается локально с персистентным хранилищем, UI открывается.
 
+Реальный набор сервисов Plane v1.3.0 шире, чем планировалось в первоначальной
+формулировке фазы: помимо `plane-api`/`plane-worker`/`plane-beat`/`plane-web`
+upstream требует `plane-migrator` (one-shot миграций), `plane-admin`
+(god-mode UI для первичной настройки админа), `plane-live` (realtime), и
+`plane-space` (публичные share-views) — все из единого образа
+`makeplane/plane-backend:v1.3.0` либо одноимённых фронтенд-образов. Плюс
+`plane-proxy` (Caddy) — обязательная входная точка, потому что фронтенды
+upstream собраны со same-origin routing.
+
 Деливериблы:
 
-- `docker-compose.yml` с сервисами: `postgres`, `redis`, `rabbitmq`, `minio`,
-  `plane-api`, `plane-worker`, `plane-beat`, `plane-web`.
-- Сети `public_net` и `internal_net` с правильным распределением сервисов.
+- `docker-compose.yml` со всеми Plane-сервисами v1.3.0
+  (`plane-proxy`, `plane-web`, `plane-admin`, `plane-space`, `plane-live`,
+  `plane-api`, `plane-worker`, `plane-beat`, `plane-migrator`) и
+  инфра-сервисами (`postgres:15.7-alpine`, `valkey/valkey:7.2.11-alpine`,
+  `rabbitmq:3.13.6-management-alpine`, `minio` на pinned-релизе).
+- `docker-compose.dev.yml` overlay с публикацией портов БД/MinIO/API на хост.
+- Сети `public_net` и `internal_net` с правильным распределением сервисов;
+  network-aliases (`api`, `web`, `admin`, `space`, `live`, `plane-minio`,
+  `plane-db`, `plane-redis`, `plane-mq`) для совместимости с bundled
+  Caddyfile внутри `plane-proxy`.
 - Volume'ы `postgres_data`, `redis_data`, `rabbitmq_data`, `minio_data`,
   `plane_uploads`.
-- Healthcheck'и для всех сервисов.
-- `.env.example` дополнен Plane/Postgres/Redis/RabbitMQ/MinIO-переменными.
-- `make up` поднимает стек, `make smoke` проверяет healthy.
+- Healthcheck'и для всех длительных сервисов; `depends_on:
+  condition: service_healthy` для зависимостей и
+  `condition: service_completed_successfully` для one-shot `plane-migrator`.
+- `.env.example` дополнен Plane/Postgres/Valkey/RabbitMQ/MinIO-переменными.
+- `make up` поднимает стек (`docker compose up -d --wait`),
+  `make smoke` проверяет статус и Plane UI на `${PLANE_HOST_PORT}`.
 
 Acceptance:
 
-- [ ] `docker compose up -d` → все сервисы healthy за < 90 сек.
-- [ ] Plane UI доступен на `http://localhost:3000`.
+- [ ] `docker compose up -d --wait` → все сервисы healthy за < 90 сек после
+      того, как образы скачаны (первый запуск дольше из-за `docker pull`).
+- [ ] Plane UI доступен на `http://localhost:3000` (через `plane-proxy`).
+- [ ] `/god-mode` UI доступен на том же origin'е, позволяет создать
+      первого admin'а (`plane-admin` сервис проксируется по `/god-mode/*`).
 - [ ] `docker compose down && docker compose up -d` сохраняет данные.
-- [ ] Порты Postgres/Redis/RabbitMQ/MinIO **не** опубликованы на хост в базовом
-      compose-файле (проверяется `docker port`).
+- [ ] Порты Postgres/Redis/RabbitMQ/MinIO/plane-api **не** опубликованы на
+      хост в базовом compose-файле (проверяется `docker compose port` и
+      `nmap`).
 - [ ] `docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d`
       публикует их для отладки.
 

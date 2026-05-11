@@ -50,12 +50,30 @@ docker compose --profile backup up -d
 
 | Переменная | Default | Описание |
 |---|---|---|
-| `PLANE_DOMAIN` | `http://localhost:3000` | Публичный URL Plane UI |
-| `PLANE_API_BASE_URL` | `http://plane-api:8000/api/v1` | Внутренний URL API |
+| `PLANE_IMAGE_TAG` | `v1.3.0` | Версия upstream-образов `makeplane/plane-*` |
+| `PLANE_DOMAIN` | `http://localhost:3000` | Публичный URL Plane UI (через `plane-proxy`) |
+| `PLANE_HOST_PORT` | `3000` | Хост-порт, на котором публикуется `plane-proxy` (контейнер слушает `:80`) |
+| `PLANE_APP_DOMAIN` | `localhost` | Домен Caddy внутри `plane-proxy`; `localhost` = без TLS |
+| `PLANE_SITE_ADDRESS` | `:80` | Listen-адрес Caddy внутри `plane-proxy` |
+| `PLANE_API_BASE_URL` | `http://plane-api:8000/api/v1` | Внутренний URL API для MCP |
 | `PLANE_API_KEY` | — | API-ключ workspace-admin'а **(secret)**, заполняется после bootstrap'а UI |
-| `PLANE_SECRET_KEY` | — | Django SECRET_KEY **(secret)**, генерируется один раз |
-| `PLANE_DEBUG` | `false` | Debug-режим backend |
+| `PLANE_SECRET_KEY` | `change_me` | Django SECRET_KEY **(secret)**, `openssl rand -hex 32` |
+| `PLANE_LIVE_SECRET_KEY` | `change_me` | HMAC-секрет между `plane-api` и `plane-live` **(secret)** |
+| `PLANE_DEBUG` | `0` | Debug-режим Django (`0`/`1`) |
 | `PLANE_CORS_ALLOWED_ORIGINS` | `http://localhost:3000` | Comma-separated CORS |
+| `PLANE_GUNICORN_WORKERS` | `1` | Кол-во gunicorn-воркеров `plane-api` |
+| `PLANE_API_KEY_RATE_LIMIT` | `60/minute` | Rate limit для API-ключей Plane |
+| `PLANE_HARD_DELETE_AFTER_DAYS` | `60` | Через сколько дней soft-deleted объекты удаляются окончательно |
+| `PLANE_FILE_SIZE_LIMIT` | `5242880` | Лимит размера upload'а (байт), default 5 MiB |
+| `PLANE_SIGNED_URL_EXPIRATION` | `3600` | TTL presigned URL'ов (сек) |
+| `PLANE_APP_BASE_URL` | `http://localhost:3000` | Base URL для пользовательского UI |
+| `PLANE_APP_BASE_PATH` | (пусто) | Path prefix для UI |
+| `PLANE_ADMIN_BASE_URL` | `http://localhost:3000` | Base URL для god-mode |
+| `PLANE_ADMIN_BASE_PATH` | `/god-mode` | Path prefix для god-mode |
+| `PLANE_SPACE_BASE_URL` | `http://localhost:3000` | Base URL для публичных views |
+| `PLANE_SPACE_BASE_PATH` | `/spaces` | Path prefix для публичных views |
+| `PLANE_LIVE_BASE_URL` | `http://localhost:3000` | Base URL для realtime |
+| `PLANE_LIVE_BASE_PATH` | `/live` | Path prefix для realtime |
 
 ### 2.2 Postgres
 
@@ -64,7 +82,10 @@ docker compose --profile backup up -d
 | `POSTGRES_DB` | `plane` | имя БД |
 | `POSTGRES_USER` | `plane` | пользователь |
 | `POSTGRES_PASSWORD` | `change_me` | **(secret)** |
+| `POSTGRES_HOST` | `postgres` | hostname в `internal_net` (алиас `plane-db`) |
 | `POSTGRES_PORT` | `5432` | внутренний порт |
+
+Compose автоматически собирает `DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}` для plane-backend.
 
 ### 2.3 Redis / Valkey
 
@@ -78,20 +99,25 @@ docker compose --profile backup up -d
 
 | Переменная | Default | Описание |
 |---|---|---|
-| `RABBITMQ_HOST` | `rabbitmq` | |
+| `RABBITMQ_HOST` | `rabbitmq` | hostname в `internal_net` (алиас `plane-mq`) |
+| `RABBITMQ_PORT` | `5672` | AMQP-порт |
 | `RABBITMQ_DEFAULT_USER` | `plane` | |
 | `RABBITMQ_DEFAULT_PASS` | `change_me` | **(secret)** |
-| `RABBITMQ_DEFAULT_VHOST` | `/` | |
+| `RABBITMQ_DEFAULT_VHOST` | `plane` | virtual host для Plane |
+
+Compose автоматически собирает `AMQP_URL` для Celery из этих значений.
 
 ### 2.5 MinIO
 
 | Переменная | Default | Описание |
 |---|---|---|
-| `MINIO_ROOT_USER` | `plane` | |
-| `MINIO_ROOT_PASSWORD` | `change_me` | **(secret)** |
-| `MINIO_BUCKET_PLANE` | `plane` | bucket для вложений Plane |
-| `MINIO_BUCKET_MCP` | `mcp` | bucket для агент-артефактов |
+| `MINIO_ROOT_USER` | `plane` | проксируется в Plane как `AWS_ACCESS_KEY_ID` |
+| `MINIO_ROOT_PASSWORD` | `change_me` | **(secret)** проксируется как `AWS_SECRET_ACCESS_KEY` |
+| `MINIO_BUCKET_PLANE` | `plane-uploads` | bucket для вложений Plane (создаётся автоматически на старте `plane-api`) |
+| `MINIO_BUCKET_MCP` | `mcp-artifacts` | bucket для агент-артефактов |
 | `MINIO_REGION` | `us-east-1` | |
+| `MINIO_USE` | `1` | `1` — bundled MinIO; `0` — внешний S3 (тогда заполнить `AWS_S3_ENDPOINT_URL`) |
+| `MINIO_ENDPOINT_SSL` | `0` | TLS у внешнего S3 endpoint'а (`0`/`1`) |
 
 ### 2.6 MCP Server
 
@@ -149,18 +175,25 @@ PR + строка в [CHANGELOG.md](./CHANGELOG.md).
 
 | Сервис | Образ | Тэг |
 |---|---|---|
-| plane-web | `makeplane/plane-frontend` | `latest-stable` (заменить на pinned тэг при стабилизации) |
-| plane-api | `makeplane/plane-backend` | `latest-stable` |
-| postgres | `postgres` | `16-alpine` |
-| valkey | `valkey/valkey` | `7.2-alpine` |
-| rabbitmq | `rabbitmq` | `3.13-management-alpine` |
-| minio | `minio/minio` | `RELEASE.2025-01-15T00-00-00Z` (placeholder; зафиксировать на момент реализации Phase 1) |
-| caddy | `caddy` | `2.8-alpine` |
+| plane-web | `makeplane/plane-frontend` | `v1.3.0` |
+| plane-admin | `makeplane/plane-admin` | `v1.3.0` |
+| plane-space | `makeplane/plane-space` | `v1.3.0` |
+| plane-live | `makeplane/plane-live` | `v1.3.0` |
+| plane-api / plane-worker / plane-beat / plane-migrator | `makeplane/plane-backend` | `v1.3.0` |
+| plane-proxy | `makeplane/plane-proxy` | `v1.3.0` |
+| postgres | `postgres` | `15.7-alpine` (Plane v1.3.0 testing pin) |
+| redis (Valkey) | `valkey/valkey` | `7.2.11-alpine` |
+| rabbitmq | `rabbitmq` | `3.13.6-management-alpine` |
+| minio | `minio/minio` | `RELEASE.2025-09-07T16-13-09Z` |
+| caddy (внешний TLS, Phase 7) | `caddy` | `2.8-alpine` |
 | prometheus | `prom/prometheus` | `v2.55.1` |
 | grafana | `grafana/grafana` | `11.3.0` |
 | loki | `grafana/loki` | `3.3.0` |
 | promtail | `grafana/promtail` | `3.3.0` |
-| mcp-kanban | локальный build | `slonk/mcp-kanban:dev` локально, `slonk/mcp-kanban:<git-sha>` в CI |
+| mcp-kanban | локальный build | `slonk/mcp-kanban:dev` локально, `slonk/mcp-kanban:<git-sha>` в релизах |
+
+Тэг `${PLANE_IMAGE_TAG}` (по умолчанию `v1.3.0`) — один на все шесть Plane-образов.
+Обновление Plane = один bump переменной + проверка acceptance.
 
 ## 4. Bootstrap Plane
 
@@ -226,15 +259,20 @@ identities:
 
 | Порт хоста | Сервис | Когда экспонировать |
 |---|---|---|
-| `80`, `443` | caddy | Прод (если caddy включён) |
-| `3000` | plane-web | Dev / без caddy |
-| `8000` | plane-api | Dev / без caddy |
-| `8787` | mcp-kanban | Dev / без caddy |
-| `9001` | minio console | Только dev-overlay |
+| `80`, `443` | caddy (внешний, Phase 7) | Прод (если caddy overlay включён) |
+| `${PLANE_HOST_PORT}` (default `3000`) | plane-proxy | Базовый compose; единственный front-door без внешнего caddy |
+| `8787` | mcp-kanban | Phase 2+ (базовый compose) |
+| `5432` | postgres | Только dev-overlay |
+| `6379` | redis (Valkey) | Только dev-overlay |
+| `5672` | rabbitmq (AMQP) | Только dev-overlay |
+| `15672` | rabbitmq (management UI) | Только dev-overlay |
+| `9000` | minio (S3 API) | Только dev-overlay |
+| `9001` | minio (console) | Только dev-overlay |
+| `8000` | plane-api | Только dev-overlay (прямой доступ в обход plane-proxy) |
 | `9090` | prometheus | Только obs-overlay |
 | `3001` | grafana | Только obs-overlay |
 
-В прод-конфиге публикуется **только** caddy.
+В прод-конфиге публикуется **только** внешний caddy (Phase 7). До Phase 7 — `plane-proxy` на `${PLANE_HOST_PORT}`.
 
 ## 6. Подключение агентов
 
