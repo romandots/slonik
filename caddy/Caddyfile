@@ -1,0 +1,62 @@
+# slonk — внешний TLS-шлюз (Phase 7).
+#
+# Поднимается через overlay `docker-compose.proxy.yml`. Внутри
+# internal_net проксирует:
+#   - {$CADDY_DOMAIN} → plane-proxy:80      (Plane UI / API / god-mode)
+#   - {$CADDY_MCP_DOMAIN} → mcp-kanban:{$MCP_SERVER_PORT}  (MCP HTTP)
+#
+# TLS-режим управляется CADDY_TLS_MODE:
+#   - `internal` (по умолчанию) — Caddy CA, self-signed. Подходит для
+#     on-prem / локального запуска. Браузер потребует доверить CA;
+#     сертификат корня лежит в томе caddy_data.
+#   - `<email>` — Let's Encrypt ACME. Caddy сам зарегистрирует аккаунт.
+#     Порты 80 и 443 на хосте должны быть доступны из интернета, и
+#     CADDY_DOMAIN/CADDY_MCP_DOMAIN должны указывать на этот хост.
+#
+# Дополнительные env:
+#   CADDY_ACME_EMAIL — глобальный email для ACME (опц.).
+#   MCP_SERVER_PORT  — порт mcp-kanban (default 8787).
+
+{
+	email {$CADDY_ACME_EMAIL:}
+}
+
+{$CADDY_DOMAIN:plane.localhost} {
+	encode zstd gzip
+	tls {$CADDY_TLS_MODE:internal}
+
+	# Защита от case-clickjacking; Plane сам ставит часть заголовков, но
+	# доменный wrapper должен быть надёжно изолирован от iframe.
+	header {
+		X-Frame-Options "SAMEORIGIN"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		# HSTS — только если CADDY_TLS_MODE != internal (HSTS на self-signed
+		# CA приведёт к pinned-warning'ам в браузере).
+	}
+
+	reverse_proxy plane-proxy:80 {
+		header_up X-Real-IP {remote_host}
+		header_up X-Forwarded-Proto https
+	}
+}
+
+{$CADDY_MCP_DOMAIN:mcp.localhost} {
+	encode zstd gzip
+	tls {$CADDY_TLS_MODE:internal}
+
+	# MCP — машинный API, не браузерный. Минимум заголовков.
+	header {
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+	}
+
+	reverse_proxy mcp-kanban:{$MCP_SERVER_PORT:8787} {
+		# MCP StreamableHTTP — SSE-апгрейд по GET; Caddy сам обрабатывает
+		# одноразовый upstream-flushing, никаких extra-настроек не нужно.
+		# Авторизация — Bearer-токен на стороне MCP, Caddy её не трогает.
+		header_up X-Real-IP {remote_host}
+		header_up X-Forwarded-Proto https
+		# Phase 5 attach_file использует presigned PUT в MinIO напрямую,
+		# минуя MCP, — ничего общего с реверсом здесь.
+	}
+}

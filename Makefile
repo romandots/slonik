@@ -8,14 +8,18 @@
 
 .DEFAULT_GOAL := help
 
-# Compose-команды: базовый файл + (опц.) dev-overlay через make dev=1.
+# Compose-команды: базовый файл + (опц.) dev/proxy-overlay через make dev=1 / proxy=1.
+# dev и proxy несовместимы в проде, но Makefile позволяет включить оба для отладки.
 COMPOSE := docker compose
 COMPOSE_FILES := -f docker-compose.yml
 ifeq ($(dev),1)
 	COMPOSE_FILES += -f docker-compose.dev.yml
 endif
+ifeq ($(proxy),1)
+	COMPOSE_FILES += -f docker-compose.proxy.yml
+endif
 
-.PHONY: help up up-dev down down-v logs ps smoke test build bootstrap config pull
+.PHONY: help up up-dev up-proxy down down-v logs ps smoke test build bootstrap config pull
 
 help: ## Показать доступные цели
 	@awk 'BEGIN { FS = ":.*##"; printf "Доступные цели:\n" } \
@@ -24,15 +28,25 @@ help: ## Показать доступные цели
 	@echo
 	@echo "Флаги:"
 	@echo "  dev=1        включить docker-compose.dev.yml overlay (публикация портов БД/MinIO/API на хост)"
+	@echo "  proxy=1      включить docker-compose.proxy.yml overlay (внешний Caddy TLS-шлюз)"
 
-up: ## Поднять стек в фоне (использует docker-compose.yml; dev=1 — с overlay)
+up: ## Поднять стек в фоне (use dev=1 / proxy=1 для overlay'ев)
 	$(COMPOSE) $(COMPOSE_FILES) up -d --wait
 	@echo
+ifneq ($(proxy),1)
 	@echo "Plane UI: http://localhost:$${PLANE_HOST_PORT:-3000}/"
 	@echo "Первый запуск: откройте $${PLANE_DOMAIN:-http://localhost:3000}/god-mode для создания admin'а."
+else
+	@echo "Plane UI: https://$${CADDY_DOMAIN:-plane.localhost}/"
+	@echo "MCP:      https://$${CADDY_MCP_DOMAIN:-mcp.localhost}/"
+	@echo "Self-signed CA: примите Caddy internal root, либо настройте Let's Encrypt (CADDY_TLS_MODE=<email>)."
+endif
 
 up-dev: ## Поднять стек с dev-overlay (публикуется postgres/redis/rabbitmq/minio/api)
 	$(MAKE) up dev=1
+
+up-proxy: ## Поднять стек с proxy-overlay (внешний Caddy + HTTPS, базовые порты скрыты)
+	$(MAKE) up proxy=1
 
 down: ## Остановить стек, сохранив volume'ы
 	$(COMPOSE) $(COMPOSE_FILES) down

@@ -8,6 +8,34 @@
 ## [Unreleased]
 
 ### Added
+- **Phase 7 — Reverse proxy + TLS.** Внешний Caddy 2.10 как HTTPS-шлюз
+  поверх plane-proxy и mcp-kanban.
+  - **`docker-compose.proxy.yml`** overlay: добавляет сервис `caddy`,
+    снимает host-публикацию портов с `plane-proxy` и `mcp-kanban`
+    (через `ports: !reset []` + `expose:`), добавляет volume'ы
+    `slonk_caddy_data` (сертификаты) и `slonk_caddy_config`.
+    `depends_on: service_healthy` на plane-proxy/mcp-kanban — Caddy
+    стартует, когда апстримы готовы.
+  - **`caddy/Caddyfile`**: два site-блока — `${CADDY_DOMAIN}` (proxy
+    в plane-proxy:80) и `${CADDY_MCP_DOMAIN}` (proxy в
+    mcp-kanban:${MCP_SERVER_PORT}). TLS-режим переключается переменной
+    `CADDY_TLS_MODE`: `internal` (default, on-prem с self-signed
+    Caddy CA) или `<email>` для Let's Encrypt ACME. Заголовки безопасности
+    разные для UI (X-Frame-Options/Referrer-Policy) и MCP
+    (X-Content-Type-Options/no-referrer).
+  - **Makefile**: новые цели `up-proxy` + флаг `proxy=1`. Help-вывод
+    показывает HTTPS-URL'ы вместо `localhost:3000`.
+  - **`.env.example`**: `CADDY_DOMAIN` default → `plane.localhost`,
+    `CADDY_MCP_DOMAIN` → `mcp.localhost`, новый `CADDY_TLS_MODE=internal`,
+    опц. `CADDY_HTTP_PORT` / `CADDY_HTTPS_PORT` для запуска на
+    нестандартных портах.
+  - **Verification:** `docker compose -f docker-compose.yml -f
+    docker-compose.proxy.yml config` валиден, и в merged-конфиге ports
+    публикует ровно один сервис — `caddy: 80/443`. Без overlay базовый
+    стек продолжает публиковать `plane-proxy:3000` и `mcp-kanban:8787`
+    (dev-friendly).
+
+### Added
 - **Phase 6 — Git integration.** Tools `link_git_ref` / `unlink_git_ref` /
   `find_issues_by_git_ref` (бонус), SQLite-индекс `git_refs.sqlite` для
   быстрого lookup и recovery повреждённого meta-блока.

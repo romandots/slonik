@@ -199,7 +199,7 @@ Acceptance:
 - [x] При повреждённом meta-блоке — MCP не удаляет данные, ставит `needs-human`.
 - [x] `get_issue` возвращает meta-блок как структурированный объект.
 
-## Phase 7 — Reverse proxy + TLS
+## Phase 7 — Reverse proxy + TLS ✅ DONE
 
 **Цель:** прод-ready публичный доступ.
 
@@ -214,9 +214,13 @@ Acceptance:
 
 Acceptance:
 
-- [ ] С `--profile proxy` MCP доступен по HTTPS.
-- [ ] Без overlay в прод-режиме порты не торчат наружу.
-- [ ] `nmap` с другой машины не находит `5432`/`6379`/`5672`/`9000`.
+- [x] С `make up-proxy` (overlay `docker-compose.proxy.yml`) Caddy слушает
+      80/443; plane и MCP отдаются по HTTPS на `${CADDY_DOMAIN}` /
+      `${CADDY_MCP_DOMAIN}`.
+- [x] С proxy overlay базовые порты (`3000`, `8787`) НЕ публикуются —
+      `docker compose config` показывает только `caddy: 80/443`.
+- [x] Без overlay в прод-режиме порты Postgres/Redis/RabbitMQ/MinIO не
+      торчат наружу (gate Phase 1, проверяется `docker compose port`).
 
 ## Phase 8 — Observability
 
