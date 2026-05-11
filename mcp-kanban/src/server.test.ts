@@ -100,6 +100,13 @@ describe('mcp-kanban HTTP server', () => {
     });
   });
 
+  describe('/metrics', () => {
+    it('returns 404 when MCP_METRICS_ENABLED is disabled (default)', async () => {
+      const r = await built.app.inject({ method: 'GET', url: '/metrics' });
+      expect(r.statusCode).toBe(404);
+    });
+  });
+
   describe('/mcp (auth + identity)', () => {
     it('returns 401 without bearer', async () => {
       const r = await built.app.inject({
@@ -140,5 +147,40 @@ describe('mcp-kanban HTTP server', () => {
       const body = JSON.parse(r.body) as { error: { code: string } };
       expect(body.error.code).toBe('IDENTITY_REQUIRED');
     });
+  });
+});
+
+describe('mcp-kanban /metrics enabled', () => {
+  let built: BuiltServer;
+  let tmpDir: string;
+
+  beforeAll(async () => {
+    const config = loadConfig(testEnv({ MCP_METRICS_ENABLED: '1' }));
+    const logger = createLogger(config);
+    tmpDir = mkdtempSync(join(tmpdir(), 'slonk-mcp-metrics-'));
+    built = await buildServer({
+      config,
+      logger,
+      identityStorePath: join(tmpDir, 'identity.sqlite'),
+      auditStorePath: join(tmpDir, 'audit.sqlite'),
+      gitRefsStorePath: join(tmpDir, 'git_refs.sqlite'),
+    });
+    await built.app.ready();
+  });
+
+  afterAll(async () => {
+    await built.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('serves Prometheus exposition on /metrics without auth', async () => {
+    // Sanity-data: запишем один tool-call вручную.
+    built.metrics.recordTool({ tool: 'list_issues', outcome: 'success', durationSec: 0.01 });
+
+    const r = await built.app.inject({ method: 'GET', url: '/metrics' });
+    expect(r.statusCode).toBe(200);
+    expect(r.headers['content-type']).toMatch(/text\/plain.*version=0\.0\.4/);
+    expect(r.body).toContain('mcp_tool_calls_total');
+    expect(r.body).toContain('tool="list_issues"');
   });
 });

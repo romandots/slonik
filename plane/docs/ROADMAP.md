@@ -222,7 +222,7 @@ Acceptance:
 - [x] Без overlay в прод-режиме порты Postgres/Redis/RabbitMQ/MinIO не
       торчат наружу (gate Phase 1, проверяется `docker compose port`).
 
-## Phase 8 — Observability
+## Phase 8 — Observability ✅ DONE
 
 **Цель:** видимость состояния системы.
 
@@ -236,9 +236,12 @@ Acceptance:
 
 Acceptance:
 
-- [ ] Grafana показывает дашборд с трафиком по tools, latency, ошибки.
-- [ ] Логи всех сервисов видны в Loki.
-- [ ] Алерт срабатывает при искусственно вызванной ошибке Plane.
+- [x] Grafana показывает дашборд `slonk-overview` (provisioned) c rate(tool_calls),
+      latency p50/p95/p99, ошибки по tool/error_code, plane_errors, rate-limit.
+- [x] Promtail тейлит все docker-логи стека → Loki, JSON-логи MCP парсятся в
+      labels `level/trace_id/tool`. Дашборд имеет панель «MCP error logs».
+- [x] Prometheus rules: `MCPPlaneErrorsHigh` (>0.1/s 1m), `MCPRateLimitedSpikes`
+      (>0 за 5m), `MCPScrapeDown` (up==0 1m).
 
 ## Phase 9 — Backup
 

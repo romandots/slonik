@@ -8,6 +8,60 @@
 ## [Unreleased]
 
 ### Added
+- **Phase 8 — Observability.** Prometheus + Grafana + Loki + Promtail
+  через overlay `docker-compose.obs.yml` + `/metrics` endpoint в MCP.
+  - **`/metrics`** endpoint в MCP (`src/server.ts`): отдаёт Prometheus
+    exposition format, гейтится через `MCP_METRICS_ENABLED` (overlay
+    выставляет в `1`); по умолчанию — 404, чтобы не светить наружу.
+  - **`src/metrics.ts`** (`MetricsRegistry`): обёртка над
+    `prom-client@15.1.3` с собственным `Registry`, `setDefaultLabels`
+    + `collectDefaultMetrics` (process_*/nodejs_*) + 4 кастомных
+    метрики:
+      * `mcp_tool_calls_total{tool, outcome, error_code}` — Counter.
+      * `mcp_tool_duration_seconds{tool, outcome}` — Histogram c
+        bucket'ами от 5ms до 10s.
+      * `mcp_plane_errors_total{kind}` — Counter (kind = timeout/4xx/
+        5xx/network/other; 404 НЕ считается ошибкой сети).
+      * `mcp_rate_limited_total{scope, identity}` — Counter.
+  - **Инструментация всех 22 tool'ов:** read-tools переписаны на
+    `instrumentRead(ctx, tool, fn)`-обёртку (timing + counter +
+    histogram + ok/asError), write-tools используют `withWriteGuard`,
+    которая теперь дополнительно пишет метрики и `recordRateLimited`
+    при отказе бакетом. `recordPlaneErrorIfApplicable` различает
+    PlaneError по `planeStatus` и инкрементит `mcp_plane_errors_total`.
+  - **`docker-compose.obs.yml`** overlay: сервисы `prometheus:v3.5.0`,
+    `grafana:11.6.0`, `loki:3.4.2`, `promtail:3.4.2`. Все на
+    `internal_net`; Grafana и Prometheus публикуются на хост
+    (`GRAFANA_HOST_PORT=3001`, `PROMETHEUS_HOST_PORT=9090`). Volume'ы
+    `slonk_prometheus_data` / `slonk_grafana_data` / `slonk_loki_data` /
+    `slonk_promtail_positions`. Overlay переопределяет
+    `mcp-kanban.environment.MCP_METRICS_ENABLED=1`, чтобы скрейп работал.
+  - **Configs:** `prometheus/prometheus.yml` (scrape mcp-kanban + self,
+    15s interval), `prometheus/rules/slonk.yml` (3 alert-правила:
+    `MCPPlaneErrorsHigh`, `MCPRateLimitedSpikes`, `MCPScrapeDown`),
+    `loki/loki-config.yml` (tsdb shipper, single-node, retention из
+    `LOKI_RETENTION`), `promtail/promtail-config.yml` (docker SD,
+    фильтр по project="slonk*", JSON-парсинг pino-логов MCP с
+    label-извлечением `level/trace_id/tool`).
+  - **Grafana provisioning** (`grafana/provisioning/{datasources,
+    dashboards}/`): Prometheus + Loki datasource'ы, file-provider для
+    дашбордов. **Дашборд** `grafana/dashboards/slonk-overview.json`
+    (uid `slonk-overview`): 6 панелей — rate(tool_calls) by tool,
+    latency p50/p95/p99 by tool, errors by tool/error_code,
+    plane_errors by kind, rate_limited by scope+identity, MCP error
+    logs (Loki).
+  - **Makefile**: `up-obs` + `obs=1` флаг; help печатает URL'ы Grafana
+    и Prometheus.
+  - **`.env.example`**: новые `GRAFANA_HOST_PORT`, `PROMETHEUS_HOST_PORT`,
+    блок-описание обновлён.
+  - **Тесты:** 8 новых unit-тестов — `metrics.test.ts` (6 — counter,
+    success-vs-error, plane_errors, rate_limited, default metrics,
+    content-type) + server.test.ts (2 — /metrics→404 when disabled,
+    /metrics→200 with MCP_METRICS_ENABLED=1). Total: 114 passing.
+  - **Verification:** `docker compose -f docker-compose.yml -f
+    docker-compose.obs.yml config` валиден.
+
+### Added
 - **Phase 7 — Reverse proxy + TLS.** Внешний Caddy 2.10 как HTTPS-шлюз
   поверх plane-proxy и mcp-kanban.
   - **`docker-compose.proxy.yml`** overlay: добавляет сервис `caddy`,

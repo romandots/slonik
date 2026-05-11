@@ -1,0 +1,36 @@
+# Prometheus alert-rules для slonk (Phase 8).
+#
+# Acceptance — SPEC §12 / ROADMAP Phase 8:
+#  - mcp_plane_errors_total rate > 0.1/s.
+#  - mcp_rate_limited_total > 0 за 5 минут (любой scope).
+#  - Отсутствие scrape > 1 минуты.
+
+groups:
+  - name: slonk
+    rules:
+      - alert: MCPPlaneErrorsHigh
+        expr: sum(rate(mcp_plane_errors_total[5m])) > 0.1
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MCP видит ошибки Plane API"
+          description: "rate(mcp_plane_errors_total[5m]) = {{ $value | printf \"%.3f\" }} req/s, выше порога 0.1"
+
+      - alert: MCPRateLimitedSpikes
+        expr: sum(increase(mcp_rate_limited_total[5m])) > 0
+        for: 5m
+        labels:
+          severity: info
+        annotations:
+          summary: "MCP rate-limit срабатывал"
+          description: "За последние 5 минут зафиксированы отбросы по rate-limit'у."
+
+      - alert: MCPScrapeDown
+        expr: up{job="mcp-kanban"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Prometheus не может скрейпить mcp-kanban"
+          description: "up{job=mcp-kanban} == 0 — /metrics недоступен."

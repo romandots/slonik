@@ -6,6 +6,7 @@ import type { TtlCache } from '../cache.js';
 import type { AuditLog } from '../audit.js';
 import type { RateLimiter } from '../rate-limit.js';
 import type { GitRefsIndex } from '../git-refs.js';
+import type { MetricsRegistry } from '../metrics.js';
 
 // Shared context для всех MCP tool'ов. Содержит то, что tool'ам нужно:
 // конфиг, идентичность вызывающего, обёртку Plane API, общий кеш.
@@ -44,4 +45,6 @@ export interface ToolContext {
   signedUrlExpirationSec: number;
   /** SQLite-индекс git-привязок (Phase 6). */
   gitRefs: GitRefsIndex;
+  /** Prometheus-метрики (Phase 8). */
+  metrics: MetricsRegistry;
 }

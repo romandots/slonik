@@ -18,8 +18,11 @@ endif
 ifeq ($(proxy),1)
 	COMPOSE_FILES += -f docker-compose.proxy.yml
 endif
+ifeq ($(obs),1)
+	COMPOSE_FILES += -f docker-compose.obs.yml
+endif
 
-.PHONY: help up up-dev up-proxy down down-v logs ps smoke test build bootstrap config pull
+.PHONY: help up up-dev up-proxy up-obs down down-v logs ps smoke test build bootstrap config pull
 
 help: ## Показать доступные цели
 	@awk 'BEGIN { FS = ":.*##"; printf "Доступные цели:\n" } \
@@ -29,6 +32,7 @@ help: ## Показать доступные цели
 	@echo "Флаги:"
 	@echo "  dev=1        включить docker-compose.dev.yml overlay (публикация портов БД/MinIO/API на хост)"
 	@echo "  proxy=1      включить docker-compose.proxy.yml overlay (внешний Caddy TLS-шлюз)"
+	@echo "  obs=1        включить docker-compose.obs.yml overlay (Prometheus/Grafana/Loki/Promtail)"
 
 up: ## Поднять стек в фоне (use dev=1 / proxy=1 для overlay'ев)
 	$(COMPOSE) $(COMPOSE_FILES) up -d --wait
@@ -47,6 +51,12 @@ up-dev: ## Поднять стек с dev-overlay (публикуется postgr
 
 up-proxy: ## Поднять стек с proxy-overlay (внешний Caddy + HTTPS, базовые порты скрыты)
 	$(MAKE) up proxy=1
+
+up-obs: ## Поднять стек с observability-overlay (Prometheus/Grafana/Loki/Promtail)
+	$(MAKE) up obs=1
+	@echo
+	@echo "Grafana:    http://localhost:$${GRAFANA_HOST_PORT:-3001}/ (login: $${GRAFANA_ADMIN_USER:-admin})"
+	@echo "Prometheus: http://localhost:$${PROMETHEUS_HOST_PORT:-9090}/"
 
 down: ## Остановить стек, сохранив volume'ы
 	$(COMPOSE) $(COMPOSE_FILES) down

@@ -1,6 +1,6 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { McpError } from '../errors.js';
+import { McpError, PlaneError } from '../errors.js';
 import { whoAmI } from './who-am-i/handler.js';
 import type { ToolContext } from './context.js';
 import { listWorkspaces } from './list-workspaces/handler.js';
@@ -109,6 +109,55 @@ function asError(err: unknown): ToolResult {
 }
 
 /**
+ * Унифицированная инструментация read-tool'ов: time + Prometheus
+ * counter/histogram + ok/asError форматирование. Write-tool'ы используют
+ * `withWriteGuard`, который сам пишет метрики.
+ */
+async function instrumentRead<T>(
+  ctx: ToolContext,
+  tool: RegisteredToolName,
+  fn: () => Promise<T> | T,
+): Promise<ToolResult> {
+  const start = process.hrtime.bigint();
+  try {
+    const result = await fn();
+    const durationSec = Number(process.hrtime.bigint() - start) / 1e9;
+    ctx.metrics.recordTool({ tool, outcome: 'success', durationSec });
+    return ok(result);
+  } catch (err) {
+    const durationSec = Number(process.hrtime.bigint() - start) / 1e9;
+    const code = err instanceof McpError ? err.code : 'INTERNAL';
+    ctx.metrics.recordTool({ tool, outcome: 'error', durationSec, errorCode: code });
+    recordPlaneErrorIfApplicable(ctx, err);
+    return asError(err);
+  }
+}
+
+/**
+ * Если ошибка — это `PlaneError`, классифицируем по статусу для метрики
+ * `mcp_plane_errors_total{kind}`. NOT_FOUND намеренно НЕ считается ошибкой
+ * сети (404 — нормальный ответ Plane: «нет такого issue»).
+ */
+function recordPlaneErrorIfApplicable(ctx: ToolContext, err: unknown): void {
+  if (!(err instanceof PlaneError)) return;
+  const status = err.planeStatus;
+  if (status === undefined) {
+    ctx.metrics.recordPlaneError('network');
+    return;
+  }
+  if (status === 404) return;
+  if (status >= 400 && status < 500) {
+    ctx.metrics.recordPlaneError('4xx');
+    return;
+  }
+  if (status >= 500 && status < 600) {
+    ctx.metrics.recordPlaneError('5xx');
+    return;
+  }
+  ctx.metrics.recordPlaneError('other');
+}
+
+/**
  * Обёртка для write-tools: rate-limit + trace_id + audit-write вокруг
  * пользовательского handler'а. Read-tools идут мимо этой обёртки.
  */
@@ -121,9 +170,22 @@ async function withWriteGuard<T>(args: {
 }): Promise<ToolResult> {
   const traceId = newTraceId();
   const identity = args.ctx.resolveIdentity();
+  const start = process.hrtime.bigint();
+  const finishMetrics = (outcome: 'success' | 'error', code: string | null): void => {
+    const durationSec = Number(process.hrtime.bigint() - start) / 1e9;
+    args.ctx.metrics.recordTool({ tool: args.tool, outcome, durationSec, errorCode: code });
+  };
   try {
     args.ctx.rateLimiter.consume(identity);
   } catch (err) {
+    const code = err instanceof McpError ? err.code : 'INTERNAL';
+    if (code === 'RATE_LIMITED') {
+      // Глобальный vs identity — в текущей реализации RateLimiter различает
+      // их в message, но не в коде. Помечаем как `identity` (более узкий),
+      // если limit-bucket per-identity исчерпан; иначе global. Для v1 пишем
+      // identity-scope — это самый частый кейс при flapping одного агента.
+      args.ctx.metrics.recordRateLimited('identity', identity);
+    }
     args.ctx.audit.record({
       trace_id: traceId,
       identity,
@@ -131,10 +193,11 @@ async function withWriteGuard<T>(args: {
       input_hash: hashInput(args.input),
       plane_request_id: null,
       outcome: 'error',
-      error_code: err instanceof McpError ? err.code : 'INTERNAL',
+      error_code: code,
       event: null,
       issue_id: args.issueIdFromInput?.(args.input) ?? null,
     });
+    finishMetrics('error', code);
     return asError(err);
   }
   try {
@@ -150,8 +213,10 @@ async function withWriteGuard<T>(args: {
       event: args.tool === 'claim_issue' ? 'claim' : null,
       issue_id: args.issueIdFromInput?.(args.input) ?? null,
     });
+    finishMetrics('success', null);
     return ok(result);
   } catch (err) {
+    const code = err instanceof McpError ? err.code : 'INTERNAL';
     args.ctx.audit.record({
       trace_id: traceId,
       identity,
@@ -159,10 +224,12 @@ async function withWriteGuard<T>(args: {
       input_hash: hashInput(args.input),
       plane_request_id: null,
       outcome: 'error',
-      error_code: err instanceof McpError ? err.code : 'INTERNAL',
+      error_code: code,
       event: args.tool === 'claim_issue' ? 'claim' : null,
       issue_id: args.issueIdFromInput?.(args.input) ?? null,
     });
+    finishMetrics('error', code);
+    recordPlaneErrorIfApplicable(args.ctx, err);
     return asError(err);
   }
 }
@@ -177,20 +244,16 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
       description: 'Return current agent identity and server metadata.',
       inputSchema: {},
     },
-    () => {
-      try {
-        const result = whoAmI({
+    async () =>
+      await instrumentRead(ctx, 'who_am_i', () =>
+        whoAmI({
           identity: ctx.resolveIdentity(),
           agentMode: ctx.resolveIdentityMode(),
           serverVersion: ctx.serverVersion,
           defaultWorkspace: ctx.defaultWorkspace,
           defaultProject: ctx.defaultProjectSlug,
-        });
-        return ok(result);
-      } catch (err) {
-        return asError(err);
-      }
-    },
+        }),
+      ),
   );
 
   // ---- list_workspaces ----
@@ -200,13 +263,10 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
       description: 'List Plane workspaces visible to the MCP server.',
       inputSchema: {},
     },
-    async () => {
-      try {
-        return ok(await listWorkspaces({ plane: ctx.plane, cache: ctx.cache }));
-      } catch (err) {
-        return asError(err);
-      }
-    },
+    async () =>
+      await instrumentRead(ctx, 'list_workspaces', async () =>
+        await listWorkspaces({ plane: ctx.plane, cache: ctx.cache }),
+      ),
   );
 
   // ---- list_projects ----
@@ -216,20 +276,15 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
       description: 'List projects in the default workspace (or one specified by slug).',
       inputSchema: { workspace: z.string().min(1).optional() },
     },
-    async (args) => {
-      try {
-        return ok(
-          await listProjects({
-            plane: ctx.plane,
-            cache: ctx.cache,
-            workspace: args.workspace ?? ctx.defaultWorkspace,
-            allowedProjects: ctx.allowedProjects,
-          }),
-        );
-      } catch (err) {
-        return asError(err);
-      }
-    },
+    async (args) =>
+      await instrumentRead(ctx, 'list_projects', async () =>
+        await listProjects({
+          plane: ctx.plane,
+          cache: ctx.cache,
+          workspace: args.workspace ?? ctx.defaultWorkspace,
+          allowedProjects: ctx.allowedProjects,
+        }),
+      ),
   );
 
   // ---- list_states ----
@@ -239,22 +294,17 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
       description: 'List workflow states for the resolved project.',
       inputSchema: { project: z.string().min(1).optional() },
     },
-    async (args) => {
-      try {
-        return ok(
-          await listStates({
-            plane: ctx.plane,
-            cache: ctx.cache,
-            workspace: ctx.defaultWorkspace,
-            defaultProjectRef: ctx.defaultProjectSlug,
-            allowedProjects: ctx.allowedProjects,
-            ...(args.project !== undefined ? { projectRef: args.project } : {}),
-          }),
-        );
-      } catch (err) {
-        return asError(err);
-      }
-    },
+    async (args) =>
+      await instrumentRead(ctx, 'list_states', async () =>
+        await listStates({
+          plane: ctx.plane,
+          cache: ctx.cache,
+          workspace: ctx.defaultWorkspace,
+          defaultProjectRef: ctx.defaultProjectSlug,
+          allowedProjects: ctx.allowedProjects,
+          ...(args.project !== undefined ? { projectRef: args.project } : {}),
+        }),
+      ),
   );
 
   // ---- list_labels ----
@@ -264,22 +314,17 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
       description: 'List labels for the resolved project.',
       inputSchema: { project: z.string().min(1).optional() },
     },
-    async (args) => {
-      try {
-        return ok(
-          await listLabels({
-            plane: ctx.plane,
-            cache: ctx.cache,
-            workspace: ctx.defaultWorkspace,
-            defaultProjectRef: ctx.defaultProjectSlug,
-            allowedProjects: ctx.allowedProjects,
-            ...(args.project !== undefined ? { projectRef: args.project } : {}),
-          }),
-        );
-      } catch (err) {
-        return asError(err);
-      }
-    },
+    async (args) =>
+      await instrumentRead(ctx, 'list_labels', async () =>
+        await listLabels({
+          plane: ctx.plane,
+          cache: ctx.cache,
+          workspace: ctx.defaultWorkspace,
+          defaultProjectRef: ctx.defaultProjectSlug,
+          allowedProjects: ctx.allowedProjects,
+          ...(args.project !== undefined ? { projectRef: args.project } : {}),
+        }),
+      ),
   );
 
   // ---- list_cycles ----
@@ -289,22 +334,17 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
       description: 'List cycles (sprints) for the resolved project.',
       inputSchema: { project: z.string().min(1).optional() },
     },
-    async (args) => {
-      try {
-        return ok(
-          await listCycles({
-            plane: ctx.plane,
-            cache: ctx.cache,
-            workspace: ctx.defaultWorkspace,
-            defaultProjectRef: ctx.defaultProjectSlug,
-            allowedProjects: ctx.allowedProjects,
-            ...(args.project !== undefined ? { projectRef: args.project } : {}),
-          }),
-        );
-      } catch (err) {
-        return asError(err);
-      }
-    },
+    async (args) =>
+      await instrumentRead(ctx, 'list_cycles', async () =>
+        await listCycles({
+          plane: ctx.plane,
+          cache: ctx.cache,
+          workspace: ctx.defaultWorkspace,
+          defaultProjectRef: ctx.defaultProjectSlug,
+          allowedProjects: ctx.allowedProjects,
+          ...(args.project !== undefined ? { projectRef: args.project } : {}),
+        }),
+      ),
   );
 
   // ---- list_modules ----
@@ -314,22 +354,17 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
       description: 'List modules (epics) for the resolved project.',
       inputSchema: { project: z.string().min(1).optional() },
     },
-    async (args) => {
-      try {
-        return ok(
-          await listModules({
-            plane: ctx.plane,
-            cache: ctx.cache,
-            workspace: ctx.defaultWorkspace,
-            defaultProjectRef: ctx.defaultProjectSlug,
-            allowedProjects: ctx.allowedProjects,
-            ...(args.project !== undefined ? { projectRef: args.project } : {}),
-          }),
-        );
-      } catch (err) {
-        return asError(err);
-      }
-    },
+    async (args) =>
+      await instrumentRead(ctx, 'list_modules', async () =>
+        await listModules({
+          plane: ctx.plane,
+          cache: ctx.cache,
+          workspace: ctx.defaultWorkspace,
+          defaultProjectRef: ctx.defaultProjectSlug,
+          allowedProjects: ctx.allowedProjects,
+          ...(args.project !== undefined ? { projectRef: args.project } : {}),
+        }),
+      ),
   );
 
   // ---- list_issues ----
@@ -339,23 +374,18 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
       description: 'Search issues by state/label/assignee/cycle/priority filters.',
       inputSchema: ListIssuesInput.shape,
     },
-    async (args) => {
-      try {
+    async (args) =>
+      await instrumentRead(ctx, 'list_issues', async () => {
         const input = ListIssuesInput.parse(args);
-        return ok(
-          await listIssues({
-            plane: ctx.plane,
-            cache: ctx.cache,
-            workspace: ctx.defaultWorkspace,
-            defaultProjectRef: ctx.defaultProjectSlug,
-            allowedProjects: ctx.allowedProjects,
-            input,
-          }),
-        );
-      } catch (err) {
-        return asError(err);
-      }
-    },
+        return await listIssues({
+          plane: ctx.plane,
+          cache: ctx.cache,
+          workspace: ctx.defaultWorkspace,
+          defaultProjectRef: ctx.defaultProjectSlug,
+          allowedProjects: ctx.allowedProjects,
+          input,
+        });
+      }),
   );
 
   // ---- get_issue ----
@@ -365,24 +395,19 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
       description: 'Fetch full issue (with parsed slonk:meta block).',
       inputSchema: GetIssueInput.shape,
     },
-    async (args) => {
-      try {
+    async (args) =>
+      await instrumentRead(ctx, 'get_issue', async () => {
         const input = GetIssueInput.parse(args);
-        return ok(
-          await getIssue({
-            plane: ctx.plane,
-            cache: ctx.cache,
-            workspace: ctx.defaultWorkspace,
-            defaultProjectRef: ctx.defaultProjectSlug,
-            allowedProjects: ctx.allowedProjects,
-            issueRef: input.issue_id,
-            ...(input.project !== undefined ? { projectRef: input.project } : {}),
-          }),
-        );
-      } catch (err) {
-        return asError(err);
-      }
-    },
+        return await getIssue({
+          plane: ctx.plane,
+          cache: ctx.cache,
+          workspace: ctx.defaultWorkspace,
+          defaultProjectRef: ctx.defaultProjectSlug,
+          allowedProjects: ctx.allowedProjects,
+          issueRef: input.issue_id,
+          ...(input.project !== undefined ? { projectRef: input.project } : {}),
+        });
+      }),
   );
 
   // ---- search_issues ----
@@ -392,25 +417,20 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
       description: 'Full-text search across issue title/description/comments.',
       inputSchema: SearchIssuesInput.shape,
     },
-    async (args) => {
-      try {
+    async (args) =>
+      await instrumentRead(ctx, 'search_issues', async () => {
         const input = SearchIssuesInput.parse(args);
-        return ok(
-          await searchIssues({
-            plane: ctx.plane,
-            cache: ctx.cache,
-            workspace: ctx.defaultWorkspace,
-            defaultProjectRef: ctx.defaultProjectSlug,
-            allowedProjects: ctx.allowedProjects,
-            query: input.query,
-            ...(input.limit !== undefined ? { limit: input.limit } : {}),
-            ...(input.project !== undefined ? { projectRef: input.project } : {}),
-          }),
-        );
-      } catch (err) {
-        return asError(err);
-      }
-    },
+        return await searchIssues({
+          plane: ctx.plane,
+          cache: ctx.cache,
+          workspace: ctx.defaultWorkspace,
+          defaultProjectRef: ctx.defaultProjectSlug,
+          allowedProjects: ctx.allowedProjects,
+          query: input.query,
+          ...(input.limit !== undefined ? { limit: input.limit } : {}),
+          ...(input.project !== undefined ? { projectRef: input.project } : {}),
+        });
+      }),
   );
 
   // ---- get_issue_history ----
@@ -420,24 +440,19 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
       description: 'Combined Plane activity + comments timeline for an issue.',
       inputSchema: GetIssueHistoryInput.shape,
     },
-    async (args) => {
-      try {
+    async (args) =>
+      await instrumentRead(ctx, 'get_issue_history', async () => {
         const input = GetIssueHistoryInput.parse(args);
-        return ok(
-          await getIssueHistory({
-            plane: ctx.plane,
-            cache: ctx.cache,
-            workspace: ctx.defaultWorkspace,
-            defaultProjectRef: ctx.defaultProjectSlug,
-            allowedProjects: ctx.allowedProjects,
-            issueRef: input.issue_id,
-            ...(input.project !== undefined ? { projectRef: input.project } : {}),
-          }),
-        );
-      } catch (err) {
-        return asError(err);
-      }
-    },
+        return await getIssueHistory({
+          plane: ctx.plane,
+          cache: ctx.cache,
+          workspace: ctx.defaultWorkspace,
+          defaultProjectRef: ctx.defaultProjectSlug,
+          allowedProjects: ctx.allowedProjects,
+          issueRef: input.issue_id,
+          ...(input.project !== undefined ? { projectRef: input.project } : {}),
+        });
+      }),
   );
 
   // ---- create_issue ----
@@ -733,13 +748,10 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
       description: 'Find issues by repo_url / branch / pr_url / commit using the local git index.',
       inputSchema: FindIssuesByGitRefShape,
     },
-    async (args) => {
-      try {
+    async (args) =>
+      await instrumentRead(ctx, 'find_issues_by_git_ref', () => {
         const input = FindIssuesByGitRefInput.parse(args);
-        return ok(findIssuesByGitRef({ gitRefs: ctx.gitRefs, input }));
-      } catch (err) {
-        return asError(err);
-      }
-    },
+        return findIssuesByGitRef({ gitRefs: ctx.gitRefs, input });
+      }),
   );
 }

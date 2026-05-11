@@ -18,6 +18,7 @@ import { BOOTSTRAP_STORE_DEFAULT_PATH } from './bootstrap/cli.js';
 import { AuditLog } from './audit.js';
 import { RateLimiter } from './rate-limit.js';
 import { GitRefsIndex } from './git-refs.js';
+import { MetricsRegistry } from './metrics.js';
 
 const SERVER_VERSION = readPackageVersion();
 
@@ -49,6 +50,7 @@ export interface BuiltServer {
   audit: AuditLog;
   rateLimiter: RateLimiter;
   gitRefs: GitRefsIndex;
+  metrics: MetricsRegistry;
   /** Closes Fastify, MCP transports, and SQLite stores. */
   close: () => Promise<void>;
 }
@@ -89,6 +91,10 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
     globalRps: config.MCP_RL_GLOBAL_RPS,
     identityRps: config.MCP_RL_IDENTITY_RPS,
   });
+  // Phase 8: Prometheus-метрики. Отдельный инстанс per buildServer — это
+  // упрощает тесты и параллельный запуск; default-collectors (process_*,
+  // nodejs_*) подключаются конструктором MetricsRegistry.
+  const metrics = new MetricsRegistry();
 
   // ---------------- /health ----------------
   // Без авторизации; пингует Plane по корневому URL.
@@ -102,6 +108,19 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
       plane_status: planeHealth.status,
       plane_latency_ms: planeHealth.latencyMs,
     };
+  });
+
+  // ---------------- /metrics ----------------
+  // Prometheus scrape endpoint (SPEC §12). Включается через
+  // MCP_METRICS_ENABLED=1; иначе возвращает 404, чтобы не светить наружу.
+  // Без авторизации — Prometheus scraper в internal_net'е, не на хосте.
+  app.get('/metrics', async (_request, reply) => {
+    if (!config.MCP_METRICS_ENABLED) {
+      reply.status(404).send({ error: { code: 'NOT_FOUND', message: 'metrics disabled' } });
+      return;
+    }
+    reply.header('content-type', metrics.contentType());
+    return await metrics.metricsText();
   });
 
   // ---------------- /mcp/tools (debug) ----------------
@@ -172,6 +191,7 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
         minioEndpoint: config.MINIO_INTERNAL_ENDPOINT,
         signedUrlExpirationSec: config.PLANE_SIGNED_URL_EXPIRATION,
         gitRefs,
+        metrics,
       });
       // MCP SDK типы внутри Transport объявляют onclose: () => void как
       // обязательный, а StreamableHTTPServerTransport — как optional;
@@ -241,7 +261,7 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
     }
   };
 
-  return { app, config, logger, plane, cache, identityStore, audit, rateLimiter, gitRefs, close };
+  return { app, config, logger, plane, cache, identityStore, audit, rateLimiter, gitRefs, metrics, close };
 }
 
 function headerString(v: string | string[] | undefined): string | undefined {
