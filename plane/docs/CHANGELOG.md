@@ -8,6 +8,49 @@
 ## [Unreleased]
 
 ### Added
+- **Phase 1 — Plane stack.** `docker-compose.yml` со всем upstream-стеком
+  Plane v1.3.0: инфра (`postgres:15.7-alpine`, `valkey/valkey:7.2.11-alpine`,
+  `rabbitmq:3.13.6-management-alpine`,
+  `minio/minio:RELEASE.2025-09-07T16-13-09Z`) + Plane-сервисы
+  (`plane-migrator` one-shot, `plane-api` / `plane-worker` / `plane-beat` из
+  единого `makeplane/plane-backend:v1.3.0`, `plane-web` / `plane-admin` /
+  `plane-space` / `plane-live`, `plane-proxy` как путевой fan-out). Сети
+  `slonk_public_net` (наружу — `plane-proxy:80→${PLANE_HOST_PORT}`) и
+  `slonk_internal_net` (всё остальное, изолировано от хоста). Volume'ы
+  `slonk_postgres_data` / `slonk_redis_data` / `slonk_rabbitmq_data` /
+  `slonk_minio_data` / `slonk_plane_uploads`. Healthcheck'и на все
+  длительные сервисы, `condition: service_completed_successfully` для
+  `plane-migrator`. Network-aliases (`api`, `web`, `admin`, `space`, `live`,
+  `plane-minio`, `plane-db`, `plane-redis`, `plane-mq`) для совместимости с
+  bundled Caddyfile внутри `plane-proxy` без модификации образа.
+- **`docker-compose.dev.yml` overlay** для отладки — публикует на хост порты
+  `postgres:5432`, `redis:6379`, `rabbitmq:5672` + `:15672`,
+  `minio:9000` + `:9001`, `plane-api:8000`.
+- **`.env.example`** дополнен реальными переменными Plane v1.3.0:
+  `PLANE_IMAGE_TAG`, `PLANE_HOST_PORT`, `PLANE_APP_DOMAIN`,
+  `PLANE_SITE_ADDRESS`, `PLANE_LIVE_SECRET_KEY`, `PLANE_GUNICORN_WORKERS`,
+  `PLANE_API_KEY_RATE_LIMIT`, `PLANE_HARD_DELETE_AFTER_DAYS`,
+  `PLANE_FILE_SIZE_LIMIT`, `PLANE_SIGNED_URL_EXPIRATION`, base-URL'ы для
+  `app` / `admin` / `space` / `live`, `MINIO_USE`, `MINIO_ENDPOINT_SSL`,
+  `RABBITMQ_PORT`. Изменены дефолты: `POSTGRES_HOST=postgres`,
+  `RABBITMQ_DEFAULT_VHOST=plane`, `MINIO_BUCKET_PLANE=plane-uploads`,
+  `MINIO_BUCKET_MCP=mcp-artifacts`, `PLANE_DEBUG=0` (был `false`).
+- **`Makefile`** — реализованы цели Phase 1: `up` (через
+  `docker compose up -d --wait`, опц. `dev=1` или `make up-dev` для overlay),
+  `down`, `down-v` (с подтверждением, удаляет volume'ы), `logs`, `ps`,
+  `smoke` (`docker compose ps` + curl `/`), `config`, `pull`.
+
+### Changed
+- **Документация — фактические компоненты Plane v1.3.0.** Скорректированы
+  [`ARCHITECTURE.md`](./ARCHITECTURE.md) §3 (распределение по сетям с учётом
+  `plane-proxy` как обязательного front-door'а) и §4 (полный список
+  сервисов с реальными образами/тэгами/healthcheck'ами),
+  [`CONFIGURATION.md`](./CONFIGURATION.md) §2 (Plane/Postgres/RabbitMQ/MinIO
+  таблицы с реальными переменными) и §3 (версии образов),
+  [`ROADMAP.md`](./ROADMAP.md) Phase 1 (расширенный список деливераблей и
+  acceptance-критериев).
+
+### Added
 - **Phase 0 — Скелет репозитория.** Корневой `README.md` как точка входа в
   `plane/docs/`, `.gitignore` (секреты, ноды-артефакты, docker-volume'ы,
   бэкапы, SQLite), `.editorconfig` (UTF-8/LF/без trailing ws),
