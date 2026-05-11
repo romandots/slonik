@@ -1,0 +1,39 @@
+# EditorConfig — slonk
+# https://editorconfig.org
+#
+# Закреплено CONVENTIONS.md §1: UTF-8, LF, без BOM, без trailing whitespace,
+# файлы заканчиваются переводом строки.
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+# Makefile требует табы для рецептов
+[Makefile]
+indent_style = tab
+
+# Скрипты — 2 пробела (POSIX-sh / bash)
+[*.{sh,bash}]
+indent_size = 2
+
+# YAML / JSON — 2 пробела
+[*.{yml,yaml,json,jsonc}]
+indent_size = 2
+
+# TypeScript / JavaScript — 2 пробела (см. CONVENTIONS §3)
+[*.{ts,tsx,js,jsx,mjs,cjs}]
+indent_size = 2
+
+# Markdown — переносы в конце строки значимы, не триммим
+[*.md]
+trim_trailing_whitespace = false
+
+# Caddyfile — табы по конвенции Caddy
+[Caddyfile]
+indent_style = tab

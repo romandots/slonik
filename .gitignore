@@ -1,1 +1,65 @@
-.idea
+# IDE / editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets / local config — never commit
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# Node / pnpm (MCP server, Phase 2+)
+node_modules/
+dist/
+build/
+coverage/
+.nyc_output/
+*.tsbuildinfo
+.pnpm-store/
+.pnpm-debug.log*
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Docker / runtime state — volumes никогда не идут в git
+mcp_data/
+mcp_logs/
+postgres_data/
+redis_data/
+rabbitmq_data/
+minio_data/
+plane_uploads/
+caddy_data/
+caddy_config/
+prometheus_data/
+grafana_data/
+loki_data/
+backup_data/
+
+# Бэкапы / дампы
+*.dump
+*.sql.gz
+*.tgz
+*.tar.gz
+/backup/local/
+
+# SQLite (локальные стораджи MCP)
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+
+# Логи
+*.log
+logs/
+
+# Сгенерированные JSON Schema (из zod) — генерируются в build-step
+mcp-kanban/schemas/*.json
