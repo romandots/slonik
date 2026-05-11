@@ -8,6 +8,54 @@
 ## [Unreleased]
 
 ### Added
+- **Phase 2 — MCP server skeleton.** Контейнер `mcp-kanban`
+  (TypeScript / Node 22 LTS / pnpm 11) запускается, отвечает на `/health`
+  и регистрирует один tool `who_am_i` через MCP-протокол.
+  - **Стек:** `@modelcontextprotocol/sdk@^1.29.0` + `fastify@^5.8.5` +
+    `zod@^4.4.3` + `pino@^10.3.1`; `vitest@^4.1.6` + `typescript@^5.7.0`
+    из dev-deps. `pnpm-lock.yaml` закоммичен.
+  - **HTTP-эндпоинты:** `GET /health` (без авторизации) — статус +
+    plane_reachable + latency; `GET /mcp/tools` (Bearer) — debug-список
+    зарегистрированных tool'ов; `ALL /mcp` (Bearer + `X-Agent-Identity`) —
+    основной MCP endpoint через `StreamableHTTPServerTransport`. Сессии
+    кэшируются в памяти по `mcp-session-id`.
+  - **Auth:** Bearer-токен с constant-time сравнением, X-Agent-Identity
+    валидируется по whitelist'у из `src/identity.ts` (6 ролей из docs).
+  - **Tool `who_am_i`:** возвращает `{identity, agent_mode, server_version,
+    default_workspace, default_project}`. `agent_mode` — из
+    `MCP_AGENT_IDENTITY_MODE`.
+  - **Логирование:** `pino` JSON в stdout; редактируются `authorization`,
+    `x-agent-identity`, `MCP_AUTH_TOKEN`, `PLANE_API_KEY`,
+    `POSTGRES_PASSWORD`, `MINIO_ROOT_PASSWORD`. Опциональный файловый sink
+    через `MCP_LOG_FILE`.
+  - **Конфиг:** `src/config.ts` валидирует ENV через zod на старте;
+    отказывается стартовать при `MCP_AUTH_TOKEN=change_me` или длине
+    < 32 символов. Пустые строки трактуются как «не задано» для optional
+    полей (для совместимости с compose `${VAR:-}`).
+  - **Plane health probe:** `src/plane-client.ts` пингует корень
+    `PLANE_API_BASE_URL` с таймаутом `MCP_PLANE_TIMEOUT_MS`; передаёт
+    `X-Api-Key` если задан `PLANE_API_KEY`.
+  - **Тесты:** 24 unit-теста (config / auth / who_am_i handler / server
+    routing). `pnpm test` зелёный.
+  - **Docker:** multi-stage Dockerfile на `node:22.13-alpine`. Прунинг
+    devDependencies в production-слое; non-root user `node`; встроенный
+    HEALTHCHECK через node-script (без curl/wget). Итоговый образ —
+    **176 MB** (< 200 MB по ROADMAP).
+  - **Compose:** сервис `mcp-kanban` подключён к `public_net` +
+    `internal_net`, публикует `${MCP_SERVER_PORT}:${MCP_SERVER_PORT}`
+    (по умолчанию `8787:8787`), depends_on plane-api healthy. Build
+    context = `./mcp-kanban`.
+- **`make test` / `make build`** — реализованы, заменяют placeholder'ы.
+  `make test` выполняет `pnpm install --frozen-lockfile --ignore-scripts`
+  + `pnpm test` в `mcp-kanban/`.
+
+### Changed
+- **Node 22 LTS** вместо Node 20 LTS — `pnpm@11.1.0` спотыкается о
+  `ERR_UNKNOWN_BUILTIN_MODULE` на Node 20.19. Node 22 — текущий Active
+  LTS (Node 20 в Maintenance). Обновлены `.nvmrc`, `engines.node` в
+  `mcp-kanban/package.json`, [`CONVENTIONS.md` §2](./CONVENTIONS.md#2-стек-mcp-server).
+
+### Added
 - **Phase 1 — Plane stack.** `docker-compose.yml` со всем upstream-стеком
   Plane v1.3.0: инфра (`postgres:15.7-alpine`, `valkey/valkey:7.2.11-alpine`,
   `rabbitmq:3.13.6-management-alpine`,

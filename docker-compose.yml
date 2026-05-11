@@ -321,6 +321,53 @@ services:
       start_period: 30s
 
   # ---------------------------------------------------------------------------
+  # MCP server — собственная прослойка для LLM-агентов
+  # ---------------------------------------------------------------------------
+  mcp-kanban:
+    image: slonk/mcp-kanban:dev
+    build:
+      context: ./mcp-kanban
+      dockerfile: Dockerfile
+    <<: [*restart-policy, *logging]
+    environment:
+      NODE_ENV: production
+      MCP_SERVER_PORT: ${MCP_SERVER_PORT}
+      MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN}
+      MCP_DEFAULT_WORKSPACE: ${MCP_DEFAULT_WORKSPACE}
+      MCP_DEFAULT_PROJECT: ${MCP_DEFAULT_PROJECT}
+      MCP_ALLOWED_PROJECTS: ${MCP_ALLOWED_PROJECTS}
+      MCP_AGENT_IDENTITY_MODE: ${MCP_AGENT_IDENTITY_MODE}
+      MCP_OPTIONAL_WORKSPACES: ${MCP_OPTIONAL_WORKSPACES}
+      MCP_LOG_LEVEL: ${MCP_LOG_LEVEL}
+      MCP_RL_GLOBAL_RPS: ${MCP_RL_GLOBAL_RPS}
+      MCP_RL_IDENTITY_RPS: ${MCP_RL_IDENTITY_RPS}
+      MCP_ALLOW_CIDR: ${MCP_ALLOW_CIDR}
+      MCP_RETRY_ATTEMPTS: ${MCP_RETRY_ATTEMPTS}
+      MCP_RETRY_BACKOFF_MS: ${MCP_RETRY_BACKOFF_MS}
+      MCP_PLANE_TIMEOUT_MS: ${MCP_PLANE_TIMEOUT_MS}
+      MCP_METRICS_ENABLED: ${MCP_METRICS_ENABLED}
+      PLANE_API_BASE_URL: ${PLANE_API_BASE_URL}
+      PLANE_API_KEY: ${PLANE_API_KEY:-}
+    ports:
+      - "${MCP_SERVER_PORT}:${MCP_SERVER_PORT}"
+    depends_on:
+      plane-api:
+        condition: service_healthy
+    networks:
+      - public_net
+      - internal_net
+    healthcheck:
+      # Healthcheck встроен в Dockerfile, но docker compose ожидает свой —
+      # дублируем сюда чтобы depends_on: service_healthy работал явно.
+      test:
+        - CMD-SHELL
+        - 'node -e "require(''http'').get(''http://localhost:''+(process.env.MCP_SERVER_PORT||8787)+''/health'',r=>process.exit(r.statusCode===200?0:1)).on(''error'',()=>process.exit(1))"'
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ---------------------------------------------------------------------------
   # Plane front-door: Caddy с path-based fan-out
   # ---------------------------------------------------------------------------
   # Внимание: фронтенды Plane (web/admin/space) собраны со same-origin

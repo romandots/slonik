@@ -15,7 +15,7 @@ ifeq ($(dev),1)
 	COMPOSE_FILES += -f docker-compose.dev.yml
 endif
 
-.PHONY: help up up-dev down down-v logs ps smoke test bootstrap config pull
+.PHONY: help up up-dev down down-v logs ps smoke test build bootstrap config pull
 
 help: ## Показать доступные цели
 	@awk 'BEGIN { FS = ":.*##"; printf "Доступные цели:\n" } \
@@ -64,9 +64,11 @@ config: ## Вывести merged compose-конфиг (полезно для о�
 pull: ## Обновить все pinned-образы из реестра
 	$(COMPOSE) $(COMPOSE_FILES) pull
 
-test: ## Запустить тесты MCP-сервера (реализуется в Phase 2)
-	@echo "make test: цель будет реализована в Phase 2 (см. plane/docs/ROADMAP.md)"
-	@exit 1
+test: ## Запустить unit-тесты MCP-сервера
+	cd mcp-kanban && pnpm install --frozen-lockfile --ignore-scripts && pnpm test
+
+build: ## Собрать Docker-образ mcp-kanban
+	$(COMPOSE) $(COMPOSE_FILES) build mcp-kanban
 
 bootstrap: ## Идемпотентная инициализация Plane (реализуется в Phase 3)
 	@echo "make bootstrap: цель будет реализована в Phase 3 (см. plane/docs/ROADMAP.md)"
