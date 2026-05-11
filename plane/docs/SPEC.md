@@ -197,12 +197,19 @@ Plane не имеет первоклассного поля «репозитор
 
 ### 6.1 Транспорт и аутентификация
 
-- HTTP+SSE: `POST /mcp` (initiate), `GET /mcp/sse` (stream). Стандарт MCP-over-HTTP.
-- stdio: `mcp-kanban stdio` для локального запуска.
-- Auth: `Authorization: Bearer <MCP_AUTH_TOKEN>` для всех HTTP-эндпоинтов.
+- HTTP+SSE: единый endpoint `ALL /mcp` через `StreamableHTTPServerTransport`
+  (MCP SDK ≥ 1.29). POST принимает JSON-RPC, GET апгрейдится в SSE-стрим.
+  Сессия идентифицируется заголовком `mcp-session-id`, который сервер
+  возвращает на `initialize` и ожидает в последующих запросах.
+- `GET /mcp/tools` — диагностический endpoint, возвращает список имён
+  зарегистрированных tool'ов (Bearer-авторизация, identity не обязательна).
+- stdio: `mcp-kanban stdio` для локального запуска (в v1 не реализован).
+- Auth: `Authorization: Bearer <MCP_AUTH_TOKEN>` для всех HTTP-эндпоинтов
+  кроме `/health`.
 - В заголовке `X-Agent-Identity: <role>` агент сообщает свою роль. Если заголовок
-  отсутствует — MCP вернёт 400.
-- `GET /health` — без авторизации, возвращает `{status, plane_reachable, version}`.
+  отсутствует на `/mcp` — MCP вернёт 401 `IDENTITY_REQUIRED`.
+- `GET /health` — без авторизации, возвращает
+  `{status, service, version, plane_reachable, plane_status, plane_latency_ms}`.
 
 ### 6.2 Перечень инструментов
 
