@@ -10,7 +10,7 @@
 - Каждая фаза заканчивается рабочим, демонстрируемым результатом.
 - В конце фазы — `make test` зелёный, документация обновлена, тэг в `CHANGELOG.md`.
 
-## Phase 0 — Скелет репозитория
+## Phase 0 — Скелет репозитория ✅ DONE
 
 **Цель:** репозиторий готов к разработке. Никакой инфраструктуры ещё нет.
 
@@ -26,11 +26,11 @@
 
 Acceptance:
 
-- [ ] Все .md-документы существуют и валидны (markdown lint).
-- [ ] `make` без аргументов печатает список целей.
-- [ ] CI зелёный.
+- [x] Все .md-документы существуют и валидны (markdown lint).
+- [x] `make` без аргументов печатает список целей.
+- [ ] CI зелёный. _(отложено — см. CHANGELOG decision: CI на v1 не делаем)_
 
-## Phase 1 — Plane stack
+## Phase 1 — Plane stack ✅ DONE
 
 **Цель:** Plane поднимается локально с персистентным хранилищем, UI открывается.
 
@@ -66,19 +66,19 @@ upstream собраны со same-origin routing.
 
 Acceptance:
 
-- [ ] `docker compose up -d --wait` → все сервисы healthy за < 90 сек после
+- [x] `docker compose up -d --wait` → все сервисы healthy за < 90 сек после
       того, как образы скачаны (первый запуск дольше из-за `docker pull`).
-- [ ] Plane UI доступен на `http://localhost:3000` (через `plane-proxy`).
-- [ ] `/god-mode` UI доступен на том же origin'е, позволяет создать
+- [x] Plane UI доступен на `http://localhost:3000` (через `plane-proxy`).
+- [x] `/god-mode` UI доступен на том же origin'е, позволяет создать
       первого admin'а (`plane-admin` сервис проксируется по `/god-mode/*`).
-- [ ] `docker compose down && docker compose up -d` сохраняет данные.
-- [ ] Порты Postgres/Redis/RabbitMQ/MinIO/plane-api **не** опубликованы на
+- [x] `docker compose down && docker compose up -d` сохраняет данные.
+- [x] Порты Postgres/Redis/RabbitMQ/MinIO/plane-api **не** опубликованы на
       хост в базовом compose-файле (проверяется `docker compose port` и
       `nmap`).
-- [ ] `docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d`
+- [x] `docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d`
       публикует их для отладки.
 
-## Phase 2 — MCP server skeleton
+## Phase 2 — MCP server skeleton ✅ DONE
 
 **Цель:** контейнер MCP запускается, отвечает на `/health`, регистрирует один
 эхо-tool через MCP-протокол.
@@ -96,14 +96,14 @@ Acceptance:
 
 Acceptance:
 
-- [ ] `make up` поднимает MCP вместе с Plane-стеком.
-- [ ] `curl /health` без токена возвращает 200 c `plane_reachable:true`.
-- [ ] `curl /mcp/tools` без токена возвращает 401.
-- [ ] `curl -H "Authorization: …" -H "X-Agent-Identity: developer-agent" /mcp` →
+- [x] `make up` поднимает MCP вместе с Plane-стеком.
+- [x] `curl /health` без токена возвращает 200 c `plane_reachable:true`.
+- [x] `curl /mcp/tools` без токена возвращает 401.
+- [x] `curl -H "Authorization: …" -H "X-Agent-Identity: developer-agent" /mcp` →
       MCP handshake успешен.
-- [ ] Тест `who_am_i` через MCP-клиент возвращает корректную identity.
+- [x] Тест `who_am_i` через MCP-клиент возвращает корректную identity.
 
-## Phase 3 — Bootstrap-команда
+## Phase 3 — Bootstrap-команда ✅ DONE
 
 **Цель:** идемпотентный bootstrap создаёт workspace/project/states/labels.
 
@@ -121,15 +121,15 @@ Acceptance:
 
 Acceptance:
 
-- [ ] `docker compose run --rm mcp-kanban bootstrap` против чистого Plane —
+- [x] `docker compose run --rm mcp-kanban bootstrap` против чистого Plane —
       успешно, выводит `BOOTSTRAP OK`.
-- [ ] Повторный запуск — `BOOTSTRAP OK` без изменений на стороне Plane (diff пуст).
-- [ ] Если bootstrap не смог создать пользователей — переключается на
+- [x] Повторный запуск — `BOOTSTRAP OK` без изменений на стороне Plane (diff пуст).
+- [x] Если bootstrap не смог создать пользователей — переключается на
       `single_bot`, логирует warning, продолжает.
-- [ ] В Plane UI видны все 11 states, 14 labels и (при `per_user`) 6
+- [x] В Plane UI видны все 11 states, 14 labels и (при `per_user`) 6
       identity-пользователей.
 
-## Phase 4 — Read-only MCP tools
+## Phase 4 — Read-only MCP tools ✅ DONE
 
 **Цель:** агент может читать состояние доски.
 
@@ -147,13 +147,13 @@ Acceptance:
 
 Acceptance:
 
-- [ ] Все 10 read-tools работают.
-- [ ] `list_issues` с фильтрами `state`, `label`, `assignee`, `cycle` — корректные
+- [x] Все 10 read-tools работают.
+- [x] `list_issues` с фильтрами `state`, `label`, `assignee`, `cycle` — корректные
       результаты.
-- [ ] `get_issue` возвращает meta-блок отдельным полем `meta`.
-- [ ] Тестовое покрытие read-логики ≥ 70%.
+- [x] `get_issue` возвращает meta-блок отдельным полем `meta`.
+- [x] Тестовое покрытие read-логики ≥ 70%.
 
-## Phase 5 — Write MCP tools (без git)
+## Phase 5 — Write MCP tools (без git) ✅ DONE
 
 **Цель:** агент может создавать/менять задачи.
 
@@ -172,11 +172,11 @@ Acceptance:
 
 Acceptance:
 
-- [ ] Все write-tools работают.
-- [ ] Race-тест зелёный.
-- [ ] Rate limit срабатывает при превышении и возвращает `retry_after_ms`.
-- [ ] Audit log заполняется для каждой write-операции.
-- [ ] Acceptance-сценарий из [SPEC.md §10](./SPEC.md#10-acceptance-criteria-для-v10) проходит вручную.
+- [x] Все write-tools работают.
+- [x] Race-тест зелёный.
+- [x] Rate limit срабатывает при превышении и возвращает `retry_after_ms`.
+- [x] Audit log заполняется для каждой write-операции.
+- [ ] Acceptance-сценарий из [SPEC.md §10](./SPEC.md#10-acceptance-criteria-для-v10) проходит вручную. _(зависит от Phase 6 — `link_git_ref`)_
 
 ## Phase 6 — Git integration
 
