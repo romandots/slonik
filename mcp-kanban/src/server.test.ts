@@ -1,4 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { buildServer, type BuiltServer } from './server.js';
 import { loadConfig } from './config.js';
 import { createLogger } from './logger.js';
@@ -17,16 +20,27 @@ function testEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
 
 describe('mcp-kanban HTTP server', () => {
   let built: BuiltServer;
+  let tmpDir: string;
 
   beforeAll(async () => {
     const config = loadConfig(testEnv());
     const logger = createLogger(config);
-    built = await buildServer({ config, logger });
+    // Тестам нельзя писать в `/mcp_data` (default-путь production-volume'а).
+    // Создаём временный каталог и прокидываем пути ко всем SQLite-стораджам.
+    tmpDir = mkdtempSync(join(tmpdir(), 'slonk-mcp-'));
+    built = await buildServer({
+      config,
+      logger,
+      identityStorePath: join(tmpDir, 'identity.sqlite'),
+      auditStorePath: join(tmpDir, 'audit.sqlite'),
+      gitRefsStorePath: join(tmpDir, 'git_refs.sqlite'),
+    });
     await built.app.ready();
   });
 
   afterAll(async () => {
     await built.close();
+    rmSync(tmpDir, { recursive: true, force: true });
   });
 
   describe('/health', () => {

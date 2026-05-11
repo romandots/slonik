@@ -5,6 +5,7 @@ import type { PlaneClient } from '../plane-client.js';
 import type { TtlCache } from '../cache.js';
 import type { AuditLog } from '../audit.js';
 import type { RateLimiter } from '../rate-limit.js';
+import type { GitRefsIndex } from '../git-refs.js';
 
 // Shared context для всех MCP tool'ов. Содержит то, что tool'ам нужно:
 // конфиг, идентичность вызывающего, обёртку Plane API, общий кеш.
@@ -41,4 +42,6 @@ export interface ToolContext {
   minioBucket: string;
   /** TTL presigned URL'ов в секундах. */
   signedUrlExpirationSec: number;
+  /** SQLite-индекс git-привязок (Phase 6). */
+  gitRefs: GitRefsIndex;
 }

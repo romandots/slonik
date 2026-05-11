@@ -33,6 +33,12 @@ import { commentIssue } from './comment-issue/handler.js';
 import { CommentIssueInput } from './comment-issue/schema.js';
 import { attachFile } from './attach-file/handler.js';
 import { AttachFileInput } from './attach-file/schema.js';
+import { linkGitRef } from './link-git-ref/handler.js';
+import { LinkGitRefInput, LinkGitRefShape } from './link-git-ref/schema.js';
+import { unlinkGitRef } from './unlink-git-ref/handler.js';
+import { UnlinkGitRefInput } from './unlink-git-ref/schema.js';
+import { findIssuesByGitRef } from './find-issues-by-git-ref/handler.js';
+import { FindIssuesByGitRefInput, FindIssuesByGitRefShape } from './find-issues-by-git-ref/schema.js';
 import { hashInput, newTraceId } from '../audit.js';
 
 export type { ToolContext } from './context.js';
@@ -58,6 +64,9 @@ export const REGISTERED_TOOL_NAMES = [
   'block_issue',
   'comment_issue',
   'attach_file',
+  'link_git_ref',
+  'unlink_git_ref',
+  'find_issues_by_git_ref',
 ] as const;
 export type RegisteredToolName = (typeof REGISTERED_TOOL_NAMES)[number];
 
@@ -70,6 +79,8 @@ const WRITE_TOOLS = new Set<RegisteredToolName>([
   'block_issue',
   'comment_issue',
   'attach_file',
+  'link_git_ref',
+  'unlink_git_ref',
 ]);
 
 // MCP SDK ожидает у tool-callback'а возврат с индексной сигнатурой
@@ -655,6 +666,80 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
             input,
           }),
       });
+    },
+  );
+
+  // ---- link_git_ref ----
+  server.registerTool(
+    'link_git_ref',
+    {
+      description: 'Idempotently add a git ref (repo+branch+pr+commit) to an issue meta block.',
+      inputSchema: LinkGitRefShape,
+    },
+    async (args) => {
+      const input = LinkGitRefInput.parse(args);
+      return await withWriteGuard({
+        ctx,
+        tool: 'link_git_ref',
+        input,
+        issueIdFromInput: (i) => (i as typeof input).issue_id,
+        fn: async () =>
+          await linkGitRef({
+            plane: ctx.plane,
+            cache: ctx.cache,
+            gitRefs: ctx.gitRefs,
+            workspace: ctx.defaultWorkspace,
+            defaultProjectRef: ctx.defaultProjectSlug,
+            allowedProjects: ctx.allowedProjects,
+            input,
+          }),
+      });
+    },
+  );
+
+  // ---- unlink_git_ref ----
+  server.registerTool(
+    'unlink_git_ref',
+    {
+      description: 'Remove a git ref from the issue meta block and local index.',
+      inputSchema: UnlinkGitRefInput.shape,
+    },
+    async (args) => {
+      const input = UnlinkGitRefInput.parse(args);
+      return await withWriteGuard({
+        ctx,
+        tool: 'unlink_git_ref',
+        input,
+        issueIdFromInput: (i) => (i as typeof input).issue_id,
+        fn: async () =>
+          await unlinkGitRef({
+            plane: ctx.plane,
+            cache: ctx.cache,
+            gitRefs: ctx.gitRefs,
+            workspace: ctx.defaultWorkspace,
+            defaultProjectRef: ctx.defaultProjectSlug,
+            allowedProjects: ctx.allowedProjects,
+            input,
+          }),
+      });
+    },
+  );
+
+  // ---- find_issues_by_git_ref ----
+  // Read-only: индексный lookup, без обращения к Plane. Не пишем в audit.
+  server.registerTool(
+    'find_issues_by_git_ref',
+    {
+      description: 'Find issues by repo_url / branch / pr_url / commit using the local git index.',
+      inputSchema: FindIssuesByGitRefShape,
+    },
+    async (args) => {
+      try {
+        const input = FindIssuesByGitRefInput.parse(args);
+        return ok(findIssuesByGitRef({ gitRefs: ctx.gitRefs, input }));
+      } catch (err) {
+        return asError(err);
+      }
     },
   );
 }

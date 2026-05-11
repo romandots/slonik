@@ -142,6 +142,47 @@ export function removeGitRef(meta: MetaBlock, ref: { url: string; commit?: strin
   return { repos };
 }
 
+/**
+ * Recovery для повреждённого meta-блока (SPEC §5.6: «не разрушает описание —
+ * пишет валидный блок рядом и помечает `needs-human`»). Берёт исходный
+ * raw-description (где меж маркером и YAML-блоком сломан YAML), пакует
+ * сломанный блок в `<details>`-комментарий и возвращает body, в конец
+ * которого можно безопасно дописать свежий валидный meta.
+ *
+ * Возвращает `{ recovered: false }`, если HEADER не найден (нечего
+ * recover'ить).
+ */
+export function preserveCorruptDescription(rawDescription: string): {
+  recovered: boolean;
+  body: string;
+  quoted: string;
+} {
+  const match = HEADER_RE.exec(rawDescription);
+  if (match === null) return { recovered: false, body: rawDescription, quoted: '' };
+  const before = rawDescription.slice(0, match.index).replace(/[\s\n]+$/, '');
+  const corruptBlock = rawDescription.slice(match.index + match[0].length);
+  // Экранируем потенциальные fenced-блоки в самом мусоре, чтобы наш
+  // wrapper не сломался.
+  const safeFence = pickSafeFence(corruptBlock);
+  const quoted =
+    `<!-- slonk:corrupt-meta-preserved -->\n` +
+    `${safeFence}yaml\n${corruptBlock.trimEnd()}\n${safeFence}\n`;
+  return { recovered: true, body: before, quoted };
+}
+
+function pickSafeFence(content: string): string {
+  let len = 3;
+  // Если внутри сохранённого блока есть ` ``` `, используем более длинный
+  // забор, чем самая длинная последовательность бэктиков.
+  const matches = content.match(/`{3,}/g);
+  if (matches !== null) {
+    for (const m of matches) {
+      if (m.length >= len) len = m.length + 1;
+    }
+  }
+  return '`'.repeat(len);
+}
+
 function sameRef(a: GitRef, b: GitRef): boolean {
   // Одинаковый repo url — считаем одной записью; merge politики решают, как
   // объединить branch/pr/commits. Это соответствует контракту SPEC §6.5:

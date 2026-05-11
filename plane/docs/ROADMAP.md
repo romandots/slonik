@@ -176,9 +176,9 @@ Acceptance:
 - [x] Race-тест зелёный.
 - [x] Rate limit срабатывает при превышении и возвращает `retry_after_ms`.
 - [x] Audit log заполняется для каждой write-операции.
-- [ ] Acceptance-сценарий из [SPEC.md §10](./SPEC.md#10-acceptance-criteria-для-v10) проходит вручную. _(зависит от Phase 6 — `link_git_ref`)_
+- [ ] Acceptance-сценарий из [SPEC.md §10](./SPEC.md#10-acceptance-criteria-для-v10) проходит вручную. _(до v1 — финальная проверка перед релизом Phase 10)_
 
-## Phase 6 — Git integration
+## Phase 6 — Git integration ✅ DONE
 
 **Цель:** задачи связаны с репозиториями, ветками, PR, коммитами.
 
@@ -194,10 +194,10 @@ Acceptance:
 
 Acceptance:
 
-- [ ] `link_git_ref` идемпотентно: повторный вызов с теми же параметрами не
+- [x] `link_git_ref` идемпотентно: повторный вызов с теми же параметрами не
       дублирует запись в meta-блоке.
-- [ ] При повреждённом meta-блоке — MCP не удаляет данные, ставит `needs-human`.
-- [ ] `get_issue` возвращает meta-блок как структурированный объект.
+- [x] При повреждённом meta-блоке — MCP не удаляет данные, ставит `needs-human`.
+- [x] `get_issue` возвращает meta-блок как структурированный объект.
 
 ## Phase 7 — Reverse proxy + TLS
 

@@ -234,6 +234,7 @@ Plane не имеет первоклассного поля «репозитор
 | `attach_file` | Загрузить файл к задаче (через MinIO presigned upload) |
 | `link_git_ref` | Добавить запись в meta-блок: repo/branch/pr/commit |
 | `unlink_git_ref` | Удалить связь |
+| `find_issues_by_git_ref` | Найти issues по repo/branch/pr/commit (SQLite-индекс, без обращения к Plane) |
 | `get_issue_history` | История действий по задаче (Plane activity + MCP audit) |
 | `who_am_i` | Вернуть текущую identity и её права |
 

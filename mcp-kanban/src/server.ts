@@ -17,6 +17,7 @@ import { IdentityStore } from './bootstrap/store.js';
 import { BOOTSTRAP_STORE_DEFAULT_PATH } from './bootstrap/cli.js';
 import { AuditLog } from './audit.js';
 import { RateLimiter } from './rate-limit.js';
+import { GitRefsIndex } from './git-refs.js';
 
 const SERVER_VERSION = readPackageVersion();
 
@@ -31,9 +32,12 @@ export interface BuildServerOptions {
   identityStorePath?: string;
   /** Путь к audit-логу (`audit.sqlite`). По умолчанию — в томе `mcp_data`. */
   auditStorePath?: string;
+  /** Путь к git-refs индексу (`git_refs.sqlite`). По умолчанию — в томе. */
+  gitRefsStorePath?: string;
 }
 
 export const AUDIT_STORE_DEFAULT_PATH = '/mcp_data/audit.sqlite';
+export const GIT_REFS_STORE_DEFAULT_PATH = '/mcp_data/git_refs.sqlite';
 
 export interface BuiltServer {
   app: FastifyInstance;
@@ -44,6 +48,7 @@ export interface BuiltServer {
   identityStore: IdentityStore;
   audit: AuditLog;
   rateLimiter: RateLimiter;
+  gitRefs: GitRefsIndex;
   /** Closes Fastify, MCP transports, and SQLite stores. */
   close: () => Promise<void>;
 }
@@ -77,6 +82,9 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
     path: opts.identityStorePath ?? BOOTSTRAP_STORE_DEFAULT_PATH,
   });
   const audit = new AuditLog({ path: opts.auditStorePath ?? AUDIT_STORE_DEFAULT_PATH });
+  const gitRefs = new GitRefsIndex({
+    path: opts.gitRefsStorePath ?? GIT_REFS_STORE_DEFAULT_PATH,
+  });
   const rateLimiter = new RateLimiter({
     globalRps: config.MCP_RL_GLOBAL_RPS,
     identityRps: config.MCP_RL_IDENTITY_RPS,
@@ -163,6 +171,7 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
         minioBucket: config.MINIO_BUCKET_MCP,
         minioEndpoint: config.MINIO_INTERNAL_ENDPOINT,
         signedUrlExpirationSec: config.PLANE_SIGNED_URL_EXPIRATION,
+        gitRefs,
       });
       // MCP SDK типы внутри Transport объявляют onclose: () => void как
       // обязательный, а StreamableHTTPServerTransport — как optional;
@@ -225,9 +234,14 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
     } catch {
       // best-effort
     }
+    try {
+      gitRefs.close();
+    } catch {
+      // best-effort
+    }
   };
 
-  return { app, config, logger, plane, cache, identityStore, audit, rateLimiter, close };
+  return { app, config, logger, plane, cache, identityStore, audit, rateLimiter, gitRefs, close };
 }
 
 function headerString(v: string | string[] | undefined): string | undefined {

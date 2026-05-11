@@ -8,6 +8,54 @@
 ## [Unreleased]
 
 ### Added
+- **Phase 6 — Git integration.** Tools `link_git_ref` / `unlink_git_ref` /
+  `find_issues_by_git_ref` (бонус), SQLite-индекс `git_refs.sqlite` для
+  быстрого lookup и recovery повреждённого meta-блока.
+  - **Tools:** `link_git_ref` (идемпотентно по `(issue, repo, commit)`,
+    добавляет/мерджит запись в `<!-- slonk:meta v1 -->`),
+    `unlink_git_ref` (удаляет коммит или всю repo-запись),
+    `find_issues_by_git_ref` (read-only, SQLite-lookup без обращения к
+    Plane). Все три зарегистрированы в `src/tools/registry.ts`; write-tools
+    идут через `withWriteGuard` (rate-limit + audit), find — мимо.
+  - **SQLite-индекс** `mcp_data/git_refs.sqlite`: таблица `git_refs` c
+    UNIQUE на `(issue_id, repo_url, commit_sha)` (sentinel `''` для
+    записей без коммита, чтобы branch/PR-only был ровно одной строкой
+    на пару issue+repo). Индексы по `(repo_url, commit_sha)`,
+    `(repo_url, branch)`, `pr_url`, `issue_id`. Класс `GitRefsIndex` с
+    методами `upsert / remove / listForIssue / find / close`.
+  - **Corrupt-block recovery** (`preserveCorruptDescription` в
+    `src/meta-block.ts`): при повреждённом YAML внутри `slonk:meta`
+    блок пакуется в fenced-quote (с выбором забора длиннее самой
+    длинной последовательности backticks внутри мусора), исходный body
+    сохраняется до маркера, поверх него пишется свежий валидный
+    meta-блок, и issue помечается лейблом `needs-human`. SPEC §5.6:
+    «не разрушает описание». Соответствующий `meta_was_corrupt:true` +
+    `meta_recovered:true` в ответе `link_git_ref` сигнализирует
+    агенту о произошедшем recovery.
+  - **CONFLICT on unlink-with-corrupt:** `unlink_git_ref` не пытается
+    угадать, что удалять из сломанного блока — возвращает `CONFLICT`
+    с подсказкой «run link_git_ref first to recover». Это сохраняет
+    инвариант «никаких разрушительных операций над непонятными
+    данными».
+  - **Идемпотентность:** при отсутствии изменений описания и labels —
+    PATCH в Plane не вызывается. SQLite-индекс upsert'ится в любом
+    случае, чтобы починить рассинхрон.
+  - **ToolContext.gitRefs** прокинут в `buildServer` через новую опцию
+    `gitRefsStorePath` (default `/mcp_data/git_refs.sqlite`); закрытие
+    индекса добавлено в `close()`.
+  - **Тесты:** 16 новых unit-тестов: git-refs (8 —
+    upsert-idempotent/sentinel/multi-commit/find-by-branch/find-by-pr/
+    remove-single/remove-all/row-to-public), link-git-ref (5 —
+    fresh/idempotent/merge-branch-pr/corrupt-recovery/schema-refine),
+    unlink-git-ref (3 — remove-commit/remove-all/conflict-on-corrupt),
+    find-issues-by-git-ref (4 — by-commit/by-branch-intersection/
+    schema-refine/null-sentinel), meta-block preserve (3 —
+    happy/no-marker/long-fence). `pnpm test` — 122 passed.
+  - **Fix:** `src/server.test.ts` ранее падал в beforeAll
+    (`ENOENT: /mcp_data`) на macOS — теперь использует `mkdtempSync`
+    и прокидывает пути для всех трёх SQLite-стораджей.
+
+### Added
 - **Phase 5 — Write MCP tools (без git).** 8 tool'ов для модификации
   состояния доски, atomic claim, audit log, rate limiting.
   - **Tools:** `create_issue`, `update_issue`, `transition_issue`,

@@ -4,6 +4,7 @@ import {
   serializeDescription,
   upsertGitRef,
   removeGitRef,
+  preserveCorruptDescription,
   MetaBlockMarker,
 } from './meta-block.js';
 
@@ -142,5 +143,46 @@ describe('upsertGitRef / removeGitRef', () => {
     });
     meta = removeGitRef(meta, { url: 'https://github.com/acme/backend' });
     expect(meta.repos).toHaveLength(0);
+  });
+});
+
+describe('preserveCorruptDescription', () => {
+  const corrupt = `Body content.
+
+---
+${MetaBlockMarker}
+repos:
+  - url: https://example.com/x
+    commits: [ "NOT_A_HEX_SHA" ]
+`;
+
+  it('extracts body before the marker and wraps the corrupt yaml in a fenced quote', () => {
+    const out = preserveCorruptDescription(corrupt);
+    expect(out.recovered).toBe(true);
+    expect(out.body).toBe('Body content.');
+    expect(out.quoted).toContain('slonk:corrupt-meta-preserved');
+    expect(out.quoted).toContain('NOT_A_HEX_SHA');
+    expect(out.quoted).toMatch(/^```yaml/m);
+  });
+
+  it('returns recovered:false when there is no marker to recover from', () => {
+    const out = preserveCorruptDescription('Just plain body.');
+    expect(out.recovered).toBe(false);
+    expect(out.body).toBe('Just plain body.');
+    expect(out.quoted).toBe('');
+  });
+
+  it('chooses a longer fence if the corrupt content itself contains triple-backticks', () => {
+    const tricky = `body
+---
+${MetaBlockMarker}
+\`\`\`
+not-yaml-but-pretending-to-be
+\`\`\`
+`;
+    const out = preserveCorruptDescription(tricky);
+    expect(out.recovered).toBe(true);
+    // Внешний забор должен быть длиннее 3 backticks, иначе вложенные сломают markdown.
+    expect(out.quoted).toMatch(/^`{4,}yaml/m);
   });
 });
