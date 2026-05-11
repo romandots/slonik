@@ -1,0 +1,64 @@
+# slonk — backup overlay (Phase 9).
+#
+# Включается через:
+#   make up-backup
+# или
+#   docker compose -f docker-compose.yml -f docker-compose.backup.yml up -d
+#
+# Поднимает сервис `backup`, который раз в `BACKUP_CRON` (default 03:00 UTC)
+# делает:
+#   1) pg_dump Plane Postgres → /backups/postgres-$TS.dump.gz
+#   2) mc mirror MinIO bucket'ов → /backups/minio/$bucket/
+#   3) tar -czf /mcp_data → /backups/mcp_data-$TS.tar.gz
+#   4) (опц.) пушит всё во внешний S3 (BACKUP_S3_*)
+#   5) удаляет локальные дампы старше BACKUP_RETENTION_DAYS
+#
+# Разовый запуск (бэкап «сейчас») — `make backup-now`.
+
+services:
+  backup:
+    image: slonk/backup:dev
+    build:
+      context: ./backup
+    restart: unless-stopped
+    environment:
+      # Источник Postgres
+      POSTGRES_HOST: ${POSTGRES_HOST}
+      POSTGRES_PORT: ${POSTGRES_PORT}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      # MinIO credentials (внутренний source-кластер)
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET_PLANE: ${MINIO_BUCKET_PLANE}
+      MINIO_BUCKET_MCP: ${MINIO_BUCKET_MCP}
+      # Cron + retention
+      BACKUP_CRON: ${BACKUP_CRON:-0 3 * * *}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
+      # Опц. external destination
+      BACKUP_S3_ENDPOINT: ${BACKUP_S3_ENDPOINT:-}
+      BACKUP_S3_BUCKET: ${BACKUP_S3_BUCKET:-}
+      BACKUP_S3_ACCESS_KEY: ${BACKUP_S3_ACCESS_KEY:-}
+      BACKUP_S3_SECRET_KEY: ${BACKUP_S3_SECRET_KEY:-}
+      TZ: ${TZ:-UTC}
+    volumes:
+      - backup_data:/backups
+      # mcp_data — read-only: бэкап не должен ничего там менять.
+      - mcp_data:/mcp_data:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    networks:
+      - internal_net
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+volumes:
+  backup_data:
+    name: slonk_backup_data

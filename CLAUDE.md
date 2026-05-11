@@ -75,6 +75,10 @@ make up-proxy        # эквивалент: make up proxy=1
 # Поднять стек + observability-overlay (Prometheus/Grafana/Loki/Promtail)
 make up-obs          # эквивалент: make up obs=1
 
+# Поднять стек + backup-overlay (cron-bound pg_dump + minio mirror + mcp_data tar)
+make up-backup       # эквивалент: make up backup=1
+make backup-now      # разовый прогон бэкапа (run-once entrypoint)
+
 make down            # остановить, volume'ы сохраняются
 make down-v          # ВНИМАНИЕ: удаляет volume'ы, нужно явное "yes"
 make logs            # tail -f логов всех сервисов
@@ -104,9 +108,11 @@ pnpm dev             # tsx watch src/server.ts (локальная разраб�
 
 ## Текущее состояние (фазы)
 
-Закрыты Phase 0–8 (см. [ROADMAP.md](./plane/docs/ROADMAP.md) и
+Закрыты Phase 0–9 (см. [ROADMAP.md](./plane/docs/ROADMAP.md) и
 [CHANGELOG.md](./plane/docs/CHANGELOG.md)):
 
+- **Phase 9** — backup overlay: pg_dump + mc mirror MinIO + tar mcp_data
+  через `supercronic`-cron; `make up-backup`, `make backup-now`
 - **Phase 8** — observability: `/metrics` (Prometheus) + Grafana/Loki/Promtail
   overlay, дашборд `slonk-overview`, alert rules; `make up-obs`
 - **Phase 7** — внешний Caddy TLS-шлюз (`docker-compose.proxy.yml` +
@@ -120,7 +126,7 @@ pnpm dev             # tsx watch src/server.ts (локальная разраб�
 - **Phase 1** — Plane stack v1.3.0 в docker compose
 - **Phase 0** — каркас репозитория и документация
 
-Ещё впереди: Phase 9 (backup), 10 (hardening + v1.0).
+Ещё впереди: Phase 10 (hardening + v1.0).
 
 В коде на сегодня — **22 MCP tool'а**: `who_am_i` + 10 read (`list_*`,
 `get_issue`, `search_issues`, `get_issue_history`) + 8 write

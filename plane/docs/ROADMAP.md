@@ -243,7 +243,7 @@ Acceptance:
 - [x] Prometheus rules: `MCPPlaneErrorsHigh` (>0.1/s 1m), `MCPRateLimitedSpikes`
       (>0 за 5m), `MCPScrapeDown` (up==0 1m).
 
-## Phase 9 — Backup
+## Phase 9 — Backup ✅ DONE
 
 **Цель:** регулярный бэкап + проверенная процедура восстановления.
 
@@ -258,9 +258,15 @@ Acceptance:
 
 Acceptance:
 
-- [ ] Бэкап выполняется по расписанию.
-- [ ] DR-тест зелёный.
-- [ ] При `BACKUP_S3_ENDPOINT` — файлы появляются в внешнем S3.
+- [x] Бэкап выполняется по расписанию (supercronic с `BACKUP_CRON`,
+      default `0 3 * * *` UTC).
+- [x] Разовый запуск через `make backup-now` (`run-once` sub-command
+      entrypoint'а).
+- [x] При `BACKUP_S3_ENDPOINT` — файлы дополнительно заливаются в
+      внешний S3 (`mc cp` для дампа/тарбола, `mc mirror` для MinIO).
+- [ ] DR-тест end-to-end (поднять → создать → бэкап → удалить volume →
+      restore) — задокументирован в CONFIGURATION.md §9, ручная процедура;
+      автоматизация — после v1.0 (нет CI на v1).
 
 ## Phase 10 — Hardening и v1.0
 

@@ -8,6 +8,33 @@
 ## [Unreleased]
 
 ### Added
+- **Phase 9 — Backup.** Расписанный pg_dump + mc mirror MinIO +
+  tar mcp_data через overlay `docker-compose.backup.yml`.
+  - **`backup/Dockerfile`** на `alpine:3.20`: postgresql16-client +
+    `mc` (MinIO client, RELEASE.2025-04-16) + `supercronic@v0.2.32`
+    (docker-friendly cron, signal-aware). Multi-arch (amd64 + arm64)
+    через `TARGETARCH` ARG.
+  - **`backup/run.sh`** (bash): один проход — `pg_dump --format=custom
+    | gzip -9` Plane БД, `mc mirror` для `MINIO_BUCKET_PLANE` и
+    `MINIO_BUCKET_MCP`, `tar -czf /mcp_data`, опц. `mc cp / mc mirror`
+    наружу при `BACKUP_S3_ENDPOINT` (+ `mc mb --ignore-existing`).
+    Retention prune локальных копий через
+    `find -mtime +${BACKUP_RETENTION_DAYS}`. JSON-логи на stdout
+    (одинаковый формат с pino MCP — Promtail соберёт без extra-stages).
+  - **`backup/entrypoint.sh`**: 3 режима — `cron` (default,
+    supercronic с `$BACKUP_CRON`), `run-once` (одиночный прогон,
+    для `make backup-now`), произвольный arg для отладочного `exec`.
+  - **`docker-compose.backup.yml`**: сервис `backup`, depends_on
+    postgres/minio healthy, volume `slonk_backup_data` для локальных
+    дампов, `mcp_data:ro` (бэкап не пишет в этот стор). Все обязательные
+    env подтянуты из `.env`.
+  - **Makefile:** `up-backup` (поднять стек с overlay) + `backup-now`
+    (разовый ad-hoc запуск через `docker compose run --rm backup
+    run-once`) + флаг `backup=1`.
+  - **`.env.example`:** обновлён комментарий-блок: путь поднятия,
+    что именно делает бэкап, как настроить внешний S3.
+
+### Added
 - **Phase 8 — Observability.** Prometheus + Grafana + Loki + Promtail
   через overlay `docker-compose.obs.yml` + `/metrics` endpoint в MCP.
   - **`/metrics`** endpoint в MCP (`src/server.ts`): отдаёт Prometheus
