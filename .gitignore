@@ -63,3 +63,6 @@ logs/
 
 # Сгенерированные JSON Schema (из zod) — генерируются в build-step
 mcp-kanban/schemas/*.json
+
+# Claude Code session artifacts (loop/cron locks, local settings)
+.claude/

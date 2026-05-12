@@ -1,6 +1,6 @@
 # Документация slonk
 
-Оглавление каталога `plane/docs/`. Точка входа для пользователя —
+Оглавление каталога `docs/`. Точка входа для пользователя —
 [USER_GUIDE.md](./USER_GUIDE.md). Источник правды по контрактам и архитектуре —
 [SPEC.md](./SPEC.md) и [ARCHITECTURE.md](./ARCHITECTURE.md).
 
@@ -15,4 +15,4 @@
 | [CHANGELOG.md](./CHANGELOG.md) | История изменений в формате Keep a Changelog |
 
 Краткий обзор проекта и подключение агента в одну команду — корневой
-[README.md](../../README.md). Лицензия — [Apache 2.0](../../LICENSE).
+[README.md](../README.md). Лицензия — [Apache 2.0](../LICENSE).

@@ -1,0 +1,52 @@
+{
+  "mcpServers": {
+    "slonk-analyst": {
+      "type": "http",
+      "url": "http://localhost:8787/mcp",
+      "headers": {
+        "Authorization": "Bearer ${MCP_AUTH_TOKEN}",
+        "X-Agent-Identity": "analyst-agent"
+      }
+    },
+    "slonk-developer": {
+      "type": "http",
+      "url": "http://localhost:8787/mcp",
+      "headers": {
+        "Authorization": "Bearer ${MCP_AUTH_TOKEN}",
+        "X-Agent-Identity": "developer-agent"
+      }
+    },
+    "slonk-security-auditor": {
+      "type": "http",
+      "url": "http://localhost:8787/mcp",
+      "headers": {
+        "Authorization": "Bearer ${MCP_AUTH_TOKEN}",
+        "X-Agent-Identity": "security-auditor-agent"
+      }
+    },
+    "slonk-code-review": {
+      "type": "http",
+      "url": "http://localhost:8787/mcp",
+      "headers": {
+        "Authorization": "Bearer ${MCP_AUTH_TOKEN}",
+        "X-Agent-Identity": "code-review-agent"
+      }
+    },
+    "slonk-qa": {
+      "type": "http",
+      "url": "http://localhost:8787/mcp",
+      "headers": {
+        "Authorization": "Bearer ${MCP_AUTH_TOKEN}",
+        "X-Agent-Identity": "qa-agent"
+      }
+    },
+    "slonk-doc": {
+      "type": "http",
+      "url": "http://localhost:8787/mcp",
+      "headers": {
+        "Authorization": "Bearer ${MCP_AUTH_TOKEN}",
+        "X-Agent-Identity": "doc-agent"
+      }
+    }
+  }
+}

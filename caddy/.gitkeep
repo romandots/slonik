@@ -1,3 +1,3 @@
 # caddy — обратный прокси с TLS
-# Заполняется в Phase 7 (см. plane/docs/ROADMAP.md).
+# Заполняется в Phase 7 (см. docs/ROADMAP.md).
 # Содержит Caddyfile с разделением plane-web и mcp-kanban по поддоменам.

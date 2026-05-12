@@ -1,3 +1,3 @@
 # backup — регулярные снапшоты Postgres + MinIO + mcp_data
-# Заполняется в Phase 9 (см. plane/docs/ROADMAP.md).
+# Заполняется в Phase 9 (см. docs/ROADMAP.md).
 # Содержит Dockerfile и run.sh (pg_dump + mc mirror + tar).
