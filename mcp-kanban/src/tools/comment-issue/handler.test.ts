@@ -4,11 +4,34 @@ import { TtlCache } from '../../cache.js';
 import { addIssue, fakePlane, newWorld, seedAgentsWorkspace } from '../test-fakes.js';
 
 describe('formatComment', () => {
-  it('prefixes with [<identity>] and escapes html', () => {
-    const out = formatComment('developer-agent', '<script>alert(1)</script>');
+  it('prefixes with [<identity>] and strips disallowed tags', () => {
+    const out = formatComment('developer-agent', '<script>alert(1)</script>hi');
     expect(out).toContain('<strong>[developer-agent]</strong>');
     expect(out).not.toContain('<script>');
-    expect(out).toContain('&lt;script&gt;');
+    expect(out).not.toContain('alert(1)');
+    expect(out).toContain('hi');
+  });
+
+  it('preserves inline formatting whitelist (em / strong / code / a)', () => {
+    const out = formatComment(
+      'developer-agent',
+      'moved to <em>Development</em>; see <a href="https://example.com">PR</a>',
+    );
+    expect(out).toContain('<em>Development</em>');
+    expect(out).toContain('<a href="https://example.com"');
+    expect(out).toContain('rel="noopener noreferrer"');
+  });
+
+  it('drops unsafe href schemes (javascript:, data:)', () => {
+    const out = formatComment('developer-agent', '<a href="javascript:alert(1)">x</a>');
+    expect(out).toContain('<a>x</a>');
+    expect(out).not.toContain('javascript:');
+  });
+
+  it('strips event-handler attributes from allowed tags', () => {
+    const out = formatComment('developer-agent', '<strong onclick="x()">bold</strong>');
+    expect(out).toContain('<strong>bold</strong>');
+    expect(out).not.toContain('onclick');
   });
 });
 
