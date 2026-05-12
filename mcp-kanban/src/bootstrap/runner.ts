@@ -10,7 +10,7 @@ export type IdentityMode = 'per_user' | 'single_bot';
 export interface BootstrapReport {
   workspace: { slug: string; created: boolean };
   projects: Array<{ slug: string; identifier: string; created: boolean }>;
-  states: { total: number; created: number; existing: number };
+  states: { total: number; created: number; existing: number; renamed: number; deleted: number };
   labels: { total: number; created: number; existing: number };
   identities: {
     mode: IdentityMode;
@@ -33,7 +33,11 @@ export interface RunnerDeps {
  * Идемпотентный bootstrap. Шаги:
  *   1. workspace: get-by-slug; если нет — create.
  *   2. для каждого project: get-by-identifier; если нет — create.
- *   3. states: diff по name, создаём недостающие в порядке `order`.
+ *   3. states: реконсиляция с манифестом. Совпавшие по name — оставляем;
+ *      недостающие — переиспользуем «осиротевший» дефолт Plane той же
+ *      group (PATCH name/color/sequence) либо создаём новый; состояния
+ *      не из манифеста (и не `default`) — удаляем. Bootstrap → source of
+ *      truth для набора состояний.
  *   4. labels: diff по name, создаём недостающие.
  *   5. identities: в режиме per_user пытаемся пригласить через
  *      /workspaces/<slug>/invitations/. При неуспехе (404/4xx/5xx) —
@@ -49,6 +53,8 @@ export async function runBootstrap(deps: RunnerDeps): Promise<BootstrapReport> {
   const projects: BootstrapReport['projects'] = [];
   let stateCreated = 0;
   let stateExisting = 0;
+  let stateRenamed = 0;
+  let stateDeleted = 0;
   let labelCreated = 0;
   let labelExisting = 0;
   let totalStates = 0;
@@ -75,6 +81,8 @@ export async function runBootstrap(deps: RunnerDeps): Promise<BootstrapReport> {
     );
     stateCreated += stateDiff.created;
     stateExisting += stateDiff.existing;
+    stateRenamed += stateDiff.renamed;
+    stateDeleted += stateDiff.deleted;
     totalStates += manifest.states.length;
 
     const labelDiff = await ensureLabels(
@@ -111,7 +119,13 @@ export async function runBootstrap(deps: RunnerDeps): Promise<BootstrapReport> {
   return {
     workspace: { slug: manifest.workspace.slug, created: ws.created },
     projects,
-    states: { total: totalStates, created: stateCreated, existing: stateExisting },
+    states: {
+      total: totalStates,
+      created: stateCreated,
+      existing: stateExisting,
+      renamed: stateRenamed,
+      deleted: stateDeleted,
+    },
     labels: { total: totalLabels, created: labelCreated, existing: labelExisting },
     identities: identityReport,
     duration_ms: Math.round(performance.now() - t0),
@@ -181,15 +195,56 @@ async function ensureStates(
   projectId: string,
   desired: Manifest['states'],
   logger: Logger,
-): Promise<{ states: PlaneState[]; created: number; existing: number }> {
+): Promise<{
+  states: PlaneState[];
+  created: number;
+  existing: number;
+  renamed: number;
+  deleted: number;
+}> {
   const existing = await plane.listStates(workspaceSlug, projectId);
+  const desiredNames = new Set(desired.map((s) => s.name));
   const byName = new Map(existing.map((s) => [s.name, s]));
+
+  // «Сироты» — состояния, которых нет в манифесте и которые не `default`.
+  // Plane при создании проекта плодит дефолтные `Todo` / `In Progress`:
+  // их можно переиспользовать (PATCH) под манифестное состояние той же
+  // group, а лишние — удалить. `default`-состояние не трогаем никогда.
+  const orphansByGroup = new Map<PlaneState['group'], PlaneState[]>();
+  for (const s of existing) {
+    if (desiredNames.has(s.name) || s.default) continue;
+    const list = orphansByGroup.get(s.group) ?? [];
+    list.push(s);
+    orphansByGroup.set(s.group, list);
+  }
+
   let created = 0;
+  let renamed = 0;
   const result: PlaneState[] = [];
+  const consumed = new Set<string>(); // id переиспользованных сирот
+
   for (const want of [...desired].sort((a, b) => a.order - b.order)) {
     const have = byName.get(want.name);
     if (have !== undefined) {
       result.push(have);
+      continue;
+    }
+    const reuse = orphansByGroup.get(want.group)?.shift();
+    if (reuse !== undefined) {
+      const patched = await plane.updateState(workspaceSlug, projectId, reuse.id, {
+        name: want.name,
+        color: want.color,
+        group: want.group,
+        sequence: want.order * 1000,
+        default: want.default ?? false,
+      });
+      result.push(patched);
+      consumed.add(reuse.id);
+      renamed += 1;
+      logger.info(
+        { workspace: workspaceSlug, project_id: projectId, from: reuse.name, to: want.name },
+        'state reused (renamed from Plane default)',
+      );
       continue;
     }
     const fresh = await plane.createState(workspaceSlug, projectId, {
@@ -206,7 +261,31 @@ async function ensureStates(
       'state created',
     );
   }
-  return { states: result, created, existing: desired.length - created };
+
+  // Лишние состояния (не из манифеста, не `default`, не переиспользованные)
+  // — удаляем: bootstrap = source of truth для набора колонок. Список
+  // считаем заранее, чтобы не зависеть от того, мутирует ли реализация
+  // listStates исходный массив при delete.
+  const toDelete = existing.filter(
+    (s) => !desiredNames.has(s.name) && !s.default && !consumed.has(s.id),
+  );
+  let deleted = 0;
+  for (const s of toDelete) {
+    await plane.deleteState(workspaceSlug, projectId, s.id);
+    deleted += 1;
+    logger.info(
+      { workspace: workspaceSlug, project_id: projectId, state: s.name },
+      'state deleted (not in manifest)',
+    );
+  }
+
+  return {
+    states: result,
+    created,
+    existing: desired.length - created - renamed,
+    renamed,
+    deleted,
+  };
 }
 
 // ---------------- labels ----------------
