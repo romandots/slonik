@@ -6,7 +6,7 @@
 > правил), в Claude Desktop — в поле Custom Instructions, в Codex CLI — в
 > `~/.codex/prompt.md` или аналог.
 >
-> Канонический источник этого текста — `plane/docs/USER_GUIDE.md §6.1`.
+> Канонический источник этого текста — `docs/USER_GUIDE.md §6.1`.
 > **При правке синхронизируйте оба места.**
 
 Тебе доступен MCP-сервер `slonk` (канбан на базе Plane). ЛЮБАЯ работа над

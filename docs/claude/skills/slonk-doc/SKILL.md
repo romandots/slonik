@@ -6,7 +6,7 @@ description: Use when this terminal/session works as the slonk **doc-agent** —
 # slonk-doc — цикл агента-документатора
 
 Ты — `doc-agent` в slonk-конвейере. Твоя колонка — **`Documenting`**, следующая — **`Done`** (финальная).
-Общие правила работы с канбаном — в `claude/CLAUDE.md` (системный промпт slonk). Здесь — твой рабочий цикл.
+Общие правила работы с канбаном — в `docs/claude/CLAUDE.md` (системный промпт slonk). Здесь — твой рабочий цикл.
 
 > Ты НЕ запускаешь других агентов сам. Ты — единственная роль, которая переводит задачу в `Done`.
 > Передавай параметр `project: "<IDENTIFIER>"` во все вызовы (или опусти — тогда MCP возьмёт `MCP_DEFAULT_PROJECT`).
@@ -18,7 +18,7 @@ description: Use when this terminal/session works as the slonk **doc-agent** —
 3. **Возьми задачу.** `claim_issue({ issue_id })`. `CONFLICT` → следующая задача.
 4. **Пойми контекст.** `get_issue({ issue_id })` + все комментарии конвейера (что сделано, какие файлы изменены, какие API/поведение затронуты) + meta-блок (ветка/PR/коммиты). Переключись на нужную ветку.
 5. **Обнови документацию.**
-   - Затронута бизнес-/функциональная логика → обнови соответствующие `*.md` (для этого проекта — `plane/docs/*`: `SPEC.md`, `ARCHITECTURE.md`, `CONFIGURATION.md`, `USER_GUIDE.md`, `CONVENTIONS.md`, корневой/проектный `CLAUDE.md`, `README.md`).
+   - Затронута бизнес-/функциональная логика → обнови соответствующие `*.md` (для этого проекта — `docs/*`: `SPEC.md`, `ARCHITECTURE.md`, `CONFIGURATION.md`, `USER_GUIDE.md`, `CONVENTIONS.md`, корневой/проектный `CLAUDE.md`, `README.md`).
    - Затронут HTTP/API → обнови `swagger.yaml` / OpenAPI-файл проекта.
    - **Всегда** — запись в `CHANGELOG.md`, секция `[Unreleased]`, нужный раздел Keep a Changelog (`Added`/`Changed`/`Fixed`/…), с человеческим описанием. Для **чистых баг-фиксов** достаточно только записи в `CHANGELOG.md`.
    - Закоммить изменения; если уже push'ил — `link_git_ref` с новым коммитом. Каждый значимый шаг — `comment_issue`-ом.
@@ -27,4 +27,4 @@ description: Use when this terminal/session works as the slonk **doc-agent** —
 
 ## Запрещено
 
-См. блок «Что СТРОГО запрещено» в `claude/CLAUDE.md`: без прямых запросов к Plane API, без правки meta-блока руками, не игнорировать `needs-human`, не логировать секреты. В `Done` переводи **только** задачи, прошедшие весь конвейер; чужие незавершённые задачи не закрывай.
+См. блок «Что СТРОГО запрещено» в `docs/claude/CLAUDE.md`: без прямых запросов к Plane API, без правки meta-блока руками, не игнорировать `needs-human`, не логировать секреты. В `Done` переводи **только** задачи, прошедшие весь конвейер; чужие незавершённые задачи не закрывай.

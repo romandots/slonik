@@ -7,22 +7,22 @@ Self-hosted Kanban task tracker для LLM-агентов на базе [Plane](
 
 ## Документация
 
-Точка входа для нового пользователя — **[USER_GUIDE](./plane/docs/USER_GUIDE.md)**:
+Точка входа для нового пользователя — **[USER_GUIDE](./docs/USER_GUIDE.md)**:
 пошаговый сценарий от `git clone` до обученных агентов (установка, настройка
 `.env`, bootstrap, подключение Claude Code / Claude Desktop / Codex CLI,
 системный промпт для агентов).
 
-Полный набор документации — в [`plane/docs/`](./plane/docs/):
+Полный набор документации — в [`docs/`](./docs/):
 
 | Документ | О чём |
 |---|---|
-| [USER_GUIDE](./plane/docs/USER_GUIDE.md) | Пошаговое руководство пользователя |
-| [SPEC](./plane/docs/SPEC.md) | Технический контракт: компоненты, MCP API, workflow |
-| [ARCHITECTURE](./plane/docs/ARCHITECTURE.md) | Архитектура, сети, контейнеры, потоки данных |
-| [CONFIGURATION](./plane/docs/CONFIGURATION.md) | `.env`, compose-overlay'и, bootstrap, версии образов |
-| [ROADMAP](./plane/docs/ROADMAP.md) | План реализации с критериями приёмки |
-| [CONVENTIONS](./plane/docs/CONVENTIONS.md) | Конвенции кода, инфраструктуры, конфигов, git |
-| [CHANGELOG](./plane/docs/CHANGELOG.md) | История изменений |
+| [USER_GUIDE](./docs/USER_GUIDE.md) | Пошаговое руководство пользователя |
+| [SPEC](./docs/SPEC.md) | Технический контракт: компоненты, MCP API, workflow |
+| [ARCHITECTURE](./docs/ARCHITECTURE.md) | Архитектура, сети, контейнеры, потоки данных |
+| [CONFIGURATION](./docs/CONFIGURATION.md) | `.env`, compose-overlay'и, bootstrap, версии образов |
+| [ROADMAP](./docs/ROADMAP.md) | План реализации с критериями приёмки |
+| [CONVENTIONS](./docs/CONVENTIONS.md) | Конвенции кода, инфраструктуры, конфигов, git |
+| [CHANGELOG](./docs/CHANGELOG.md) | История изменений |
 
 Для разработки в репо — [`CLAUDE.md`](./CLAUDE.md): структура проекта, команды,
 особенности, что строго запрещено.
@@ -50,15 +50,15 @@ claude mcp add --transport http slonk http://localhost:8787/mcp \
 
 Готовый стартер-кит для запуска агентов под все 6 ролей конвейера (системный
 промпт, примеры скиллов под каждую роль, пример MCP-конфига) — в каталоге
-[`claude/`](./claude/); как развернуть — [`claude/README.md`](./claude/README.md).
+[`docs/claude/`](./docs/claude/); как развернуть — [`docs/claude/README.md`](./docs/claude/README.md).
 
 Подробности по всем шагам, Claude Desktop, Codex CLI и системный промпт для
-обучения агентов — в [USER_GUIDE](./plane/docs/USER_GUIDE.md).
+обучения агентов — в [USER_GUIDE](./docs/USER_GUIDE.md).
 
 ## Статус
 
 v1.0.0 — все фазы Phase 0–10 закрыты. См.
-[ROADMAP](./plane/docs/ROADMAP.md) и [CHANGELOG](./plane/docs/CHANGELOG.md).
+[ROADMAP](./docs/ROADMAP.md) и [CHANGELOG](./docs/CHANGELOG.md).
 
 ## Лицензия
 

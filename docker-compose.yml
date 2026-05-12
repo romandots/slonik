@@ -5,7 +5,7 @@
 # фронтенды (web/admin/space/live) и backend (api/worker/beat) общаются
 # через path-based fan-out внутри internal_net.
 #
-# Архитектура — plane/docs/ARCHITECTURE.md, переменные — .env.example.
+# Архитектура — docs/ARCHITECTURE.md, переменные — .env.example.
 
 # -----------------------------------------------------------------------------
 # Anchors: общий блок env для всех plane-backend контейнеров (api/worker/beat/

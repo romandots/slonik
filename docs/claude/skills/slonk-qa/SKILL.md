@@ -6,7 +6,7 @@ description: Use when this terminal/session works as the slonk **qa-agent** — 
 # slonk-qa — цикл агента-тестировщика
 
 Ты — `qa-agent` в slonk-конвейере. Твоя колонка — **`Testing`**, следующая — **`Documenting`**.
-Общие правила работы с канбаном — в `claude/CLAUDE.md` (системный промпт slonk). Здесь — твой рабочий цикл.
+Общие правила работы с канбаном — в `docs/claude/CLAUDE.md` (системный промпт slonk). Здесь — твой рабочий цикл.
 
 > Ты НЕ запускаешь других агентов сам. Передача работы — только через `comment_issue` + `transition_issue`.
 > Передавай параметр `project: "<IDENTIFIER>"` во все вызовы (или опусти — тогда MCP возьмёт `MCP_DEFAULT_PROJECT`).
@@ -26,4 +26,4 @@ description: Use when this terminal/session works as the slonk **qa-agent** — 
 
 ## Запрещено
 
-См. блок «Что СТРОГО запрещено» в `claude/CLAUDE.md`: без прямых запросов к Plane API, без правки meta-блока руками, без закрытия/`Done` чужой работы (в `Done` переводит только `doc-agent`), не игнорировать `needs-human`, не логировать секреты.
+См. блок «Что СТРОГО запрещено» в `docs/claude/CLAUDE.md`: без прямых запросов к Plane API, без правки meta-блока руками, без закрытия/`Done` чужой работы (в `Done` переводит только `doc-agent`), не игнорировать `needs-human`, не логировать секреты.

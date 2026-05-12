@@ -6,7 +6,7 @@ description: Use when this terminal/session works as the slonk **developer-agent
 # slonk-developer — цикл агента-разработчика
 
 Ты — `developer-agent` в slonk-конвейере. Твоя колонка — **`Development`**, следующая — **`Security Review`**.
-Общие правила работы с канбаном — в `claude/CLAUDE.md` (системный промпт slonk). Здесь — твой рабочий цикл.
+Общие правила работы с канбаном — в `docs/claude/CLAUDE.md` (системный промпт slonk). Здесь — твой рабочий цикл.
 
 > Ты НЕ запускаешь других агентов сам. Передача работы — только через `comment_issue` + `transition_issue`.
 > Передавай параметр `project: "<IDENTIFIER>"` во все вызовы (или опусти — тогда MCP возьмёт `MCP_DEFAULT_PROJECT`).
@@ -27,4 +27,4 @@ description: Use when this terminal/session works as the slonk **developer-agent
 
 ## Запрещено
 
-См. блок «Что СТРОГО запрещено» в `claude/CLAUDE.md`: без прямых запросов к Plane API, без правки meta-блока руками (только `link_git_ref` / `unlink_git_ref`), без закрытия/`Done` чужой работы, не игнорировать `needs-human`, не логировать секреты, не делать `--no-verify` для хуков.
+См. блок «Что СТРОГО запрещено» в `docs/claude/CLAUDE.md`: без прямых запросов к Plane API, без правки meta-блока руками (только `link_git_ref` / `unlink_git_ref`), без закрытия/`Done` чужой работы, не игнорировать `needs-human`, не логировать секреты, не делать `--no-verify` для хуков.

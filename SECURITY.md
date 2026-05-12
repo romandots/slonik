@@ -1,8 +1,8 @@
 # Security policy — slonk
 
 Этот документ — короткий summary security-постуры slonk на v1.0. Детальный
-threat model — [ARCHITECTURE.md §9](./plane/docs/ARCHITECTURE.md#9-модель-угроз),
-требования к секретам, токенам, изоляции — [SPEC.md §8](./plane/docs/SPEC.md#8-безопасность).
+threat model — [ARCHITECTURE.md §9](./docs/ARCHITECTURE.md#9-модель-угроз),
+требования к секретам, токенам, изоляции — [SPEC.md §8](./docs/SPEC.md#8-безопасность).
 
 ## Поддерживаемые версии
 
@@ -23,7 +23,7 @@ slonk — self-hosted продукт. Найденные уязвимости д
 
 ## Базовые гарантии v1.0
 
-Эти инварианты проверяются acceptance-критериями ([SPEC.md §10](./plane/docs/SPEC.md#10-acceptance-criteria-для-v10))
+Эти инварианты проверяются acceptance-критериями ([SPEC.md §10](./docs/SPEC.md#10-acceptance-criteria-для-v10))
 и должны соблюдаться в любом production-развёртывании.
 
 ### Сеть и публикация портов
@@ -100,4 +100,4 @@ slonk — self-hosted продукт. Найденные уязвимости д
 - Internal-CA-pinning для Caddy `tls internal`: клиенты должны вручную
   доверять root CA из тома `slonk_caddy_data`.
 
-Эти ограничения зафиксированы в [ROADMAP.md «После v1.0 — кандидаты»](./plane/docs/ROADMAP.md#после-v10--кандидаты).
+Эти ограничения зафиксированы в [ROADMAP.md «После v1.0 — кандидаты»](./docs/ROADMAP.md#после-v10--кандидаты).

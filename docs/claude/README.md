@@ -7,7 +7,7 @@
 ```
 claude/
 ├── README.md            # этот файл
-├── CLAUDE.md            # системная инструкция slonk (= plane/docs/USER_GUIDE.md §6.1)
+├── CLAUDE.md            # системная инструкция slonk (= docs/USER_GUIDE.md §6.1)
 ├── .mcp.json            # пример: 6 role-based MCP-серверов slonk одним файлом
 └── skills/
     ├── slonk-analyst/SKILL.md
@@ -50,7 +50,7 @@ Code Review → Testing → Documenting → Done` (+ `Blocked`, `Cancelled`). К
 ## Развёртывание
 
 Предполагается, что стек slonk уже поднят и забутстраплен (см.
-[`plane/docs/USER_GUIDE.md`](../plane/docs/USER_GUIDE.md)), и у вас есть
+[`docs/USER_GUIDE.md`](../USER_GUIDE.md)), и у вас есть
 `MCP_AUTH_TOKEN`. Тогда:
 
 ### 1. Системный промпт
@@ -79,18 +79,18 @@ claude mcp add --transport http slonk-developer http://localhost:8787/mcp \
   --header "X-Agent-Identity: developer-agent"
 ```
 
-Либо пропишите все 6 ролей сразу — возьмите `mcpServers` из `claude/.mcp.json`
+Либо пропишите все 6 ролей сразу — возьмите `mcpServers` из `docs/claude/.mcp.json`
 этого каталога и положите его:
 - в `.mcp.json` в корне репозитория-задачи (project scope, можно коммитить —
   токен подставится из окружения через `${MCP_AUTH_TOKEN}`); **или**
 - в `~/.claude.json` (user scope) под ключ `mcpServers` — для Claude Code; **или**
 - в `claude_desktop_config.json` (Claude Desktop) / `~/.codex/config.toml`
   (Codex CLI), обернув HTTP в `mcp-remote` — см. примеры в
-  [`plane/docs/USER_GUIDE.md §5`](../plane/docs/USER_GUIDE.md).
+  [`docs/USER_GUIDE.md §5`](../USER_GUIDE.md).
 
 > Важно: identity — на агента, а не на пользователя. Если запускаете несколько
 > ролей, заводите **отдельную MCP-запись на каждую** с разным `X-Agent-Identity`
-> (как в `claude/.mcp.json`). В Claude Code между ними можно переключаться
+> (как в `docs/claude/.mcp.json`). В Claude Code между ними можно переключаться
 > командой `/mcp use slonk-<role>`.
 >
 > ⚠️ **Никогда не инлайньте реальный `MCP_AUTH_TOKEN` в `.mcp.json`** — только
@@ -103,10 +103,10 @@ claude mcp add --transport http slonk-developer http://localhost:8787/mcp \
 
 В Plane UI создайте issue в проекте slonk, состояние `To Do`, лейбл
 `agent-ready` (обязательный маркер «бери в работу»). Дальше аналитик подхватит
-её и задача поедет по конвейеру. Подробнее — `plane/docs/USER_GUIDE.md §6.3`.
+её и задача поедет по конвейеру. Подробнее — `docs/USER_GUIDE.md §6.3`.
 
 ## Ссылки
 
-- Полная инструкция по установке/настройке/обучению агентов — [`plane/docs/USER_GUIDE.md`](../plane/docs/USER_GUIDE.md).
-- Контракт MCP API и workflow — [`plane/docs/SPEC.md`](../plane/docs/SPEC.md).
-- Конвенции репозитория — [`plane/docs/CONVENTIONS.md`](../plane/docs/CONVENTIONS.md).
+- Полная инструкция по установке/настройке/обучению агентов — [`docs/USER_GUIDE.md`](../USER_GUIDE.md).
+- Контракт MCP API и workflow — [`docs/SPEC.md`](../SPEC.md).
+- Конвенции репозитория — [`docs/CONVENTIONS.md`](../CONVENTIONS.md).

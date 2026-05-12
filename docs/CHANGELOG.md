@@ -8,24 +8,37 @@
 ## [Unreleased]
 
 ### Added
-- **`claude/` — стартер-кит для агентов** (SLONK-1). Новый каталог в корне
-  репозитория с готовым набором для запуска LLM-агентов поверх slonk:
-  `claude/CLAUDE.md` (системная инструкция slonk — вынос `USER_GUIDE.md
-  §6.1` 1:1, с ремаркой о синхронизации), `claude/.mcp.json` (пример из
+- **`docs/claude/` — стартер-кит для агентов** (SLONK-1). Каталог с готовым
+  набором для запуска LLM-агентов поверх slonk:
+  `docs/claude/CLAUDE.md` (системная инструкция slonk — вынос `USER_GUIDE.md
+  §6.1` 1:1, с ремаркой о синхронизации), `docs/claude/.mcp.json` (пример из
   6 role-based MCP-серверов `slonk-analyst` … `slonk-doc` одним файлом),
-  `claude/skills/slonk-{analyst,developer,security-auditor,code-review,qa,doc}/SKILL.md`
+  `docs/claude/skills/slonk-{analyst,developer,security-auditor,code-review,qa,doc}/SKILL.md`
   (примеры Claude Code-скиллов: каждый — один и тот же цикл «проверить
   identity → найти задачу в своей колонке → claim → прочитать контекст →
   сделать свою часть → передать дальше», с подстановкой роли/колонки/
   следующей колонки; скиллы не запускают других агентов, передача работы —
-  только через `comment_issue` + `transition_issue`), `claude/README.md`
+  только через `comment_issue` + `transition_issue`), `docs/claude/README.md`
   (как развернуть: куда копировать промпт и скиллы, как прописать
   MCP-серверы, один терминал = одна роль). Заодно: `USER_GUIDE.md §6.1`
-  приведён в соответствие с `claude/CLAUDE.md` (обобщённый шаг «передай
+  приведён в соответствие с `docs/claude/CLAUDE.md` (обобщённый шаг «передай
   дальше» + абзац «особенность конвейера» + ремарка о синхронизации и ссылка
-  на каталог `claude/`); в `README.md` и в дереве «Структура проекта»
-  (`CLAUDE.md`) добавлен пункт про `claude/`; в `claude/README.md` — явное
-  предупреждение «не инлайнить `MCP_AUTH_TOKEN` в `.mcp.json`».
+  на каталог `docs/claude/`); в `README.md` и в дереве «Структура проекта»
+  (`CLAUDE.md`) добавлен пункт про `docs/claude/`; в `docs/claude/README.md` —
+  явное предупреждение «не инлайнить `MCP_AUTH_TOKEN` в `.mcp.json`».
+  _(Каталог изначально создан как `claude/` в корне репо; перенесён в
+  `docs/claude/` в рамках SLONK-4 — см. ниже.)_
+
+### Changed
+- **Реструктуризация файловой структуры репозитория** (SLONK-4). Документация
+  переехала из `plane/docs/` в `docs/` (8 файлов: `USER_GUIDE`, `SPEC`,
+  `ARCHITECTURE`, `CONFIGURATION`, `ROADMAP`, `CONVENTIONS`, `CHANGELOG`,
+  `README`); каталог `plane/` удалён. Примеры инструкций для Claude
+  (`CLAUDE.md`, `.mcp.json`, `skills/`) переехали из `claude/` в `docs/claude/`.
+  Обновлены все cross-ссылки: корневой `README.md`, `CLAUDE.md`, `SECURITY.md`,
+  комментарии в `docker-compose.yml` / `docker-compose.dev.yml` / `Makefile`,
+  относительные ссылки внутри перенесённых файлов и записи в `CHANGELOG.md`.
+  Кодовая база (`mcp-kanban/`) не затронута — путей на `plane/docs` в коде нет.
 
 ### Fixed
 - **Дефолт проекта в MCP-конфиге указывал на несуществующий handle.**
@@ -451,7 +464,7 @@ Backup: `pg_dump` + `mc mirror` MinIO + `tar mcp_data` по `BACKUP_CRON` чер
 
 ### Added
 - **Phase 0 — Скелет репозитория.** Корневой `README.md` как точка входа в
-  `plane/docs/`, `.gitignore` (секреты, ноды-артефакты, docker-volume'ы,
+  `docs/`, `.gitignore` (секреты, ноды-артефакты, docker-volume'ы,
   бэкапы, SQLite), `.editorconfig` (UTF-8/LF/без trailing ws),
   `.nvmrc` (Node 20 LTS), `.env.example` (стартовый набор переменных с
   заглушками для секретов), пустая директорная структура
