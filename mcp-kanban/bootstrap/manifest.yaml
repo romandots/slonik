@@ -24,10 +24,6 @@ projects:
     name: "Slonk — task tracker for code agents"
     identifier: SLONK
     modules: [cycles, modules, views, pages]
-  - slug: abc
-    name: "abc clinic app"
-    identifier: ABC
-    modules: [cycles, modules, views, pages]
 
 states:
   - { name: "Backlog",         group: backlog,    color: "#94a3b8", order: 1,  default: true }
