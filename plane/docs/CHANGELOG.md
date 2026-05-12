@@ -7,6 +7,21 @@
 
 ## [Unreleased]
 
+### Added
+- **`claude/` — стартер-кит для агентов** (SLONK-1). Новый каталог в корне
+  репозитория с готовым набором для запуска LLM-агентов поверх slonk:
+  `claude/CLAUDE.md` (системная инструкция slonk — вынос `USER_GUIDE.md
+  §6.1` 1:1, с ремаркой о синхронизации), `claude/.mcp.json` (пример из
+  6 role-based MCP-серверов `slonk-analyst` … `slonk-doc` одним файлом),
+  `claude/skills/slonk-{analyst,developer,security-auditor,code-review,qa,doc}/SKILL.md`
+  (примеры Claude Code-скиллов: каждый — один и тот же цикл «проверить
+  identity → найти задачу в своей колонке → claim → прочитать контекст →
+  сделать свою часть → передать дальше», с подстановкой роли/колонки/
+  следующей колонки; скиллы не запускают других агентов, передача работы —
+  только через `comment_issue` + `transition_issue`), `claude/README.md`
+  (как развернуть: куда копировать промпт и скиллы, как прописать
+  MCP-серверы, один терминал = одна роль).
+
 ### Fixed
 - **Дефолт проекта в MCP-конфиге указывал на несуществующий handle.**
   `MCP_DEFAULT_PROJECT` / `MCP_ALLOWED_PROJECTS` имели дефолт `code-agents`
