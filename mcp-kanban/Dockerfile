@@ -43,6 +43,14 @@ FROM node:22.13-alpine AS runtime
 
 WORKDIR /app
 
+# Целевые точки монтирования named volume'ов (mcp_data — SQLite-стор,
+# mcp_logs — опц. файловый sink). Создаём ДО `USER node` и chown'им на
+# node:1000 — Docker при первом монтировании пустого volume копирует
+# владельца mount point внутрь volume'а, иначе volume останется root:root
+# и better-sqlite3 не сможет открыть файл (SQLITE_CANTOPEN).
+RUN mkdir -p /mcp_data /var/log/mcp \
+ && chown -R node:node /mcp_data /var/log/mcp
+
 # Не-root пользователь. node:alpine уже содержит user `node`.
 USER node
 
