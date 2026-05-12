@@ -38,9 +38,10 @@ states:
   - { name: "Code Review",     group: started,    color: "#f59e0b", order: 6 }
   - { name: "Testing",         group: started,    color: "#06b6d4", order: 7 }
   - { name: "Documenting",     group: started,    color: "#0ea5e9", order: 8 }
-  - { name: "Blocked",         group: started,    color: "#64748b", order: 9 }
-  - { name: "Done",            group: completed,  color: "#16a34a", order: 10 }
-  - { name: "Cancelled",       group: cancelled,  color: "#dc2626", order: 11 }
+  - { name: "Merging",         group: started,    color: "#0ea5e9", order: 9 }
+  - { name: "Blocked",         group: started,    color: "#64748b", order: 10 }
+  - { name: "Done",            group: completed,  color: "#16a34a", order: 11 }
+  - { name: "Cancelled",       group: cancelled,  color: "#dc2626", order: 12 }
 
 labels:
   - { name: agent-ready,    color: "#3b82f6" }
@@ -65,3 +66,4 @@ identities:
   - { role: code-review-agent,      email: code-review-agent@slonk.local,      first_name: CodeReview,      last_name: Agent, default_state: "Code Review" }
   - { role: qa-agent,               email: qa-agent@slonk.local,               first_name: QA,              last_name: Agent, default_state: "Testing" }
   - { role: doc-agent,              email: doc-agent@slonk.local,              first_name: Doc,             last_name: Agent, default_state: "Documenting" }
+  - { role: merger-agent,           email: merger-agent@slonk.local,           first_name: Merger,          last_name: Agent, default_state: "Merging" }
