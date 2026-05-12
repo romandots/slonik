@@ -59,6 +59,8 @@ interface FakeWorld {
   labels: Map<string, PlaneLabel[]>;
   members: Map<string, PlaneUser[]>;
   inviteResponses: Map<string, { id: string; email: string } | Error>;
+  /** id состояний, на которых deleteState должен бросить (имитация «у колонки есть задачи»). */
+  deleteStateFailures: Set<string>;
 }
 
 function newWorld(): FakeWorld {
@@ -69,6 +71,7 @@ function newWorld(): FakeWorld {
     labels: new Map(),
     members: new Map(),
     inviteResponses: new Map(),
+    deleteStateFailures: new Set(),
   };
 }
 
@@ -137,6 +140,9 @@ function fakePlane(world: FakeWorld): PlaneClient {
       return next;
     },
     async deleteState(_ws: string, projectId: string, stateId: string): Promise<void> {
+      if (world.deleteStateFailures.has(stateId)) {
+        throw new Error(`state ${stateId} cannot be deleted: has linked issues`);
+      }
       const arr = world.states.get(projectId) ?? [];
       const idx = arr.findIndex((s) => s.id === stateId);
       if (idx !== -1) arr.splice(idx, 1);
@@ -470,6 +476,44 @@ describe('runBootstrap', () => {
     const finalStates = await plane.listStates(manifest.workspace.slug, project.id);
     expect(finalStates.map((s) => s.name).sort()).toEqual(
       ['Backlog', 'Development', 'Done', 'To Do'].sort(),
+    );
+  });
+
+  it('survives a failed deleteState (warns, counts delete_failed, keeps going)', async () => {
+    const world = newWorld();
+    const manifest = makeManifest();
+    seedWorkspace(world, manifest);
+    const project = seedProjectWithPlaneDefaults(world, manifest.projects[0]!.identifier);
+    // лишний started-сирота, который «нельзя удалить» (например — есть привязанные задачи)
+    world.states.get(project.id)!.push({
+      id: 'st-default-Review',
+      name: 'Review',
+      color: '#000000',
+      group: 'started',
+      sequence: 6,
+      default: false,
+      project: project.id,
+      workspace: project.workspace,
+    });
+    world.deleteStateFailures.add('st-default-Review');
+    const plane = fakePlane(world);
+
+    // bootstrap НЕ должен падать — best-effort delete
+    const r = await runBootstrap({
+      plane,
+      store,
+      logger: silentLogger,
+      manifest,
+      config: { MCP_AGENT_IDENTITY_MODE: 'per_user' },
+    });
+
+    expect(r.states.renamed).toBe(2); // Todo→To Do, In Progress→Development
+    expect(r.states.deleted).toBe(1); // Cancelled удалён
+    expect(r.states.delete_failed).toBe(1); // Review удалить не вышло — пропущен, не падаем
+    const finalStates = await plane.listStates(manifest.workspace.slug, project.id);
+    // Review остаётся, но это не дубль/сирота из дефолтов Plane — оператор увидит warn в логах
+    expect(finalStates.map((s) => s.name).sort()).toEqual(
+      ['Backlog', 'Development', 'Done', 'Review', 'To Do'].sort(),
     );
   });
 });

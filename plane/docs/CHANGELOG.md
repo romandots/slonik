@@ -18,13 +18,17 @@
   `group` под манифестное состояние (`PATCH` имени/цвета/`sequence` вместо
   `createState`) — так `Todo` становится `To Do`; (2) удаляет состояния, не
   описанные в манифесте и не помеченные `default` (`In Progress` и т.п.).
-  `default`-состояние не переименовывается и не удаляется никогда.
-  `BootstrapReport.states` получил поля `renamed` и `deleted`. Bootstrap
-  остаётся идемпотентным: повторный прогон даёт `created: 0, renamed: 0,
-  deleted: 0`. В `PlaneClient` добавлены `updateState` (PATCH) и
-  `deleteState` (DELETE). Затронуты `src/plane-client.ts`,
-  `src/bootstrap/runner.ts`, тесты, `src/tools/test-fakes.ts`, документация
-  (`SPEC.md`, `CONFIGURATION.md`, `USER_GUIDE.md`).
+  `default`-состояние не переименовывается и не удаляется никогда. Удаление
+  лишних колонок — best-effort: если Plane отказал (например, у колонки есть
+  привязанные задачи), bootstrap пишет `warn` и продолжает, а не падает.
+  `BootstrapReport.states` получил поля `renamed`, `deleted`, `delete_failed`;
+  они печатаются в отчёте `make bootstrap` (`states: N created, M renamed,
+  K deleted, …`). Bootstrap остаётся идемпотентным: повторный прогон даёт
+  `created: 0, renamed: 0, deleted: 0`. В `PlaneClient` добавлены
+  `updateState` (PATCH) и `deleteState` (DELETE). Затронуты
+  `src/plane-client.ts`, `src/bootstrap/runner.ts`, `src/bootstrap/cli.ts`,
+  тесты, `src/tools/test-fakes.ts`, документация (`SPEC.md`,
+  `CONFIGURATION.md`, `USER_GUIDE.md`).
 
 ### Fixed
 - **Дефолт проекта в MCP-конфиге указывал на несуществующий handle.**

@@ -10,7 +10,15 @@ export type IdentityMode = 'per_user' | 'single_bot';
 export interface BootstrapReport {
   workspace: { slug: string; created: boolean };
   projects: Array<{ slug: string; identifier: string; created: boolean }>;
-  states: { total: number; created: number; existing: number; renamed: number; deleted: number };
+  states: {
+    total: number;
+    created: number;
+    existing: number;
+    renamed: number;
+    deleted: number;
+    /** Сироты, которые не удалось удалить (например — есть привязанные задачи). */
+    delete_failed: number;
+  };
   labels: { total: number; created: number; existing: number };
   identities: {
     mode: IdentityMode;
@@ -55,6 +63,7 @@ export async function runBootstrap(deps: RunnerDeps): Promise<BootstrapReport> {
   let stateExisting = 0;
   let stateRenamed = 0;
   let stateDeleted = 0;
+  let stateDeleteFailed = 0;
   let labelCreated = 0;
   let labelExisting = 0;
   let totalStates = 0;
@@ -83,6 +92,7 @@ export async function runBootstrap(deps: RunnerDeps): Promise<BootstrapReport> {
     stateExisting += stateDiff.existing;
     stateRenamed += stateDiff.renamed;
     stateDeleted += stateDiff.deleted;
+    stateDeleteFailed += stateDiff.delete_failed;
     totalStates += manifest.states.length;
 
     const labelDiff = await ensureLabels(
@@ -125,6 +135,7 @@ export async function runBootstrap(deps: RunnerDeps): Promise<BootstrapReport> {
       existing: stateExisting,
       renamed: stateRenamed,
       deleted: stateDeleted,
+      delete_failed: stateDeleteFailed,
     },
     labels: { total: totalLabels, created: labelCreated, existing: labelExisting },
     identities: identityReport,
@@ -201,6 +212,7 @@ async function ensureStates(
   existing: number;
   renamed: number;
   deleted: number;
+  delete_failed: number;
 }> {
   const existing = await plane.listStates(workspaceSlug, projectId);
   const desiredNames = new Set(desired.map((s) => s.name));
@@ -265,18 +277,30 @@ async function ensureStates(
   // Лишние состояния (не из манифеста, не `default`, не переиспользованные)
   // — удаляем: bootstrap = source of truth для набора колонок. Список
   // считаем заранее, чтобы не зависеть от того, мутирует ли реализация
-  // listStates исходный массив при delete.
+  // listStates исходный массив при delete. Удаление — best-effort: если
+  // Plane отказал (например, у колонки есть привязанные задачи), пишем
+  // warn и идём дальше — bootstrap не должен падать из-за чужой колонки.
   const toDelete = existing.filter(
     (s) => !desiredNames.has(s.name) && !s.default && !consumed.has(s.id),
   );
   let deleted = 0;
+  let deleteFailed = 0;
   for (const s of toDelete) {
-    await plane.deleteState(workspaceSlug, projectId, s.id);
-    deleted += 1;
-    logger.info(
-      { workspace: workspaceSlug, project_id: projectId, state: s.name },
-      'state deleted (not in manifest)',
-    );
+    try {
+      await plane.deleteState(workspaceSlug, projectId, s.id);
+      deleted += 1;
+      logger.info(
+        { workspace: workspaceSlug, project_id: projectId, state: s.name },
+        'state deleted (not in manifest)',
+      );
+    } catch (err) {
+      deleteFailed += 1;
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn(
+        { workspace: workspaceSlug, project_id: projectId, state: s.name, err: msg },
+        'cannot delete non-manifest state; skipping (likely has attached issues)',
+      );
+    }
   }
 
   return {
@@ -285,6 +309,7 @@ async function ensureStates(
     existing: desired.length - created - renamed,
     renamed,
     deleted,
+    delete_failed: deleteFailed,
   };
 }
 

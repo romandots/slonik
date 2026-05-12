@@ -53,7 +53,10 @@ function printReport(report: BootstrapReport): void {
     lines.push(`project:   ${p.identifier} / ${p.slug} (${p.created ? 'created' : 'exists'})`);
   }
   lines.push(
-    `states:    ${report.states.created} created, ${report.states.existing} existing (of ${report.states.total})`,
+    `states:    ${report.states.created} created, ${report.states.renamed} renamed, ` +
+      `${report.states.deleted} deleted` +
+      (report.states.delete_failed > 0 ? ` (${report.states.delete_failed} delete failed)` : '') +
+      `, ${report.states.existing} existing (of ${report.states.total})`,
   );
   lines.push(
     `labels:    ${report.labels.created} created, ${report.labels.existing} existing (of ${report.labels.total})`,
