@@ -7,7 +7,7 @@
 # отладки БД/кэша/брокера/object storage и прямого попадания в plane-api в
 # обход plane-proxy.
 #
-# В прод-режиме НЕ применять (см. plane/docs/CONVENTIONS.md §14).
+# В прод-режиме НЕ применять (см. docs/CONVENTIONS.md §14).
 
 services:
   postgres:
