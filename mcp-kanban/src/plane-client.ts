@@ -317,7 +317,7 @@ export class PlaneClient {
       await this.request<unknown>(`workspaces/${slug}/projects/`);
       return { id: '', name: slug, slug, owner: '' };
     } catch (err) {
-      if (err instanceof PlaneError && err.httpStatus === 404) return undefined;
+      if (err instanceof PlaneError && err.planeStatus === 404) return undefined;
       throw err;
     }
   }
@@ -586,20 +586,36 @@ export class PlaneClient {
     workspaceSlug: string,
     input: { email: string; role?: number },
   ): Promise<{ id: string; email: string } | undefined> {
-    // В Plane v1.3.0 эндпоинт для invite — POST /workspaces/<slug>/invitations/
-    // (форма зависит от версии). Возвращает приглашение/инвайт, не сам user.
-    // Bootstrap использует этот вызов в режиме per_user; при ошибке —
-    // fallback на single_bot.
-    return await this.request<{ id: string; email: string }>(
-      `workspaces/${workspaceSlug}/invitations/`,
-      {
-        method: 'POST',
-        body: {
-          emails: [{ email: input.email, role: input.role ?? 15 }],
+    // В Plane v1.3.0 эндпоинт invite — POST /workspaces/<slug>/invitations/
+    // принимает плоский payload { email, role } и возвращает 201 +
+    // Invitation-объект (НЕ User). Реальный plane_user_id появится в
+    // /members/ только после того, как приглашённый примет инвайт.
+    // Ранее клиент слал batch-обёртку { emails: [{...}] }, что для v1.3.0
+    // даёт 400 "email: This field is required."
+    //
+    // Plane не идемпотентен на повторные invites — на уже отправленный
+    // адрес отдаёт 400 "Email already invited". Для bootstrap'а это
+    // штатный «уже сделано»: возвращаем undefined, чтобы runner не
+    // ушёл в single_bot fallback на повторном прогоне.
+    try {
+      return await this.request<{ id: string; email: string }>(
+        `workspaces/${workspaceSlug}/invitations/`,
+        {
+          method: 'POST',
+          body: { email: input.email, role: input.role ?? 15 },
+          notFoundOk: true,
         },
-        notFoundOk: true,
-      },
-    );
+      );
+    } catch (err) {
+      if (
+        err instanceof PlaneError &&
+        err.planeStatus === 400 &&
+        /already invited/i.test(err.message)
+      ) {
+        return undefined;
+      }
+      throw err;
+    }
   }
 }
 

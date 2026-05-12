@@ -278,13 +278,17 @@ async function ensureIdentities(args: {
       continue;
     }
     try {
-      const invitation = await plane.inviteWorkspaceMember(manifest.workspace.slug, {
+      await plane.inviteWorkspaceMember(manifest.workspace.slug, {
         email: ident.email,
       });
+      // Invitation.id ≠ User.id — реальный plane_user_id появится в
+      // /members/ только после accept'а. До этого храним null;
+      // идемпотентный повторный bootstrap подхватит реальный id из
+      // workspace_members и заполнит запись.
       store.upsert({
         role: ident.role,
         email: ident.email,
-        plane_user_id: invitation?.id ?? null,
+        plane_user_id: null,
         mode: 'per_user',
       });
       invited += 1;

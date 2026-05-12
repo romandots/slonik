@@ -222,7 +222,10 @@ describe('runBootstrap', () => {
     expect(r.identities.mode).toBe('per_user');
     expect(r.identities.invited).toBe(2);
     expect(store.get('developer-agent')?.mode).toBe('per_user');
-    expect(store.get('developer-agent')?.plane_user_id).toMatch(/^usr-/);
+    // Invitation.id ≠ User.id — bootstrap записывает null до accept'а
+    // приглашения; реальный plane_user_id появится при повторном run'е,
+    // когда юзер уже в /members/.
+    expect(store.get('developer-agent')?.plane_user_id).toBeNull();
   });
 
   it('is idempotent on second run (no creates, identities skipped)', async () => {
