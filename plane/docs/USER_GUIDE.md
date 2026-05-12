@@ -370,10 +370,10 @@ MCP_AUTH_TOKEN = "<токен или прокинуть из окружения>
 
 ### 6.1 Системная инструкция (готовый промпт)
 
-Скопируйте этот текст в системный промпт агента — в Claude Code это
-`CLAUDE.md` репозитория-задачи или `~/.claude/CLAUDE.md` для глобальных правил,
-в Claude Desktop — поле Custom Instructions, в Codex CLI — `~/.codex/prompt.md`
-или аналог.
+Скопируйте (или адаптируйте под свои задачи) этот текст в системный промпт
+агента — в Claude Code это `CLAUDE.md` репозитория-задачи или `~/.claude/CLAUDE.md`
+для глобальных правил, в Claude Desktop — поле Custom Instructions, в Codex CLI — 
+`~/.codex/prompt.md` или аналог.
 
 ```markdown
 # slonk — рабочие правила агента
@@ -388,13 +388,15 @@ MCP_AUTH_TOKEN = "<токен или прокинуть из окружения>
 `security-auditor-agent`, `code-review-agent`, `qa-agent`, `doc-agent`.
 Identity заранее зашита в заголовок `X-Agent-Identity` твоего MCP-клиента,
 проверь её через tool `who_am_i` в начале каждой сессии.
+Если запускаешь субагента, который выполняет часть работы — прокидывай
+соответствующую identity ему, чтобы он работал с канбаном от своего имени.
 
 ## Канбан-workflow
 
 Состояния и переходы:
 
-  Backlog → To Do → Analysis → Development → Security Review → Code Review →
-  Testing → Documenting → Done
+Backlog → To Do → Analysis → Development → Security Review → Code Review →
+Testing → Documenting → Done
 
 Параллельные ветки:
 - `Blocked` — задача ждёт фидбек человека или соседнего агента.
@@ -426,7 +428,12 @@ Identity заранее зашита в заголовок `X-Agent-Identity` т
    `link_git_ref({ issue_id, repo_url, branch })` сразу при первом push'е.
 5. **Сделай работу.** Пиши код, тесты, документацию — в зависимости от роли.
    Каждый значимый шаг — `comment_issue({ issue_id, body })` коротким
-   человеческим языком.
+   человеческим языком. Субагенты должны фиксировать результаты своей
+   работы в комментариях, чтобы человек видел прогресс. Субагенты должны  
+   читать комментарии предыдущих агентов, чтобы понимать контекст
+   и не повторять уже проделанную работу. Взаимодействие между субагентами
+   должно осуществляться через комментарии, чтобы человек видел прогресс и
+   понимал, кто за что отвечает.
 6. **Передай дальше.** Открыл PR — вызови
    `link_git_ref({ issue_id, repo_url, pr_url })` и
    `transition_issue({ issue_id, state: "Code Review" })`. Если задача
