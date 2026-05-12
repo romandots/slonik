@@ -283,9 +283,12 @@ make bootstrap
 2. Создаст проект «Code Agents — Default Project» с identifier `SLONK`
    (на него и указывают `MCP_DEFAULT_PROJECT` / `MCP_ALLOWED_PROJECTS`) и
    модулями cycles / modules / views / pages.
-3. Создаст 11 состояний канбана: `Backlog → To Do → Analysis → Development →
-   Security Review → Code Review → Testing → Documenting → Blocked → Done →
-   Cancelled`.
+3. Приведёт набор состояний канбана к манифесту (11 колонок): `Backlog →
+   To Do → Analysis → Development → Security Review → Code Review → Testing →
+   Documenting → Blocked → Done → Cancelled`. Дефолтные колонки, которые
+   Plane создаёт сам (`Todo`, `In Progress`), при этом переиспользуются под
+   манифестные (`Todo` → `To Do`) либо удаляются (`In Progress`) — дублей и
+   «сирот» не остаётся; `default`-колонка не трогается.
 4. Создаст 14 лейблов: `agent-ready`, `agent-claimed`, `agent-blocked`,
    `needs-human`, `needs-review`, `needs-tests`, `bug`, `feature`,
    `refactoring`, `docs`, `infra`, `security`, `high-priority`, `low-priority`.

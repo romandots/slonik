@@ -206,6 +206,30 @@ export function fakePlane(world: FakeWorld): PlaneClient {
       world.states.get(projectId)!.push(s);
       return s;
     },
+    async updateState(
+      _ws: string,
+      projectId: string,
+      stateId: string,
+      patch: Partial<Pick<PlaneState, 'name' | 'color' | 'group' | 'sequence' | 'default'>>,
+    ) {
+      const arr = world.states.get(projectId) ?? [];
+      const idx = arr.findIndex((s) => s.id === stateId);
+      if (idx === -1) {
+        const { PlaneError } = await import('../errors.js');
+        throw new PlaneError({
+          message: `Plane API PATCH states/${stateId}/ failed: 404 not found`,
+          planeStatus: 404,
+        });
+      }
+      const next = { ...arr[idx]!, ...patch };
+      arr[idx] = next;
+      return next;
+    },
+    async deleteState(_ws: string, projectId: string, stateId: string) {
+      const arr = world.states.get(projectId) ?? [];
+      const idx = arr.findIndex((s) => s.id === stateId);
+      if (idx !== -1) arr.splice(idx, 1);
+    },
     async listLabels(_ws: string, projectId: string) {
       return [...(world.labels.get(projectId) ?? [])];
     },

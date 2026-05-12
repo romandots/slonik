@@ -7,6 +7,29 @@
 
 ## [Unreleased]
 
+### Changed
+- **Bootstrap реконсилирует набор состояний Plane с манифестом** (SLONK-2,
+  SLONK-3). Plane v1.3.0 при создании проекта автоматически заводит
+  дефолтные состояния (`Backlog`, `Todo`, `In Progress`, `Done`,
+  `Cancelled`). Раньше `ensureStates` сверял манифест строго по `name` и
+  лишь доздавал недостающие — поэтому рядом с манифестным `To Do` оставался
+  Plane-овский `Todo` (дубль в группе `unstarted`), а `In Progress` висел
+  «сиротой». Теперь bootstrap: (1) переиспользует осиротевший дефолт той же
+  `group` под манифестное состояние (`PATCH` имени/цвета/`sequence` вместо
+  `createState`) — так `Todo` становится `To Do`; (2) удаляет состояния, не
+  описанные в манифесте и не помеченные `default` (`In Progress` и т.п.).
+  `default`-состояние не переименовывается и не удаляется никогда. Удаление
+  лишних колонок — best-effort: если Plane отказал (например, у колонки есть
+  привязанные задачи), bootstrap пишет `warn` и продолжает, а не падает.
+  `BootstrapReport.states` получил поля `renamed`, `deleted`, `delete_failed`;
+  они печатаются в отчёте `make bootstrap` (`states: N created, M renamed,
+  K deleted, …`). Bootstrap остаётся идемпотентным: повторный прогон даёт
+  `created: 0, renamed: 0, deleted: 0`. В `PlaneClient` добавлены
+  `updateState` (PATCH) и `deleteState` (DELETE). Затронуты
+  `src/plane-client.ts`, `src/bootstrap/runner.ts`, `src/bootstrap/cli.ts`,
+  тесты, `src/tools/test-fakes.ts`, документация (`SPEC.md`,
+  `CONFIGURATION.md`, `USER_GUIDE.md`).
+
 ### Fixed
 - **Дефолт проекта в MCP-конфиге указывал на несуществующий handle.**
   `MCP_DEFAULT_PROJECT` / `MCP_ALLOWED_PROJECTS` имели дефолт `code-agents`

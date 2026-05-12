@@ -417,6 +417,31 @@ export class PlaneClient {
     );
   }
 
+  async updateState(
+    workspaceSlug: string,
+    projectId: string,
+    stateId: string,
+    patch: Partial<{
+      name: string;
+      color: string;
+      group: PlaneState['group'];
+      sequence: number;
+      default: boolean;
+    }>,
+  ): Promise<PlaneState> {
+    return await this.request<PlaneState>(
+      `workspaces/${workspaceSlug}/projects/${projectId}/states/${stateId}/`,
+      { method: 'PATCH', body: patch },
+    );
+  }
+
+  async deleteState(workspaceSlug: string, projectId: string, stateId: string): Promise<void> {
+    await this.request<void>(
+      `workspaces/${workspaceSlug}/projects/${projectId}/states/${stateId}/`,
+      { method: 'DELETE' },
+    );
+  }
+
   // ---------------- high-level: labels ----------------
 
   async listLabels(workspaceSlug: string, projectId: string): Promise<PlaneLabel[]> {
