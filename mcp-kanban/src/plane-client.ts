@@ -1,6 +1,6 @@
 import type { Logger } from 'pino';
 import type { Config } from './config.js';
-import { PlaneError } from './errors.js';
+import { McpError, PlaneError } from './errors.js';
 
 // Тонкая обёртка над Plane REST API v1. Контракт сознательно узкий: только
 // те эндпоинты, которые реально нужны bootstrap'у и MCP-tool'ам. Все
@@ -358,10 +358,36 @@ export class PlaneClient {
       page_view?: boolean;
     },
   ): Promise<PlaneProject> {
-    return await this.request<PlaneProject>(`workspaces/${workspaceSlug}/projects/`, {
-      method: 'POST',
-      body: input,
-    });
+    try {
+      return await this.request<PlaneProject>(`workspaces/${workspaceSlug}/projects/`, {
+        method: 'POST',
+        body: input,
+      });
+    } catch (err) {
+      // Plane v1.3.0 не даёт двум проектам в одном workspace носить
+      // одинаковый name (`409 "The project name is already taken"`).
+      // identifier тоже уникален в workspace. Поднимаем понятную ошибку,
+      // вместо общего PLANE_UNAVAILABLE, чтобы bootstrap'а лог сразу
+      // подсказывал, что делать.
+      if (
+        err instanceof PlaneError &&
+        err.planeStatus === 409 &&
+        /already taken|already exists/i.test(err.message)
+      ) {
+        throw new McpError({
+          code: 'CONFLICT',
+          message:
+            `Plane refused to create project "${input.name}" (identifier ` +
+            `"${input.identifier}"): the name or identifier collides with an ` +
+            `existing project in workspace "${workspaceSlug}". Rename the ` +
+            `project in bootstrap/manifest.yaml or delete the conflicting ` +
+            `project via Plane UI (workspaces/<slug>/projects/<id>/settings/). ` +
+            `Plane reply: ${err.message}`,
+          cause: err,
+        });
+      }
+      throw err;
+    }
   }
 
   // ---------------- high-level: states ----------------

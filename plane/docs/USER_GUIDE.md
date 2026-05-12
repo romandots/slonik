@@ -100,9 +100,34 @@ MCP_DEFAULT_PROJECT=CODE_AGENTS
 MCP_ALLOWED_PROJECTS=CODE_AGENTS,BACKEND,WEB
 ```
 
-После правок — `make bootstrap` (идемпотентный, докатит недостающие
-проекты + те же 11 states / 14 labels на каждый) и
-`docker compose up -d mcp-kanban`.
+После правок выполни **именно в таком порядке**:
+
+```bash
+docker compose build mcp-kanban      # 1. manifest.yaml запечён в образ
+docker compose up -d mcp-kanban      # 2. подхватить новый MCP_ALLOWED_PROJECTS
+make bootstrap                       # 3. идемпотентно докатить проекты
+```
+
+Bootstrap идемпотентен — докатит недостающие проекты + те же 11 states /
+14 labels на каждый. Если повторный bootstrap **молча создаёт только один
+проект** — почти наверняка пропустил шаг 1: `manifest.yaml` копируется в
+образ на этапе сборки (`COPY ./bootstrap` в [Dockerfile](../../mcp-kanban/Dockerfile)),
+правки на хосте не подхватываются без `docker compose build`.
+
+**Известные коллизии Plane v1.3.0** при создании проектов:
+
+- **`409 "The project name is already taken"`** — name проекта в Plane
+  уникален по workspace. Если в `manifest.yaml` стоит то же `name`, что
+  у уже существующего проекта (даже с другим `identifier`), Plane
+  откажет. Поменяй `name` в манифесте, либо удали старый проект через
+  Plane UI (`/agents/projects/<id>/settings/` → Delete).
+- **`429 RATE_LIMIT_EXCEEDED`** — `PLANE_API_KEY_RATE_LIMIT` по умолчанию
+  `60/minute`. После серии экспериментов с API подожди минуту и повтори
+  `make bootstrap`. Лимит конфигурируется в `.env`.
+- **Issue в удаляемом проекте** — Plane при создании любого проекта
+  автоматически заводит 3 onboarding-issue («Welcome to Plane»…); при
+  удалении проекта они уходят вместе с ним. Если ты успел создать свои
+  задачи — экспортируй их перед удалением.
 
 Альтернатива манифесту — создание проектов через Plane UI (`/agents/
 projects/` → «Create Project»). Plane создаст дефолтные 5 states; чтобы
