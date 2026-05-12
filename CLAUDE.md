@@ -37,6 +37,7 @@ slonk/
 ├── .env / .env.example          # конфиг (.env не коммитится)
 ├── Makefile                     # up/down/logs/smoke/test/build/bootstrap
 ├── plane/docs/                  # вся проектная документация
+├── claude/                      # стартер-кит для агентов: CLAUDE.md + skills/slonk-*/ + .mcp.json (примеры)
 ├── mcp-kanban/                  # MCP-сервер (TypeScript, Node 22 LTS, pnpm 11)
 │   ├── Dockerfile               # multi-stage, итог < 200 MB
 │   ├── package.json             # @modelcontextprotocol/sdk, fastify, pino, zod, better-sqlite3

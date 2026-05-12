@@ -92,6 +92,12 @@ claude mcp add --transport http slonk-developer http://localhost:8787/mcp \
 > ролей, заводите **отдельную MCP-запись на каждую** с разным `X-Agent-Identity`
 > (как в `claude/.mcp.json`). В Claude Code между ними можно переключаться
 > командой `/mcp use slonk-<role>`.
+>
+> ⚠️ **Никогда не инлайньте реальный `MCP_AUTH_TOKEN` в `.mcp.json`** — только
+> плейсхолдер `${MCP_AUTH_TOKEN}`, который Claude Code подставит из окружения.
+> Иначе при коммите файла токен утечёт в историю репозитория. По той же причине
+> `.mcp.json` в корне репозитория-задачи (project scope) безопасно коммитить
+> _только_ с плейсхолдером; `~/.claude.json` (user scope) не коммитится в принципе.
 
 ### 4. Создайте задачу
 

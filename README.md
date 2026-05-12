@@ -48,6 +48,10 @@ claude mcp add --transport http slonk http://localhost:8787/mcp \
   --header "X-Agent-Identity: developer-agent"
 ```
 
+Готовый стартер-кит для запуска агентов под все 6 ролей конвейера (системный
+промпт, примеры скиллов под каждую роль, пример MCP-конфига) — в каталоге
+[`claude/`](./claude/); как развернуть — [`claude/README.md`](./claude/README.md).
+
 Подробности по всем шагам, Claude Desktop, Codex CLI и системный промпт для
 обучения агентов — в [USER_GUIDE](./plane/docs/USER_GUIDE.md).
 
