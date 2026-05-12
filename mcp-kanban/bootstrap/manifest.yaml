@@ -18,7 +18,15 @@ projects:
   # (MCP_DEFAULT_PROJECT / MCP_ALLOWED_PROJECTS = "SLONK"), а не по slug.
   - slug: code-agents
     name: "Code Agents — Default Project"
+    identifier: CODE_AGENTS
+    modules: [cycles, modules, views, pages]
+  - slug: slonk
+    name: "Slonk — task tracker for code agents"
     identifier: SLONK
+    modules: [cycles, modules, views, pages]
+  - slug: abc
+    name: "abc clinic app"
+    identifier: ABC
     modules: [cycles, modules, views, pages]
 
 states:

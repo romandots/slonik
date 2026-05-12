@@ -69,7 +69,55 @@ openssl rand -hex 32   # → MCP_AUTH_TOKEN
 | `MCP_AUTH_TOKEN` | заполнить (32+ hex-байт) |
 | `PLANE_API_KEY` | **оставить пустым** — получим в шаге 4 |
 
-### 2.2 Что менять для прод-развёртывания
+### 2.2 Несколько проектов в одном workspace
+
+По умолчанию workspace `agents` содержит один проект — `code-agents` с
+identifier `CODE_AGENTS`. Если разные команды задач (бэкенд, фронтенд,
+инфра, продукт) должны жить в раздельных канбан-досках с одинаковым
+workflow — добавь их в `mcp-kanban/bootstrap/manifest.yaml` и обнови
+whitelist в `.env`:
+
+```yaml
+# mcp-kanban/bootstrap/manifest.yaml
+projects:
+  - slug: code-agents
+    name: "Code Agents — Default Project"
+    identifier: CODE_AGENTS
+    modules: [cycles, modules, views, pages]
+  - slug: backend
+    name: "Backend service"
+    identifier: BACKEND
+    modules: [cycles, modules, views, pages]
+  - slug: web
+    name: "Web app"
+    identifier: WEB
+    modules: [cycles, modules, views, pages]
+```
+
+```env
+# .env
+MCP_DEFAULT_PROJECT=CODE_AGENTS
+MCP_ALLOWED_PROJECTS=CODE_AGENTS,BACKEND,WEB
+```
+
+После правок — `make bootstrap` (идемпотентный, докатит недостающие
+проекты + те же 11 states / 14 labels на каждый) и
+`docker compose up -d mcp-kanban`.
+
+Альтернатива манифесту — создание проектов через Plane UI (`/agents/
+projects/` → «Create Project»). Plane создаст дефолтные 5 states; чтобы
+докатить полный набор из 11 — после ручного создания запустить
+`make bootstrap` ещё раз.
+
+`identifier` — короткий uppercase-токен, который агент будет видеть в
+`sequence_id` каждой задачи (`BACKEND-42`, `WEB-7`). Он же — ключ
+адресации в MCP-tools. Не меняй identifier после того как в проекте
+появились задачи — все existing-ссылки и git-refs привязаны к нему.
+
+Подробнее о том, как агент адресует проект в каждом MCP-вызове — в
+системном промпте §6.1 «Проекты».
+
+### 2.3 Что менять для прод-развёртывания
 
 - `PLANE_DOMAIN` / `PLANE_APP_BASE_URL` / `PLANE_ADMIN_BASE_URL` / `PLANE_SPACE_BASE_URL` /
   `PLANE_LIVE_BASE_URL` — на реальный публичный URL (`https://plane.example.com`).
@@ -390,6 +438,31 @@ Identity заранее зашита в заголовок `X-Agent-Identity` т
 проверь её через tool `who_am_i` в начале каждой сессии.
 Если запускаешь субагента, который выполняет часть работы — прокидывай
 соответствующую identity ему, чтобы он работал с канбаном от своего имени.
+
+## Проекты
+
+Workspace `agents` содержит несколько проектов. Каждый проект — отдельный
+канбан с теми же 11 состояниями и 14 лейблами, но независимым потоком
+задач. Список и identifier'ы проектов — в `MCP_ALLOWED_PROJECTS`
+(`who_am_i` возвращает их в поле `allowed_projects`).
+
+В каждый MCP-вызов, где речь идёт о задаче (`list_issues`,
+`search_issues`, `get_issue`, `create_issue`, `claim_issue`,
+`transition_issue`, `comment_issue`, `link_git_ref` и пр.), передавай
+параметр `project: "<IDENTIFIER>"` — например `project: "BACKEND"`.
+Если параметр опущен, MCP использует `MCP_DEFAULT_PROJECT` — это
+общий пул, не путай его с конкретным проектом.
+
+Identifier можно передать в любой форме: uppercase (`BACKEND`), имя
+(`Backend API`), нормализованный slug (`backend-api`), сырой UUID.
+MCP сам резолвит в нужный `project.id`. Для tools, принимающих
+`issue_id` в форме `<IDENT>-<n>` (например `BACKEND-42`), MCP
+вытаскивает `project` из префикса автоматически.
+
+Не миксуй проекты в одной задаче. Задача из `BACKEND` не должна быть
+claim'нута для работы над фичей `WEB`. Кросс-проектная координация —
+через парную задачу в соседнем проекте + ссылка через
+`comment_issue` / `link_git_ref`.
 
 ## Канбан-workflow
 
