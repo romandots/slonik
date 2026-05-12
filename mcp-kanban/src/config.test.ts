@@ -11,7 +11,7 @@ describe('loadConfig', () => {
     const cfg = loadConfig(validBase);
     expect(cfg.MCP_SERVER_PORT).toBe(8787);
     expect(cfg.MCP_AGENT_IDENTITY_MODE).toBe('per_user');
-    expect(cfg.MCP_ALLOWED_PROJECTS).toEqual(['code-agents']);
+    expect(cfg.MCP_ALLOWED_PROJECTS).toEqual(['SLONK']);
   });
 
   it('rejects change_me as MCP_AUTH_TOKEN', () => {

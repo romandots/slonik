@@ -12,8 +12,8 @@
 
 После прохождения всех шагов локально будет работать:
 
-- Plane UI на `http://localhost:3000` (workspace `agents`, проект `code-agents`
-  с 11 канбан-состояниями и 14 лейблами);
+- Plane UI на `http://localhost:3000` (workspace `agents`, проект «Code Agents
+  — Default Project», identifier `SLONK`, с 11 канбан-состояниями и 14 лейблами);
 - MCP-сервер на `http://localhost:8787/mcp` с 22 tool'ами (3 git-tool'а +
   10 read + 8 write + `who_am_i`);
 - 6 идентичностей агентов в Plane: `analyst-agent`, `developer-agent`,
@@ -207,8 +207,9 @@ make bootstrap
 коллекциям):
 
 1. Создаст workspace `agents` (slug — `MCP_DEFAULT_WORKSPACE`).
-2. Создаст проект `code-agents` с identifier `SLONK` и модулями cycles /
-   modules / views / pages.
+2. Создаст проект «Code Agents — Default Project» с identifier `SLONK`
+   (на него и указывают `MCP_DEFAULT_PROJECT` / `MCP_ALLOWED_PROJECTS`) и
+   модулями cycles / modules / views / pages.
 3. Создаст 11 состояний канбана: `Backlog → To Do → Analysis → Development →
    Security Review → Code Review → Testing → Documenting → Blocked → Done →
    Cancelled`.
@@ -484,7 +485,7 @@ Identity заранее зашита в заголовок `X-Agent-Identity` т
 
 Через Plane UI:
 
-1. Открыть проект `code-agents`.
+1. Открыть проект «Code Agents» (identifier `SLONK`).
 2. Создать issue с состоянием `To Do` и лейблом `agent-ready` (обязательно
    — это маркер «бери в работу»).
 3. В description описать задачу по-человечески; meta-блок (`<!-- slonk:meta
@@ -499,8 +500,8 @@ Identity заранее зашита в заголовок `X-Agent-Identity` т
   и лейблами agent-ready, bug.
 ```
 
-Агент вызовет `create_issue` — задача появится в `To Do` workspace `agents`,
-проекта `code-agents`.
+Агент вызовет `create_issue` — задача появится в `Backlog` workspace `agents`,
+проекта `SLONK` (переведите её в `To Do`, чтобы агенты взяли её в работу).
 
 ### 6.4 Что увидите в логах после первого цикла
 
@@ -561,5 +562,5 @@ Identity заранее зашита в заголовок `X-Agent-Identity` т
 
 Если ничего из этого не помогает — собрать логи всех контейнеров
 (`docker compose logs --since 10m > /tmp/slonk.log`) и завести issue в самом
-slonk-канбане (workspace `agents`, проект `code-agents`, лейбл
+slonk-канбане (workspace `agents`, проект `SLONK`, лейбл
 `needs-human`).

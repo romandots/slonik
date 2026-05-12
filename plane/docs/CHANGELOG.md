@@ -7,6 +7,19 @@
 
 ## [Unreleased]
 
+### Fixed
+- **Дефолт проекта в MCP-конфиге указывал на несуществующий handle.**
+  `MCP_DEFAULT_PROJECT` / `MCP_ALLOWED_PROJECTS` имели дефолт `code-agents`
+  (это `slug` из `bootstrap/manifest.yaml`, которого Plane не хранит), а
+  `resolveProject` матчит ref только по `identifier` / `name` / `id`. В итоге
+  любой read/write tool падал с `NOT_FOUND: Project 'code-agents' not found`.
+  Дефолт изменён на Plane-идентификатор проекта — `SLONK`. Обновлены
+  `src/config.ts`, тесты, `.env.example`, комментарий в `manifest.yaml` и
+  документация (`SPEC.md`, `CONFIGURATION.md`, `ARCHITECTURE.md`,
+  `USER_GUIDE.md`). Существующие развёртывания: выставить
+  `MCP_DEFAULT_PROJECT=SLONK` и `MCP_ALLOWED_PROJECTS=SLONK` в `.env` и
+  пересоздать контейнер `mcp-kanban`.
+
 ## [1.0.0] — 2026-05-12
 
 Первый стабильный релиз slonk. Закрыты все Phase 0–10 из

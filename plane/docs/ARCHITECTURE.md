@@ -184,7 +184,7 @@ Healthchecks:
 
 ```text
 agent → MCP.list_issues({state:"To Do", limit:50})
-        MCP → Plane GET /workspaces/agents/projects/code-agents/issues/?state=...&limit=50
+        MCP → Plane GET /workspaces/agents/projects/<SLONK project_id>/issues/?state=...&limit=50
         Plane → Postgres SELECT
         Plane → MCP   (200, JSON)
         MCP → agent  (нормализованный список + extracted meta-блок)
@@ -266,7 +266,7 @@ Backlog
 | Угроза | Митигация |
 |---|---|
 | Утечка `MCP_AUTH_TOKEN` | Rotation через `.env` + `docker compose up -d mcp-kanban`; токены не логируются |
-| Скомпрометированный агент пишет в чужие задачи | Один проект `code-agents` — scope ограничен; для расширения нужны явные `MCP_ALLOWED_PROJECTS` |
+| Скомпрометированный агент пишет в чужие задачи | Один проект `SLONK` — scope ограничен; для расширения нужны явные `MCP_ALLOWED_PROJECTS` |
 | Внешний доступ к Postgres | `internal_net` без публикации портов |
 | MITM на API | Caddy + ACME-сертификат для прод |
 | Prompt injection через комментарий | MCP не исполняет инструкции из контента issue, только из MCP-вызовов |

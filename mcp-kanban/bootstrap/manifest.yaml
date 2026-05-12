@@ -13,6 +13,9 @@ workspace:
   name: "Code Agents"
 
 projects:
+  # `slug` — внутренний человекочитаемый ярлык (печатается в отчёте bootstrap),
+  # Plane его не хранит. Адресация проекта в MCP идёт по `identifier`
+  # (MCP_DEFAULT_PROJECT / MCP_ALLOWED_PROJECTS = "SLONK"), а не по slug.
   - slug: code-agents
     name: "Code Agents — Default Project"
     identifier: SLONK

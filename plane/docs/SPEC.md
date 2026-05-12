@@ -112,7 +112,9 @@ Bootstrap выполняется командой `docker compose run --rm mcp-k
 
 ### 5.2 Project
 
-В `agents` создаётся проект `code-agents` (slug — `MCP_DEFAULT_PROJECT`).
+В `agents` создаётся проект «Code Agents — Default Project» с identifier
+`SLONK`. На него указывают `MCP_DEFAULT_PROJECT` / `MCP_ALLOWED_PROJECTS`
+(Plane-проекты не имеют отдельного slug — адресуем по identifier).
 
 В проекте включены модули: cycles, modules, views, pages.
 
@@ -136,7 +138,7 @@ Bootstrap выполняется командой `docker compose run --rm mcp-k
 
 ### 5.4 Labels
 
-Обязательные labels проекта `code-agents` (с фиксированной палитрой —
+Обязательные labels проекта `SLONK` (с фиксированной палитрой —
 см. `bootstrap/manifest.yaml`):
 
 `agent-ready`, `agent-claimed`, `agent-blocked`, `needs-human`, `needs-review`,

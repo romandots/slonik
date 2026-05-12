@@ -41,12 +41,15 @@ const ConfigSchema = z.object({
 
   // Бизнес-логика
   MCP_DEFAULT_WORKSPACE: z.string().min(1).default('agents'),
-  MCP_DEFAULT_PROJECT: z.string().min(1).default('code-agents'),
+  // Проект адресуется по Plane-идентификатору (короткий код в ключах issue:
+  // SLONK-1, SLONK-2, ...). У Plane-проектов нет отдельного «slug», поэтому
+  // resolveProject матчит ref по identifier/name/id — дефолт = identifier.
+  MCP_DEFAULT_PROJECT: z.string().min(1).default('SLONK'),
   // zod v4: default() требует значение post-transform (string[]), а
   // prefault() — pre-transform (исходную строку, которая прогонится через
   // .transform). Используем prefault, чтобы дефолт парсился теми же
   // правилами, что и значение из env.
-  MCP_ALLOWED_PROJECTS: csvList.prefault('code-agents'),
+  MCP_ALLOWED_PROJECTS: csvList.prefault('SLONK'),
   MCP_AGENT_IDENTITY_MODE: z.enum(['per_user', 'single_bot']).default('per_user'),
   MCP_OPTIONAL_WORKSPACES: Bool01.default(false),
 
