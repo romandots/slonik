@@ -130,12 +130,16 @@ async function ensureWorkspace(
     logger.info({ slug: manifest.workspace.slug }, 'workspace exists');
     return { created: false };
   }
-  await plane.createWorkspace({
-    slug: manifest.workspace.slug,
-    name: manifest.workspace.name,
-  });
-  logger.info({ slug: manifest.workspace.slug }, 'workspace created');
-  return { created: true };
+  // Plane v1.3.0 workspace-scoped API token не может создавать workspaces:
+  // POST /workspaces/ требует user-session-auth. Workspace должен быть
+  // создан в UI до запуска bootstrap, а API-токен — взят из его
+  // "Workspace settings → API tokens".
+  throw new Error(
+    `Workspace "${manifest.workspace.slug}" not found via API token. ` +
+      `Plane API tokens are workspace-scoped and cannot create workspaces; ` +
+      `create the workspace via Plane UI first and ensure PLANE_API_KEY is ` +
+      `issued from its Workspace settings → API tokens.`,
+  );
 }
 
 // ---------------- project ----------------

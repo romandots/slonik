@@ -121,6 +121,14 @@ export interface ListResult<T> {
   count?: number;
 }
 
+// Plane v1.3.0 оборачивает все list-эндпоинты в pagination-shape
+// `{ results: [...], count, total_pages, next_cursor, ... }`. Более ранние
+// версии отдавали плоский массив. Принимаем оба варианта.
+function unwrapList<T>(resp: T[] | ListResult<T> | { results: T[] }): T[] {
+  if (Array.isArray(resp)) return resp;
+  return resp.results ?? [];
+}
+
 export interface ListIssuesFilter {
   state?: string | string[];
   state__name?: string | string[];
@@ -292,12 +300,26 @@ export class PlaneClient {
   // ---------------- high-level: workspaces ----------------
 
   async listWorkspaces(): Promise<PlaneWorkspace[]> {
-    return await this.request<PlaneWorkspace[]>('workspaces/');
+    return unwrapList(
+      await this.request<PlaneWorkspace[] | ListResult<PlaneWorkspace>>('workspaces/'),
+    );
   }
 
   async getWorkspaceBySlug(slug: string): Promise<PlaneWorkspace | undefined> {
-    const all = await this.listWorkspaces();
-    return all.find((w) => w.slug === slug);
+    // Plane v1.3.0 API-токены workspace-scoped: глобальный `GET /workspaces/`
+    // отдаёт 404 (эндпоинт доступен только для user-session). Поэтому
+    // существование проверяем через любой workspace-scoped под-ресурс —
+    // `workspaces/<slug>/projects/` отдаёт 200 при доступном workspace
+    // и 404 при отсутствующем. Реальный shape PlaneWorkspace через API-key
+    // недоступен — синтезируем минимальный объект (потребителям достаточно
+    // slug, остальные поля не читаются за пределами `listWorkspaces`).
+    try {
+      await this.request<unknown>(`workspaces/${slug}/projects/`);
+      return { id: '', name: slug, slug, owner: '' };
+    } catch (err) {
+      if (err instanceof PlaneError && err.httpStatus === 404) return undefined;
+      throw err;
+    }
   }
 
   async createWorkspace(input: { name: string; slug: string }): Promise<PlaneWorkspace> {
@@ -310,7 +332,11 @@ export class PlaneClient {
   // ---------------- high-level: projects ----------------
 
   async listProjects(workspaceSlug: string): Promise<PlaneProject[]> {
-    return await this.request<PlaneProject[]>(`workspaces/${workspaceSlug}/projects/`);
+    return unwrapList(
+      await this.request<PlaneProject[] | ListResult<PlaneProject>>(
+        `workspaces/${workspaceSlug}/projects/`,
+      ),
+    );
   }
 
   async getProjectByIdentifier(
@@ -341,8 +367,10 @@ export class PlaneClient {
   // ---------------- high-level: states ----------------
 
   async listStates(workspaceSlug: string, projectId: string): Promise<PlaneState[]> {
-    return await this.request<PlaneState[]>(
-      `workspaces/${workspaceSlug}/projects/${projectId}/states/`,
+    return unwrapList(
+      await this.request<PlaneState[] | ListResult<PlaneState>>(
+        `workspaces/${workspaceSlug}/projects/${projectId}/states/`,
+      ),
     );
   }
 
@@ -366,8 +394,10 @@ export class PlaneClient {
   // ---------------- high-level: labels ----------------
 
   async listLabels(workspaceSlug: string, projectId: string): Promise<PlaneLabel[]> {
-    return await this.request<PlaneLabel[]>(
-      `workspaces/${workspaceSlug}/projects/${projectId}/labels/`,
+    return unwrapList(
+      await this.request<PlaneLabel[] | ListResult<PlaneLabel>>(
+        `workspaces/${workspaceSlug}/projects/${projectId}/labels/`,
+      ),
     );
   }
 
@@ -385,14 +415,18 @@ export class PlaneClient {
   // ---------------- high-level: cycles / modules ----------------
 
   async listCycles(workspaceSlug: string, projectId: string): Promise<PlaneCycle[]> {
-    return await this.request<PlaneCycle[]>(
-      `workspaces/${workspaceSlug}/projects/${projectId}/cycles/`,
+    return unwrapList(
+      await this.request<PlaneCycle[] | ListResult<PlaneCycle>>(
+        `workspaces/${workspaceSlug}/projects/${projectId}/cycles/`,
+      ),
     );
   }
 
   async listModules(workspaceSlug: string, projectId: string): Promise<PlaneModule[]> {
-    return await this.request<PlaneModule[]>(
-      `workspaces/${workspaceSlug}/projects/${projectId}/modules/`,
+    return unwrapList(
+      await this.request<PlaneModule[] | ListResult<PlaneModule>>(
+        `workspaces/${workspaceSlug}/projects/${projectId}/modules/`,
+      ),
     );
   }
 
@@ -533,9 +567,12 @@ export class PlaneClient {
   async listWorkspaceMembers(workspaceSlug: string): Promise<PlaneUser[]> {
     // Plane: /workspaces/<slug>/members/ возвращает массив { member: PlaneUser, ... }
     // Различные версии отдают разную форму; нормализуем.
-    const raw = await this.request<
-      Array<{ member?: PlaneUser; id?: string; email?: string }>
-    >(`workspaces/${workspaceSlug}/members/`);
+    const raw = unwrapList(
+      await this.request<
+        | Array<{ member?: PlaneUser; id?: string; email?: string }>
+        | ListResult<{ member?: PlaneUser; id?: string; email?: string }>
+      >(`workspaces/${workspaceSlug}/members/`),
+    );
     return raw.map((row) => {
       if (row.member !== undefined) return row.member;
       return {

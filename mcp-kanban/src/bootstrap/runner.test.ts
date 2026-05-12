@@ -188,10 +188,23 @@ describe('runBootstrap', () => {
     store = new IdentityStore({ path: ':memory:' });
   });
 
-  it('creates workspace/project/states/labels on empty Plane (per_user)', async () => {
+  // Plane v1.3.0 API tokens are workspace-scoped — workspace must already
+  // exist in Plane before bootstrap. Helper seeds the manifest workspace
+  // into the fake world to mirror the real-world precondition.
+  function seedWorkspace(world: FakeWorld, manifest: Manifest): void {
+    world.workspaces.push({
+      id: 'ws-seed',
+      slug: manifest.workspace.slug,
+      name: manifest.workspace.name,
+      owner: 'me',
+    });
+  }
+
+  it('creates project/states/labels on workspace seeded via UI (per_user)', async () => {
     const world = newWorld();
-    const plane = fakePlane(world);
     const manifest = makeManifest();
+    seedWorkspace(world, manifest);
+    const plane = fakePlane(world);
     const r = await runBootstrap({
       plane,
       store,
@@ -200,7 +213,7 @@ describe('runBootstrap', () => {
       config: { MCP_AGENT_IDENTITY_MODE: 'per_user' },
     });
 
-    expect(r.workspace.created).toBe(true);
+    expect(r.workspace.created).toBe(false);
     expect(r.projects).toHaveLength(1);
     expect(r.projects[0]?.created).toBe(true);
     expect(r.states.created).toBe(4);
@@ -214,8 +227,9 @@ describe('runBootstrap', () => {
 
   it('is idempotent on second run (no creates, identities skipped)', async () => {
     const world = newWorld();
-    const plane = fakePlane(world);
     const manifest = makeManifest();
+    seedWorkspace(world, manifest);
+    const plane = fakePlane(world);
     await runBootstrap({
       plane,
       store,
@@ -242,8 +256,9 @@ describe('runBootstrap', () => {
   it('falls back to single_bot when invite throws', async () => {
     const world = newWorld();
     world.inviteResponses.set('developer-agent@slonk.local', new Error('invitations endpoint forbidden'));
-    const plane = fakePlane(world);
     const manifest = makeManifest();
+    seedWorkspace(world, manifest);
+    const plane = fakePlane(world);
     const r = await runBootstrap({
       plane,
       store,
@@ -262,8 +277,9 @@ describe('runBootstrap', () => {
     const world = newWorld();
     // если будут попытки invite — не подложен ответ; но мы вообще не должны
     // дойти до этого пути.
-    const plane = fakePlane(world);
     const manifest = makeManifest();
+    seedWorkspace(world, manifest);
+    const plane = fakePlane(world);
     const r = await runBootstrap({
       plane,
       store,
@@ -274,5 +290,22 @@ describe('runBootstrap', () => {
     expect(r.identities.mode).toBe('single_bot');
     expect(r.identities.invited).toBe(0);
     expect(world.members.get('agents') ?? []).toHaveLength(0);
+  });
+
+  it('fails with actionable error when workspace was not pre-created in UI', async () => {
+    const world = newWorld();
+    // intentionally not calling seedWorkspace — simulating the user
+    // running bootstrap before creating the workspace in Plane UI.
+    const plane = fakePlane(world);
+    const manifest = makeManifest();
+    await expect(
+      runBootstrap({
+        plane,
+        store,
+        logger: silentLogger,
+        manifest,
+        config: { MCP_AGENT_IDENTITY_MODE: 'per_user' },
+      }),
+    ).rejects.toThrow(/workspace-scoped/i);
   });
 });
