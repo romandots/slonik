@@ -83,6 +83,10 @@ openssl rand -hex 32   # → MCP_AUTH_TOKEN
 
 ## 3. Запуск стека
 
+> Все `make`-команды ниже запускаются **из корня репозитория** (`slonk/`,
+> там лежит `Makefile` и `docker-compose.yml`). Из любого подкаталога — в т.ч.
+> `plane/docs/` — `make up` выдаст `No rule to make target 'up'`.
+
 ### 3.1 Базовый старт
 
 ```bash
@@ -180,7 +184,7 @@ make down-v          # ВНИМАНИЕ: удаляет volume'ы, нужно я
 
 ### 4.2 Получить API-ключ Plane
 
-В Plane UI: **Workspace settings → API tokens → Create token**. Скопировать
+В Plane UI: **Workspace settings → API tokens → Create token** (http://localhost:3000/agents/settings/api-tokens). Скопировать
 значение и положить в `.env`:
 
 ```env
@@ -545,6 +549,7 @@ Identity заранее зашита в заголовок `X-Agent-Identity` т
 
 | Симптом | Что проверить |
 |---|---|
+| `make: *** No rule to make target 'up'` | Запущено не из корня репо. `cd` в корень `slonk/` (где `Makefile`) и повторить. |
 | `make up` зависает на `--wait` | `make logs` — обычно `plane-migrator` крутит миграции, ждать до 2 минут. Если падает — Postgres не поднялся, проверить `POSTGRES_PASSWORD`. |
 | Plane UI отдаёт 502 | `plane-proxy` не нашёл upstream-сервис. Проверить `docker compose ps` — все ли `plane-*` healthy; перезапустить `docker compose restart plane-proxy`. |
 | `bootstrap` падает на `PLANE_API_KEY invalid` | Ключ не админский или сделан в другом workspace. Создайте новый workspace-admin token в UI и пропишите в `.env`. |

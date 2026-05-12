@@ -29,6 +29,8 @@ Self-hosted Kanban task tracker для LLM-агентов на базе [Plane](
 
 ## Быстрый старт
 
+Все `make`-команды запускаются **из корня репозитория** (там лежит `Makefile`).
+
 ```bash
 git clone <repo-url> slonk && cd slonk
 cp .env.example .env                 # затем заменить все change_me на свои значения
