@@ -47,6 +47,14 @@
         "Authorization": "Bearer ${MCP_AUTH_TOKEN}",
         "X-Agent-Identity": "doc-agent"
       }
+    },
+    "slonk-merger": {
+      "type": "http",
+      "url": "http://localhost:8787/mcp",
+      "headers": {
+        "Authorization": "Bearer ${MCP_AUTH_TOKEN}",
+        "X-Agent-Identity": "merger-agent"
+      }
     }
   }
 }
