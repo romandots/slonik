@@ -51,6 +51,27 @@
   `docs/claude/` в рамках SLONK-4 — см. ниже.)_
 
 ### Changed
+- **PlaneClient: `429 RATE_LIMIT_EXCEEDED` теперь ретраится отдельным,
+  более щедрым бюджетом.** Дефолтный Plane-лимит `PLANE_API_KEY_RATE_LIMIT=60/minute`
+  бил по bootstrap'у на нескольких проектах (5 × (12 states + 14 labels) +
+  identity invites ≈ 130–150 write-вызовов): 429 шёл в общий retry-budget
+  3 попытки, выпадал в `PLANE_UNAVAILABLE 502` и валил весь прогон. Теперь
+  в `PlaneClient.request` (`mcp-kanban/src/plane-client.ts`) 5xx/сетевые и
+  429 считаются отдельными счётчиками; для 429 — `MCP_RETRY_ATTEMPTS_429`
+  (новая env, дефолт `10`), уважаем `Retry-After` от Plane (целые секунды
+  или HTTP-date), без заголовка — full-jitter exponential backoff поверх
+  `MCP_RETRY_BACKOFF_MS`, capped в коридор 1–30s (короче — нет смысла
+  ретраить per-minute лимит, длиннее — лишнее ожидание). `PlaneError` с
+  `planeStatus=429` теперь маппится в `code: 'RATE_LIMITED'` вместо
+  `PLANE_UNAVAILABLE`, и при исчерпании бюджета сообщение
+  человекочитаемое: «Plane rate limit exceeded after N attempts over Xs …
+  Raise PLANE_API_KEY_RATE_LIMIT in .env or wait and re-run — bootstrap is
+  idempotent». Покрыто `src/plane-client.test.ts` (5 кейсов: успешный
+  recover после серии 429, Retry-After в секундах, исчерпание бюджета с
+  понятным message, изоляция от 5xx-бюджета, отдельная ветка 5xx).
+  Обновлены `docs/USER_GUIDE.md §2.2` (раздел про коллизии Plane v1.3.0,
+  пункт 429) и `docs/CONFIGURATION.md §2.6`. В `.env.example` и
+  `docker-compose.yml` проброшен `MCP_RETRY_ATTEMPTS_429`.
 - **Bootstrap устойчив к падению отдельного проекта + pre-flight валидация
   `project.name`.** В `src/bootstrap/runner.ts` цикл по проектам обёрнут в
   try/catch: ошибка на одном проекте (ensureProject / ensureStates /

@@ -62,6 +62,11 @@ const ConfigSchema = z.object({
   MCP_RL_IDENTITY_RPS: PositiveInt.default(5),
   MCP_ALLOW_CIDR: z.string().default('0.0.0.0/0'),
   MCP_RETRY_ATTEMPTS: NonNegativeInt.default(3),
+  // 429 — не отказ Plane, а просьба подождать (по умолчанию
+  // PLANE_API_KEY_RATE_LIMIT=60/minute). Bootstrap нескольких проектов
+  // легко выедает 130+ write-вызовов и упирается в лимит, поэтому для 429
+  // держим отдельный, более щедрый retry-budget с уважением Retry-After.
+  MCP_RETRY_ATTEMPTS_429: NonNegativeInt.default(10),
   MCP_RETRY_BACKOFF_MS: NonNegativeInt.default(200),
   MCP_PLANE_TIMEOUT_MS: PositiveInt.default(10_000),
   MCP_METRICS_ENABLED: Bool01.default(false),

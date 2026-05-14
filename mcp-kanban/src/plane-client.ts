@@ -149,13 +149,26 @@ interface RequestOptions {
   notFoundOk?: boolean;
 }
 
+export interface PlaneClientHooks {
+  /** Заменяемый sleep для тестов (детерминированный backoff). */
+  sleep?: (ms: number) => Promise<void>;
+  /** Заменяемый источник джиттера для тестов. По умолчанию Math.random. */
+  random?: () => number;
+  /** Заменяемый fetch для тестов. По умолчанию глобальный fetch. */
+  fetch?: typeof fetch;
+  /** Текущее время мс (для измерения total-wait в сообщении об ошибке). */
+  now?: () => number;
+}
+
 export class PlaneClient {
   private readonly baseUrl: URL;
   private readonly apiKey: string | undefined;
   private readonly timeoutMs: number;
   private readonly retryAttempts: number;
+  private readonly retryAttempts429: number;
   private readonly retryBackoffMs: number;
   private readonly log: Logger;
+  private readonly hooks: Required<PlaneClientHooks>;
 
   constructor(opts: {
     config: Pick<
@@ -164,9 +177,11 @@ export class PlaneClient {
       | 'PLANE_API_KEY'
       | 'MCP_PLANE_TIMEOUT_MS'
       | 'MCP_RETRY_ATTEMPTS'
+      | 'MCP_RETRY_ATTEMPTS_429'
       | 'MCP_RETRY_BACKOFF_MS'
     >;
     logger: Logger;
+    hooks?: PlaneClientHooks;
   }) {
     this.baseUrl = new URL(opts.config.PLANE_API_BASE_URL);
     if (!this.baseUrl.pathname.endsWith('/')) {
@@ -175,25 +190,32 @@ export class PlaneClient {
     this.apiKey = opts.config.PLANE_API_KEY;
     this.timeoutMs = opts.config.MCP_PLANE_TIMEOUT_MS;
     this.retryAttempts = opts.config.MCP_RETRY_ATTEMPTS;
+    this.retryAttempts429 = opts.config.MCP_RETRY_ATTEMPTS_429;
     this.retryBackoffMs = opts.config.MCP_RETRY_BACKOFF_MS;
     this.log = opts.logger.child({ component: 'plane-client' });
+    this.hooks = {
+      sleep: opts.hooks?.sleep ?? ((ms) => new Promise<void>((r) => setTimeout(r, ms))),
+      random: opts.hooks?.random ?? Math.random,
+      fetch: opts.hooks?.fetch ?? fetch,
+      now: opts.hooks?.now ?? (() => performance.now()),
+    };
   }
 
   async checkHealth(): Promise<PlaneHealth> {
     // upstream Plane v1.3.0 не отдаёт /api/v1/health; рабочий probe —
     // корень `/` (200 + {status: "OK"}).
     const root = new URL('/', this.baseUrl);
-    const t0 = performance.now();
+    const t0 = this.hooks.now();
     try {
-      const resp = await fetch(root, {
+      const resp = await this.hooks.fetch(root, {
         method: 'GET',
         headers: this.apiKey !== undefined ? { 'X-Api-Key': this.apiKey } : {},
         signal: AbortSignal.timeout(this.timeoutMs),
       });
-      const latencyMs = Math.round(performance.now() - t0);
+      const latencyMs = Math.round(this.hooks.now() - t0);
       return { reachable: resp.ok, status: resp.status, latencyMs };
     } catch (err) {
-      const latencyMs = Math.round(performance.now() - t0);
+      const latencyMs = Math.round(this.hooks.now() - t0);
       const msg = err instanceof Error ? err.message : String(err);
       this.log.warn({ err: msg, latencyMs }, 'Plane health probe failed');
       return { reachable: false, status: null, latencyMs, error: msg };
@@ -220,11 +242,16 @@ export class PlaneClient {
     }
 
     const method = init.method as string;
-    const attempts = this.retryAttempts + 1;
-    let lastErr: unknown;
-    for (let attempt = 0; attempt < attempts; attempt += 1) {
+    // Раздельные бюджеты: 5xx/сетевые ретраим скромно, 429 — щедро (Plane
+    // лимит per-minute, ждать заведомо имеет смысл). Каждый класс ошибки
+    // считается своим счётчиком, чтобы серия 429 не съедала бюджет
+    // сетевых ретраев и наоборот.
+    let attempts5xx = 0;
+    let attempts429 = 0;
+    const t0 = this.hooks.now();
+    for (;;) {
       try {
-        const resp = await fetch(url, {
+        const resp = await this.hooks.fetch(url, {
           ...init,
           signal: AbortSignal.timeout(this.timeoutMs),
         });
@@ -232,10 +259,33 @@ export class PlaneClient {
           return undefined as unknown as T;
         }
         if (!resp.ok) {
-          if (resp.status === 429 || (resp.status >= 500 && resp.status < 600)) {
-            // retryable
-            if (attempt < attempts - 1) {
-              await this.sleep(this.backoffMs(attempt));
+          if (resp.status === 429) {
+            if (attempts429 < this.retryAttempts429) {
+              const waitMs = this.retryAfterMs(resp, attempts429);
+              this.log.warn(
+                { path, attempt: attempts429 + 1, max: this.retryAttempts429, waitMs },
+                'Plane 429, backing off',
+              );
+              await this.hooks.sleep(waitMs);
+              attempts429 += 1;
+              continue;
+            }
+            const text = await safeText(resp);
+            const elapsedS = ((this.hooks.now() - t0) / 1000).toFixed(1);
+            throw new PlaneError({
+              message:
+                `Plane rate limit exceeded after ${attempts429 + 1} attempts ` +
+                `over ${elapsedS}s on ${method} ${path}. Raise ` +
+                `PLANE_API_KEY_RATE_LIMIT in .env (e.g. 300/minute) and ` +
+                `recreate plane-api, or wait and re-run — bootstrap is ` +
+                `idempotent. Plane reply: ${text.slice(0, 200)}`,
+              planeStatus: 429,
+            });
+          }
+          if (resp.status >= 500 && resp.status < 600) {
+            if (attempts5xx < this.retryAttempts) {
+              await this.hooks.sleep(this.backoffMs(attempts5xx));
+              attempts5xx += 1;
               continue;
             }
           }
@@ -254,10 +304,10 @@ export class PlaneClient {
         }
         return (await resp.json()) as T;
       } catch (err) {
-        lastErr = err;
         if (err instanceof PlaneError) throw err;
-        if (attempt < attempts - 1) {
-          await this.sleep(this.backoffMs(attempt));
+        if (attempts5xx < this.retryAttempts) {
+          await this.hooks.sleep(this.backoffMs(attempts5xx));
+          attempts5xx += 1;
           continue;
         }
         const msg = err instanceof Error ? err.message : String(err);
@@ -267,20 +317,41 @@ export class PlaneClient {
         });
       }
     }
-    // Если бы все попытки исчерпались без throw — это невозможно по
-    // конструкции, но TS этого не выводит.
-    throw new PlaneError({
-      message: `Plane API ${method} ${path} retries exhausted`,
-      cause: lastErr,
-    });
   }
 
+  /**
+   * Backoff для 5xx/сетевых: exponential, base × 2^attempt.
+   */
   private backoffMs(attempt: number): number {
     return this.retryBackoffMs * 2 ** attempt;
   }
 
-  private async sleep(ms: number): Promise<void> {
-    await new Promise<void>((r) => setTimeout(r, ms));
+  /**
+   * Сколько ждать перед следующей попыткой при 429. Уважает заголовок
+   * Retry-After (Plane его не всегда шлёт, но если шлёт — принимаем как
+   * source of truth: либо целые секунды, либо HTTP-date). Без заголовка
+   * — full-jitter exponential backoff поверх MCP_RETRY_BACKOFF_MS, но не
+   * меньше 1s и не больше 30s, чтобы серия 429 за разумное время
+   * исчерпала минутное окно лимита.
+   */
+  private retryAfterMs(resp: Response, attempt: number): number {
+    const header = resp.headers.get('retry-after');
+    if (header !== null) {
+      const asInt = Number(header);
+      if (Number.isFinite(asInt) && asInt >= 0) {
+        return Math.max(0, Math.round(asInt * 1000));
+      }
+      const asDate = Date.parse(header);
+      if (Number.isFinite(asDate)) {
+        return Math.max(0, asDate - Date.now());
+      }
+    }
+    const base = this.retryBackoffMs * 2 ** attempt;
+    const capped = Math.min(Math.max(base, 1000), 30_000);
+    // full-jitter: [0.5×, 1.5×) — рассинхронизирует параллельные клиенты,
+    // не делая ожидание абсурдно коротким.
+    const jitter = 0.5 + this.hooks.random();
+    return Math.round(capped * jitter);
   }
 
   private buildUrl(path: string, query?: Record<string, string | number | boolean | undefined>): URL {
