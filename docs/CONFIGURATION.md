@@ -18,7 +18,7 @@ slonk/
 │   └── Caddyfile               # обратный прокси (опц.)
 ├── mcp-kanban/
 │   ├── Dockerfile
-│   └── bootstrap/
+│   └── bootstrap/                # bind-mount'ится в /app/bootstrap:ro в mcp-kanban (правки без ребилда)
 │       ├── manifest.example.yaml # committed pristine-шаблон (workspace/projects/states/labels/identities)
 │       └── manifest.yaml         # локальный конфиг установки, gitignored (cp из *.example.yaml)
 ├── prometheus/prometheus.yml

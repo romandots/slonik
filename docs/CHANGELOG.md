@@ -8,6 +8,15 @@
 ## [Unreleased]
 
 ### Added
+- **`mcp-kanban/bootstrap/` пробрасывается bind-mount'ом** в контейнер
+  `mcp-kanban` (`./mcp-kanban/bootstrap:/app/bootstrap:ro` в
+  `docker-compose.yml`). Правки `manifest.yaml` / `manifest.example.yaml`
+  подхватываются после `docker compose up -d mcp-kanban` + `make bootstrap`,
+  **без `make build`**. Образ продолжает копировать те же файлы (`COPY
+  ./bootstrap` в Dockerfile) — это fallback, если bind-mount по какой-то
+  причине пуст. Дока (`USER_GUIDE.md §2.2`, `CONFIGURATION.md §тех. структура`)
+  обновлена, шаг `docker compose build mcp-kanban` после правок манифеста
+  удалён из инструкции.
 - **Локальный bootstrap-манифест по аналогии с `.env`**. Файл
   `mcp-kanban/bootstrap/manifest.yaml` теперь — конфиг конкретной установки и
   в git не едет (`.gitignore`). В репозитории остаётся committed-шаблон

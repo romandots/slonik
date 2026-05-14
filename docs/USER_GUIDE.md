@@ -109,22 +109,31 @@ MCP_DEFAULT_PROJECT=CODE_AGENTS
 MCP_ALLOWED_PROJECTS=CODE_AGENTS,BACKEND,WEB
 ```
 
-После правок выполни **именно в таком порядке**:
+После правок выполни:
 
 ```bash
-docker compose build mcp-kanban      # 1. manifest.yaml запечён в образ
-docker compose up -d mcp-kanban      # 2. подхватить новый MCP_ALLOWED_PROJECTS
-make bootstrap                       # 3. идемпотентно докатить проекты
+docker compose up -d mcp-kanban      # 1. подхватить новый MCP_ALLOWED_PROJECTS
+make bootstrap                       # 2. идемпотентно докатить проекты
 ```
 
+`docker compose build mcp-kanban` после правок **манифеста** делать не нужно —
+каталог `mcp-kanban/bootstrap/` пробрасывается в контейнер bind-mount'ом
+(`./mcp-kanban/bootstrap:/app/bootstrap:ro`, см. [docker-compose.yml](../docker-compose.yml)).
+Ребилд нужен только если ты меняешь код MCP-сервера. Если же изменился
+`MCP_ALLOWED_PROJECTS` в `.env` — нужен именно `up -d` (env-переменные
+зашиваются в контейнер при старте, не в образ).
+
 Bootstrap идемпотентен — докатит недостающие проекты + те же 12 states /
-14 labels на каждый. Если повторный bootstrap **молча создаёт только один
-проект** — почти наверняка пропустил шаг 1: `bootstrap/` (включая твой
-локальный `manifest.yaml`) копируется в образ на этапе сборки
-(`COPY ./bootstrap` в [Dockerfile](../mcp-kanban/Dockerfile)), правки
-на хосте не подхватываются без `docker compose build`. Если `manifest.yaml`
-вообще нет на хосте — в образ уедет только committed-шаблон
+14 labels на каждый. Если `manifest.yaml` вообще нет на хосте — bind-mount
+прокидывает каталог `bootstrap/` целиком, loader падает на committed-шаблон
 `manifest.example.yaml`, и bootstrap создаст ровно его проекты.
+
+> **Plane v1.3.0 валидирует имена проектов** регуляркой без `.`, `—`, и
+> прочих спецсимволов: `name: "foo.bar"` или `name: "Foo — Bar"` Plane
+> отбивает 400 `"Project name cannot contain special characters."`. Bootstrap
+> сейчас не toleant к этой ошибке — первый битый `name` обрывает весь прогон,
+> последующие проекты не накатываются. Используй в `name` только буквы /
+> цифры / пробел / `-` / `_`.
 
 **Известные коллизии Plane v1.3.0** при создании проектов:
 

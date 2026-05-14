@@ -356,6 +356,13 @@ services:
       # Phase 3+: SQLite-стор (identity-map, audit, git_refs) и опц. логи.
       - mcp_data:/mcp_data
       - mcp_logs:/var/log/mcp
+      # Bootstrap-манифест прокидываем bind-mount'ом, чтобы правки в
+      # `mcp-kanban/bootstrap/manifest.yaml` подхватывались без `make build`.
+      # В образе те же файлы запечены `COPY ./bootstrap` (fallback на случай,
+      # если пользователь стёр bind-источник); рантайм-приоритет — у хоста.
+      # Loader сам выбирает manifest.yaml → manifest.example.yaml (см.
+      # `src/bootstrap/manifest.ts`), так что fresh-checkout без `cp` работает.
+      - ./mcp-kanban/bootstrap:/app/bootstrap:ro
     ports:
       - "${MCP_SERVER_PORT}:${MCP_SERVER_PORT}"
     depends_on:
