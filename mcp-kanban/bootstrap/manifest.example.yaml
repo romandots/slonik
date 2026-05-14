@@ -17,11 +17,14 @@ projects:
   # Plane его не хранит. Адресация проекта в MCP идёт по `identifier`
   # (MCP_DEFAULT_PROJECT / MCP_ALLOWED_PROJECTS = "SLONK"), а не по slug.
   - slug: code-agents
-    name: "Code Agents — Default Project"
+    # Plane v1.3.0 разрешает в project.name только [A-Za-z0-9 _-]+. Точки,
+    # em-dash и прочие спецсимволы режутся 400-ой; bootstrap провалидирует
+    # это локально (см. src/bootstrap/manifest.ts).
+    name: "Code Agents - Default Project"
     identifier: CODE_AGENTS
     modules: [cycles, modules, views, pages]
   - slug: slonk
-    name: "Slonk — task tracker for code agents"
+    name: "Slonk - task tracker for code agents"
     identifier: SLONK
     modules: [cycles, modules, views, pages]
 

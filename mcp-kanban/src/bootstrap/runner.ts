@@ -7,9 +7,24 @@ import type { IdentityStore } from './store.js';
 
 export type IdentityMode = 'per_user' | 'single_bot';
 
+export interface BootstrapProjectError {
+  /** Стабильный код для grep/мониторинга. На сегодня — единственное значение. */
+  code: 'PROJECT_BOOTSTRAP_FAILED';
+  /** Человекочитаемое сообщение исходной ошибки (Plane / network / pre-flight). */
+  message: string;
+}
+
+export interface BootstrapProjectReport {
+  slug: string;
+  identifier: string;
+  created: boolean;
+  /** Заполняется, если на этом проекте упали ensureProject / ensureStates / ensureLabels. */
+  error?: BootstrapProjectError;
+}
+
 export interface BootstrapReport {
   workspace: { slug: string; created: boolean };
-  projects: Array<{ slug: string; identifier: string; created: boolean }>;
+  projects: BootstrapProjectReport[];
   states: {
     total: number;
     created: number;
@@ -73,43 +88,70 @@ export async function runBootstrap(deps: RunnerDeps): Promise<BootstrapReport> {
   let primaryProject: PlaneProject | undefined;
   let primaryStates: PlaneState[] = [];
 
+  // Resilient-цикл: один кривой проект (например — Plane 400 на name с em-dash
+  // или сетевой сбой посреди ensureStates) не должен ронять весь bootstrap.
+  // Ловим ошибку на уровне «один проект» и идём дальше; падение фиксируется в
+  // BootstrapReport.projects[i].error и в WARN-логе. Identities (workspace-level)
+  // отрабатываются после цикла независимо. CLI читает наличие error[] и
+  // возвращает non-zero exit code.
   for (const projectManifest of manifest.projects) {
-    const ensured = await ensureProject(plane, manifest.workspace.slug, projectManifest, logger);
-    projects.push({
+    const report: BootstrapProjectReport = {
       slug: projectManifest.slug,
       identifier: projectManifest.identifier,
-      created: ensured.created,
-    });
+      created: false,
+    };
+    try {
+      const ensured = await ensureProject(
+        plane,
+        manifest.workspace.slug,
+        projectManifest,
+        logger,
+      );
+      report.created = ensured.created;
 
-    const stateDiff = await ensureStates(
-      plane,
-      manifest.workspace.slug,
-      ensured.project.id,
-      manifest.states,
-      logger,
-    );
-    stateCreated += stateDiff.created;
-    stateExisting += stateDiff.existing;
-    stateRenamed += stateDiff.renamed;
-    stateDeleted += stateDiff.deleted;
-    stateDeleteFailed += stateDiff.delete_failed;
-    totalStates += manifest.states.length;
+      const stateDiff = await ensureStates(
+        plane,
+        manifest.workspace.slug,
+        ensured.project.id,
+        manifest.states,
+        logger,
+      );
+      stateCreated += stateDiff.created;
+      stateExisting += stateDiff.existing;
+      stateRenamed += stateDiff.renamed;
+      stateDeleted += stateDiff.deleted;
+      stateDeleteFailed += stateDiff.delete_failed;
+      totalStates += manifest.states.length;
 
-    const labelDiff = await ensureLabels(
-      plane,
-      manifest.workspace.slug,
-      ensured.project.id,
-      manifest.labels,
-      logger,
-    );
-    labelCreated += labelDiff.created;
-    labelExisting += labelDiff.existing;
-    totalLabels += manifest.labels.length;
+      const labelDiff = await ensureLabels(
+        plane,
+        manifest.workspace.slug,
+        ensured.project.id,
+        manifest.labels,
+        logger,
+      );
+      labelCreated += labelDiff.created;
+      labelExisting += labelDiff.existing;
+      totalLabels += manifest.labels.length;
 
-    if (primaryProject === undefined) {
-      primaryProject = ensured.project;
-      primaryStates = stateDiff.states;
+      if (primaryProject === undefined) {
+        primaryProject = ensured.project;
+        primaryStates = stateDiff.states;
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      report.error = { code: 'PROJECT_BOOTSTRAP_FAILED', message: msg };
+      logger.error(
+        {
+          workspace: manifest.workspace.slug,
+          project: projectManifest.identifier,
+          slug: projectManifest.slug,
+          err: msg,
+        },
+        'project bootstrap failed; skipping and continuing with the rest',
+      );
     }
+    projects.push(report);
   }
 
   const identityReport = await ensureIdentities({

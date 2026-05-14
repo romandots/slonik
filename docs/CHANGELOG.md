@@ -51,6 +51,27 @@
   `docs/claude/` в рамках SLONK-4 — см. ниже.)_
 
 ### Changed
+- **Bootstrap устойчив к падению отдельного проекта + pre-flight валидация
+  `project.name`.** В `src/bootstrap/runner.ts` цикл по проектам обёрнут в
+  try/catch: ошибка на одном проекте (ensureProject / ensureStates /
+  ensureLabels) больше не роняет весь bootstrap — фиксируется в
+  `BootstrapReport.projects[i].error` (`code: PROJECT_BOOTSTRAP_FAILED`),
+  логируется через `logger.error`, цикл идёт дальше, `ensureIdentities`
+  отрабатывает в любом случае. `printReport` помечает упавшие проекты
+  маркером `FAILED: <reason>`, CLI (`src/bootstrap/cli.ts`) возвращает
+  non-zero exit code. В `ManifestSchema` для `projects[].name` добавлен
+  regex `/^[A-Za-z0-9 _-]+$/` — те же правила, что и у Plane v1.3.0,
+  чтобы кривое имя (точка, em-dash, двоеточие и пр.) падало на
+  zod-валидации с понятным сообщением до похода в Plane. Заодно в
+  committed-шаблоне `mcp-kanban/bootstrap/manifest.example.yaml` em-dash
+  в именах проектов заменён на обычный `-` — иначе Plane на этих именах
+  отдавал 400 «Project name cannot contain special characters». Тесты:
+  `runner.test.ts` — двухпроектный манифест, где второй падает по 400,
+  identities всё равно отрабатывают; `manifest.test.ts` — zod режет
+  `name: "foo.bar"` и `name: "Foo — Bar"`. Документация:
+  `docs/USER_GUIDE.md §2.2` (раздел «Известные коллизии Plane v1.3.0»)
+  получил предупреждение про разрешённый charset и описание поведения
+  resilient-цикла.
 - **Реструктуризация файловой структуры репозитория** (SLONK-4). Документация
   переехала из `plane/docs/` в `docs/` (8 файлов: `USER_GUIDE`, `SPEC`,
   `ARCHITECTURE`, `CONFIGURATION`, `ROADMAP`, `CONVENTIONS`, `CHANGELOG`,

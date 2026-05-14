@@ -40,6 +40,18 @@ export async function bootstrapCli(opts: BootstrapCliOptions = {}): Promise<void
       config,
     });
     printReport(report);
+    // Resilient-цикл в runBootstrap собирает падения по проектам в
+    // report.projects[i].error; сам по себе runBootstrap не throw'ит на
+    // частичных сбоях, чтобы дописать identities и отчёт. CLI же сигнализирует
+    // оператору ненулевым exit code — иначе CI/`make bootstrap` пройдут зелёными
+    // при частично сломанной инициализации.
+    const failed = report.projects.filter((p) => p.error !== undefined);
+    if (failed.length > 0) {
+      throw new Error(
+        `bootstrap completed with ${failed.length} failed project(s): ` +
+          failed.map((p) => `${p.identifier} (${p.error?.message ?? 'unknown'})`).join('; '),
+      );
+    }
   } finally {
     store.close();
   }
@@ -50,6 +62,11 @@ function printReport(report: BootstrapReport): void {
   lines.push('---');
   lines.push(`workspace: ${report.workspace.slug} (${report.workspace.created ? 'created' : 'exists'})`);
   for (const p of report.projects) {
+    if (p.error !== undefined) {
+      // Сразу заметно глазами: упавшие проекты идут с маркером FAILED + причиной.
+      lines.push(`project:   ${p.identifier} / ${p.slug} (FAILED: ${p.error.message})`);
+      continue;
+    }
     lines.push(`project:   ${p.identifier} / ${p.slug} (${p.created ? 'created' : 'exists'})`);
   }
   lines.push(

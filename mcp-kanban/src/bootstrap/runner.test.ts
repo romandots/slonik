@@ -479,6 +479,57 @@ describe('runBootstrap', () => {
     );
   });
 
+  it('continues to next project + identities when one project fails to create', async () => {
+    // Сценарий из багрепорта: в манифесте два проекта; Plane роняет 400 на
+    // втором (имя с em-dash / точкой и т.п.). До фикса runBootstrap пробрасывал
+    // ошибку наружу — bootstrap падал, identities не отрабатывали, остальные
+    // проекты не создавались. Сейчас: ошибка фиксируется в projects[i].error,
+    // цикл идёт дальше, identities всё равно вызываются.
+    const world = newWorld();
+    const manifest: Manifest = {
+      ...makeManifest(),
+      projects: [
+        { slug: 'good', name: 'Good', identifier: 'GOOD', modules: [] },
+        { slug: 'bad', name: 'Bad', identifier: 'BAD', modules: [] },
+      ],
+    };
+    seedWorkspace(world, manifest);
+    const plane = fakePlane(world);
+    // Перехватываем createProject — для identifier 'BAD' бросаем как Plane 400.
+    const originalCreate = plane.createProject.bind(plane);
+    (plane as unknown as { createProject: typeof plane.createProject }).createProject = (
+      async (
+        ws: string,
+        input: { name: string; identifier: string; module_view?: boolean; cycle_view?: boolean; issue_views_view?: boolean; page_view?: boolean },
+      ) => {
+        if (input.identifier === 'BAD') {
+          throw new Error('Plane 400: Project name cannot contain special characters.');
+        }
+        return originalCreate(ws, input);
+      }
+    ) as typeof plane.createProject;
+
+    const r = await runBootstrap({
+      plane,
+      store,
+      logger: silentLogger,
+      manifest,
+      config: { MCP_AGENT_IDENTITY_MODE: 'per_user' },
+    });
+
+    expect(r.projects).toHaveLength(2);
+    expect(r.projects[0]?.created).toBe(true);
+    expect(r.projects[0]?.error).toBeUndefined();
+    expect(r.projects[1]?.created).toBe(false);
+    expect(r.projects[1]?.error?.code).toBe('PROJECT_BOOTSTRAP_FAILED');
+    expect(r.projects[1]?.error?.message).toMatch(/special characters/);
+    // identities всё равно отработали — workspace-level операция не должна
+    // зависеть от падения отдельного проекта.
+    expect(r.identities.mode).toBe('per_user');
+    expect(r.identities.invited).toBe(2);
+    expect(store.get('developer-agent')?.mode).toBe('per_user');
+  });
+
   it('survives a failed deleteState (warns, counts delete_failed, keeps going)', async () => {
     const world = newWorld();
     const manifest = makeManifest();

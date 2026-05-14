@@ -33,7 +33,20 @@ export const ManifestSchema = z.object({
     .array(
       z.object({
         slug: z.string().min(1),
-        name: z.string().min(1),
+        // Plane v1.3.0 валидирует project.name на бэкенде и режет всё, что
+        // не подходит под `[A-Za-z0-9 _-]+`, 400-ой с сообщением
+        // "Project name cannot contain special characters." Прогоняем тот
+        // же regex локально — иначе один кривой `name` (точка, em-dash,
+        // двоеточие, slash и пр.) укладывает Plane по сети, а у нас
+        // bootstrap-цикл прерывается на первом же проекте. Лучше упасть
+        // на zod-валидации с понятным сообщением, чем ходить в Plane.
+        name: z
+          .string()
+          .min(1)
+          .regex(
+            /^[A-Za-z0-9 _-]+$/,
+            'Plane project name must match /^[A-Za-z0-9 _-]+$/ (no dots/em-dashes/special chars)',
+          ),
         identifier: z.string().min(1).max(12),
         modules: z.array(z.enum(['cycles', 'modules', 'views', 'pages'])).default([]),
       }),
