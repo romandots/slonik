@@ -68,7 +68,12 @@ export class PlaneError extends McpError {
     cause?: unknown;
   }) {
     super({
-      code: opts.planeStatus === 404 ? 'NOT_FOUND' : 'PLANE_UNAVAILABLE',
+      code:
+        opts.planeStatus === 404
+          ? 'NOT_FOUND'
+          : opts.planeStatus === 429
+            ? 'RATE_LIMITED'
+            : 'PLANE_UNAVAILABLE',
       message: opts.message,
       ...(opts.traceId !== undefined ? { traceId: opts.traceId } : {}),
       ...(opts.cause !== undefined ? { cause: opts.cause } : {}),
