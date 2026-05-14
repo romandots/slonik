@@ -65,13 +65,16 @@ services:
         max-size: "10m"
         max-file: "3"
     healthcheck:
-      # Caddy 2 не имеет своего /healthz; шлём HEAD на 127.0.0.1:80 —
-      # отдаст redirect-to-HTTPS (308), что всё равно «alive».
-      test: ["CMD-SHELL", "wget -q -O- --spider http://127.0.0.1/ 2>&1 | grep -qE 'HTTP/1.1 (200|301|308)' || exit 1"]
+      # Caddy 2 не имеет своего /healthz, зато admin API всегда висит на
+      # 127.0.0.1:2019 и отдаёт 200 на /config/. BusyBox-wget с
+      # `--spider` возвращает exit 0 только при 2xx — этого достаточно
+      # как proof-of-life. Старый healthcheck (`wget -q ... | grep`) был
+      # битый: `-q` глушит вывод, grep ничего не видит, exit 1 всегда.
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:2019/config/"]
       interval: 30s
       timeout: 5s
       retries: 5
-      start_period: 10s
+      start_period: 15s
 
 volumes:
   caddy_data:

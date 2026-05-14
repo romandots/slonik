@@ -106,6 +106,19 @@
   `CONFIGURATION.md`, `USER_GUIDE.md`).
 
 ### Fixed
+- **Caddy healthcheck в `docker-compose.proxy.yml` был битый — контейнер
+  всегда был unhealthy**, из-за чего `make up-proxy` валился по таймауту
+  `compose --wait`. Старая команда `wget -q -O- --spider http://127.0.0.1/
+  2>&1 | grep -qE 'HTTP/1.1 (200|301|308)'` использовала несовместимые
+  флаги: `-q` глушит весь вывод wget, поэтому grep никогда не находил
+  строку статуса и команда всегда возвращала exit 1. Заменено на проверку
+  Caddy admin API (`wget -q --spider http://127.0.0.1:2019/config/`) —
+  admin API у Caddy 2 всегда на 127.0.0.1:2019, отдаёт 200, BusyBox-wget
+  при 2xx возвращает 0. `start_period` поднят с 10 до 15 секунд под
+  cold-start TLS-инициализации. Существующие развёртывания: подтянуть
+  файл и `docker compose -f docker-compose.yml -f docker-compose.proxy.yml
+  up -d --force-recreate caddy` (или `make up-proxy` ещё раз — compose
+  пересоздаст контейнер из-за изменения healthcheck-блока).
 - **Дефолт проекта в MCP-конфиге указывал на несуществующий handle.**
   `MCP_DEFAULT_PROJECT` / `MCP_ALLOWED_PROJECTS` имели дефолт `code-agents`
   (это `slug` из `bootstrap/manifest.yaml`, которого Plane не хранит), а
