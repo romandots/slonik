@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -151,6 +151,56 @@ describe('loadManifest', () => {
 
       expect(m.projects).toHaveLength(5);
       expect(warnSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('YAML parse errors', () => {
+    let dir: string;
+    beforeEach(() => {
+      dir = mkdtempSync(join(tmpdir(), 'slonk-manifest-'));
+    });
+    afterEach(() => {
+      rmSync(dir, { recursive: true, force: true });
+    });
+
+    it('rewraps YAMLParseError into a human-readable message with file + line hint', () => {
+      // Битый YAML: пользователь забыл два пробела перед `- slug:` под `projects:`,
+      // получает YAMLParseError из библиотеки yaml. Loader должен перехватить
+      // его и отдать понятное сообщение с указанием файла и строки.
+      const broken = [
+        'workspace:',
+        '  slug: agents',
+        '  name: Agents',
+        'projects:',
+        '- slug: bezpravilnet',
+        '  name: Bezpravilnet',
+        '  identifier: BZP',
+        '  modules: []',
+        '\tbad: tab-indent-here',
+      ].join('\n');
+      const path = join(dir, 'manifest.yaml');
+      writeFileSync(path, broken, 'utf8');
+
+      expect(() => loadManifest({ path })).toThrow(/Invalid YAML in bootstrap manifest/);
+      expect(() => loadManifest({ path })).toThrow(/line \d+, col \d+/);
+      // не должно протекать имя класса/стек-трейс из node_modules
+      try {
+        loadManifest({ path });
+      } catch (err) {
+        const msg = (err as Error).message;
+        expect(msg).not.toMatch(/node_modules/);
+        expect(msg).not.toMatch(/YAMLParseError/);
+        expect(msg).toContain(path);
+      }
+    });
+
+    it('passes through schema (zod) errors unchanged — only YAMLParseError is wrapped', () => {
+      // Валидный YAML, но не проходит ManifestSchema — должны видеть прежнее
+      // сообщение `Invalid bootstrap manifest`, а не YAML-обёртку.
+      const valid = 'workspace:\n  slug: x\n';
+      const path = join(dir, 'manifest.yaml');
+      writeFileSync(path, valid, 'utf8');
+      expect(() => loadManifest({ path })).toThrow(/Invalid bootstrap manifest/);
     });
   });
 

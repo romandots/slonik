@@ -85,6 +85,15 @@
   Обновлены `docs/USER_GUIDE.md §2.2` (раздел про коллизии Plane v1.3.0,
   пункт 429) и `docs/CONFIGURATION.md §2.6`. В `.env.example` и
   `docker-compose.yml` проброшен `MCP_RETRY_ATTEMPTS_429`.
+- **Человекочитаемая ошибка при битом YAML в `bootstrap/manifest.yaml`.**
+  Loader (`src/bootstrap/manifest.ts`) ловит `YAMLParseError` из библиотеки
+  `yaml` и пересобирает его в обычный `Error` с указанием пути файла,
+  строки/колонки и подсказкой про двухпробельный отступ для списков
+  проектов. Раньше пользователь видел голый стек-трейс с глубин
+  `node_modules/.pnpm/yaml@…` после `Fatal startup error:` — теперь
+  сообщение однострочное и говорит ровно где починить. Не-YAML-ошибки
+  (`ZodError` из `ManifestSchema`) пробрасываются без изменений.
+  Тесты в `manifest.test.ts` покрывают оба кейса.
 - **Bootstrap устойчив к падению отдельного проекта + pre-flight валидация
   `project.name`.** В `src/bootstrap/runner.ts` цикл по проектам обёрнут в
   try/catch: ошибка на одном проекте (ensureProject / ensureStates /

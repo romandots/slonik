@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { parse as parseYaml } from 'yaml';
+import { parse as parseYaml, YAMLParseError } from 'yaml';
 import { z } from 'zod';
 
 // Манифест bootstrap'а. Источник правды для конкретной установки —
@@ -93,7 +93,26 @@ export interface LoadManifestOptions {
 export function loadManifest(opts: LoadManifestOptions = {}): Manifest {
   const path = resolveManifestPath(opts.path);
   const raw = readFileSync(path, 'utf8');
-  const parsed = parseYaml(raw) as unknown;
+  let parsed: unknown;
+  try {
+    parsed = parseYaml(raw);
+  } catch (err) {
+    // Голый YAMLParseError со стек-трейсом до глубин node_modules/.pnpm/yaml/...
+    // пугает оператора и прячет суть — превращаем в человекочитаемое сообщение
+    // с указанием файла, строки и подсказкой про отступы.
+    if (err instanceof YAMLParseError) {
+      const pos = err.linePos?.[0];
+      const where = pos !== undefined ? `line ${pos.line}, col ${pos.col}` : 'unknown position';
+      throw new Error(
+        `Invalid YAML in bootstrap manifest (${path}):\n` +
+          `  ${where}: ${err.message}\n` +
+          '\n' +
+          'Hint: check indentation around that line — list items under `projects:` must\n' +
+          'start with `  - ` (two spaces). YAML is whitespace-sensitive.',
+      );
+    }
+    throw err;
+  }
   const result = ManifestSchema.safeParse(parsed);
   if (!result.success) {
     const issues = result.error.issues
