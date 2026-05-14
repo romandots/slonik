@@ -16,6 +16,10 @@ Thumbs.db
 *.pem
 *.key
 
+# Локальный bootstrap-манифест конкретной установки (см. manifest.example.yaml).
+# Содержит список проектов/идентичностей для конкретного инстанса и в git не едет.
+mcp-kanban/bootstrap/manifest.yaml
+
 # Node / pnpm (MCP server, Phase 2+)
 node_modules/
 dist/

@@ -8,9 +8,21 @@
 ## [Unreleased]
 
 ### Added
+- **Локальный bootstrap-манифест по аналогии с `.env`**. Файл
+  `mcp-kanban/bootstrap/manifest.yaml` теперь — конфиг конкретной установки и
+  в git не едет (`.gitignore`). В репозитории остаётся committed-шаблон
+  `manifest.example.yaml`. Loader (`src/bootstrap/manifest.ts`) сначала ищет
+  `manifest.yaml`, при отсутствии падает на `manifest.example.yaml` — свежий
+  чекаут работает без правок, кастомизация (свои проекты / identities) —
+  копированием шаблона и правкой локальной копии. `Dockerfile` копирует весь
+  `bootstrap/`, runtime сам выбирает приоритетный файл. Документация
+  (`USER_GUIDE.md §1`, `§2.2`, `CONFIGURATION.md §тех. структура`) обновлена,
+  тест `manifest.test.ts` переписан на инварианты (а не точный список
+  проектов) и заодно подправлен под актуальный контракт SPEC §5 — 12 states
+  и 7 identities (раньше assert'ы рассинхронились с манифестом и тест падал).
 - **`docs/claude/` — стартер-кит для агентов** (SLONK-1). Каталог с готовым
   набором для запуска LLM-агентов поверх slonk:
-  `docs/claude/CLAUDE.md` (системная инструкция slonk — вынос `USER_GUIDE.md
+  `CLAUDE.md` (системная инструкция slonk — вынос `USER_GUIDE.md
   §6.1` 1:1, с ремаркой о синхронизации), `docs/claude/.mcp.json` (пример из
   6 role-based MCP-серверов `slonk-analyst` … `slonk-doc` одним файлом),
   `docs/claude/skills/slonk-{analyst,developer,security-auditor,code-review,qa,doc}/SKILL.md`
@@ -21,7 +33,7 @@
   только через `comment_issue` + `transition_issue`), `docs/claude/README.md`
   (как развернуть: куда копировать промпт и скиллы, как прописать
   MCP-серверы, один терминал = одна роль). Заодно: `USER_GUIDE.md §6.1`
-  приведён в соответствие с `docs/claude/CLAUDE.md` (обобщённый шаг «передай
+  приведён в соответствие с `CLAUDE.md` (обобщённый шаг «передай
   дальше» + абзац «особенность конвейера» + ремарка о синхронизации и ссылка
   на каталог `docs/claude/`); в `README.md` и в дереве «Структура проекта»
   (`CLAUDE.md`) добавлен пункт про `docs/claude/`; в `docs/claude/README.md` —

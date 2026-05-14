@@ -18,7 +18,9 @@ slonk/
 │   └── Caddyfile               # обратный прокси (опц.)
 ├── mcp-kanban/
 │   ├── Dockerfile
-│   └── bootstrap/manifest.yaml # workspace/projects/states/labels/identities
+│   └── bootstrap/
+│       ├── manifest.example.yaml # committed pristine-шаблон (workspace/projects/states/labels/identities)
+│       └── manifest.yaml         # локальный конфиг установки, gitignored (cp из *.example.yaml)
 ├── prometheus/prometheus.yml
 ├── grafana/provisioning/…
 ├── loki/loki-config.yaml
@@ -208,8 +210,15 @@ PR + строка в [CHANGELOG.md](./CHANGELOG.md).
    project, states, labels, agent-identities.
 
 Файл `mcp-kanban/bootstrap/manifest.yaml` — единый источник правды для имени
-workspace, проекта, состояний, лейблов и identities. Подробное содержимое — в
-самом файле в репозитории; здесь — структура:
+workspace, проекта, состояний, лейблов и identities **для конкретной
+установки**. В git он не едет (см. `.gitignore`); в репозитории лежит только
+committed-шаблон `manifest.example.yaml`. Workflow по аналогии с
+`.env.example → .env`: после `git clone` скопировать
+`manifest.example.yaml → manifest.yaml` и править под свой инстанс (добавлять
+проекты, менять имена/identifier'ы, корректировать список identities). Loader
+сначала ищет `manifest.yaml`, при его отсутствии падает на
+`manifest.example.yaml`, поэтому свежий чекаут работает без правок. Подробное
+содержимое — в самом файле в репозитории; здесь — структура:
 
 > **Состояния — реконсиляция, а не только досоздание.** Plane v1.3.0 при
 > создании проекта заводит дефолтные колонки (`Backlog`, `Todo`,

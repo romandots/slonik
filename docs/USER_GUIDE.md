@@ -40,7 +40,15 @@
 git clone <repo-url> slonk
 cd slonk
 cp .env.example .env
+cp mcp-kanban/bootstrap/manifest.example.yaml mcp-kanban/bootstrap/manifest.yaml
 ```
+
+Файл `manifest.yaml` — конфиг конкретной установки (список проектов,
+states, labels, agent-identities), он gitignored. В git едет только
+`manifest.example.yaml` — pristine-шаблон, на который loader падает,
+если локальный `manifest.yaml` отсутствует. Кастомизация под свой
+инстанс делается **именно в `manifest.yaml`** (см. §2.2 ниже), правки
+шаблона коммитить не нужно.
 
 ## 2. Настройка `.env`
 
@@ -74,8 +82,9 @@ openssl rand -hex 32   # → MCP_AUTH_TOKEN
 По умолчанию workspace `agents` содержит один проект — `code-agents` с
 identifier `CODE_AGENTS`. Если разные команды задач (бэкенд, фронтенд,
 инфра, продукт) должны жить в раздельных канбан-досках с одинаковым
-workflow — добавь их в `mcp-kanban/bootstrap/manifest.yaml` и обнови
-whitelist в `.env`:
+workflow — добавь их в локальный `mcp-kanban/bootstrap/manifest.yaml`
+(скопированный из `manifest.example.yaml` на шаге 1) и обнови whitelist
+в `.env`:
 
 ```yaml
 # mcp-kanban/bootstrap/manifest.yaml
@@ -108,11 +117,14 @@ docker compose up -d mcp-kanban      # 2. подхватить новый MCP_AL
 make bootstrap                       # 3. идемпотентно докатить проекты
 ```
 
-Bootstrap идемпотентен — докатит недостающие проекты + те же 11 states /
+Bootstrap идемпотентен — докатит недостающие проекты + те же 12 states /
 14 labels на каждый. Если повторный bootstrap **молча создаёт только один
-проект** — почти наверняка пропустил шаг 1: `manifest.yaml` копируется в
-образ на этапе сборки (`COPY ./bootstrap` в [Dockerfile](../mcp-kanban/Dockerfile)),
-правки на хосте не подхватываются без `docker compose build`.
+проект** — почти наверняка пропустил шаг 1: `bootstrap/` (включая твой
+локальный `manifest.yaml`) копируется в образ на этапе сборки
+(`COPY ./bootstrap` в [Dockerfile](../mcp-kanban/Dockerfile)), правки
+на хосте не подхватываются без `docker compose build`. Если `manifest.yaml`
+вообще нет на хосте — в образ уедет только committed-шаблон
+`manifest.example.yaml`, и bootstrap создаст ровно его проекты.
 
 **Известные коллизии Plane v1.3.0** при создании проектов:
 
@@ -448,9 +460,9 @@ MCP_AUTH_TOKEN = "<токен или прокинуть из окружения>
 
 > 💡 Готовый стартер-кит — этот промпт + примеры скиллов под все 6 ролей
 > конвейера + пример MCP-конфига — лежит в каталоге [`docs/claude/`](./claude/)
-> репозитория (`docs/claude/CLAUDE.md` = этот текст; как развернуть — см.
+> репозитория (`CLAUDE.md` = этот текст; как развернуть — см.
 > [`docs/claude/README.md`](./claude/README.md)). **При правке этого блока
-> синхронизируйте `docs/claude/CLAUDE.md`.**
+> синхронизируйте `CLAUDE.md`.**
 
 Скопируйте (или адаптируйте под свои задачи) этот текст в системный промпт
 агента — в Claude Code это `CLAUDE.md` репозитория-задачи или `~/.claude/CLAUDE.md`

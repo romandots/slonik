@@ -1,12 +1,18 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 
-// Манифест bootstrap'а. Источник правды — bootstrap/manifest.yaml в
-// пакете mcp-kanban. Файл копируется в образ; при изменении содержимого —
-// меняется только yaml, код не трогается, если контракт не меняется.
+// Манифест bootstrap'а. Источник правды для конкретной установки —
+// bootstrap/manifest.yaml (gitignored). Если он отсутствует, loader падает
+// обратно на committed-шаблон bootstrap/manifest.example.yaml — это
+// pristine-дефолт, который едет в репозитории и в Docker-образе.
+//
+// Сценарий кастомизации (по аналогии с .env.example → .env): пользователь
+// копирует manifest.example.yaml → manifest.yaml, правит под свой инстанс
+// (добавляет проекты, меняет идентичности) и пересобирает образ. Файл
+// manifest.yaml в git не едет (см. .gitignore).
 
 const HexColor = z.string().regex(/^#[0-9a-fA-F]{6}$/, 'expected #rrggbb');
 
@@ -87,8 +93,13 @@ export function loadManifest(opts: LoadManifestOptions = {}): Manifest {
 
 function defaultManifestPath(): string {
   // В dev (tsx) лежим в /src/bootstrap; в prod (dist) — в /dist/bootstrap.
-  // bootstrap/manifest.yaml — рядом с package.json, поэтому поднимаемся
-  // на 2 уровня от текущего файла.
+  // bootstrap/ — рядом с package.json, поэтому поднимаемся на 2 уровня
+  // от текущего файла. Сначала ищем локальный manifest.yaml (gitignored,
+  // конфиг конкретной установки), при отсутствии — fallback на
+  // committed-шаблон manifest.example.yaml.
   const here = dirname(fileURLToPath(import.meta.url));
-  return join(here, '..', '..', 'bootstrap', 'manifest.yaml');
+  const bootstrapDir = join(here, '..', '..', 'bootstrap');
+  const local = join(bootstrapDir, 'manifest.yaml');
+  if (existsSync(local)) return local;
+  return join(bootstrapDir, 'manifest.example.yaml');
 }
