@@ -12,9 +12,16 @@ import { createLogger, type Logger } from './logger.js';
 import { PlaneClient } from './plane-client.js';
 import { registerTools, REGISTERED_TOOL_NAMES } from './tools/registry.js';
 import { TtlCache } from './cache.js';
-import { isAgentIdentity, type AgentIdentity } from './identity.js';
+import {
+  type AgentIdentity,
+  type IdentityRegistry,
+  createIdentityRegistry,
+  createIdentityRegistryFromManifest,
+  createIdentityRegistryFromStore,
+} from './identity.js';
 import { IdentityStore } from './bootstrap/store.js';
 import { BOOTSTRAP_STORE_DEFAULT_PATH } from './bootstrap/cli.js';
+import { loadManifest } from './bootstrap/manifest.js';
 import { AuditLog } from './audit.js';
 import { RateLimiter } from './rate-limit.js';
 import { GitRefsIndex } from './git-refs.js';
@@ -83,6 +90,11 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
   const identityStore = new IdentityStore({
     path: opts.identityStorePath ?? BOOTSTRAP_STORE_DEFAULT_PATH,
   });
+  const identityRegistry = buildIdentityRegistry({ store: identityStore, logger });
+  logger.info(
+    { roles: identityRegistry.list(), size: identityRegistry.size },
+    'identity whitelist loaded',
+  );
   const audit = new AuditLog({ path: opts.auditStorePath ?? AUDIT_STORE_DEFAULT_PATH });
   const gitRefs = new GitRefsIndex({
     path: opts.gitRefsStorePath ?? GIT_REFS_STORE_DEFAULT_PATH,
@@ -127,7 +139,11 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
   // Возвращает имена зарегистрированных tool'ов. Требует Bearer-токен;
   // identity не обязательна (это диагностический endpoint, не вызов tool'а).
   app.get('/mcp/tools', async (request, reply) => {
-    authenticate(request, reply, { expectedToken: config.MCP_AUTH_TOKEN, requireIdentity: false });
+    authenticate(request, reply, {
+      expectedToken: config.MCP_AUTH_TOKEN,
+      requireIdentity: false,
+      identityRegistry,
+    });
     return { tools: [...REGISTERED_TOOL_NAMES] };
   });
 
@@ -141,7 +157,10 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
   const sessions = new Map<string, StreamableHTTPServerTransport>();
 
   app.all('/mcp', async (request, reply) => {
-    authenticate(request, reply, { expectedToken: config.MCP_AUTH_TOKEN });
+    authenticate(request, reply, {
+      expectedToken: config.MCP_AUTH_TOKEN,
+      identityRegistry,
+    });
     const identity = (request as unknown as AuthedRequest).identity;
 
     const sessionId = headerString(request.headers['mcp-session-id']);
@@ -282,7 +301,46 @@ function readPackageVersion(): string {
 }
 
 // Re-export для использования в тестах
-export { isAgentIdentity, type AgentIdentity };
+export {
+  type AgentIdentity,
+  type IdentityRegistry,
+  createIdentityRegistry,
+  createIdentityRegistryFromManifest,
+  createIdentityRegistryFromStore,
+};
+
+/**
+ * Собирает реестр идентичностей при старте сервера. Primary-источник — данные,
+ * наполненные `make bootstrap` в `identity.sqlite`; fallback — bootstrap
+ * manifest (актуален до первого bootstrap'а или если файл стора был стёрт).
+ * Если оба источника пусты/невалидны, реестр пустой и любой запрос с
+ * `X-Agent-Identity` будет отклонён — это безопасный дефолт; в логах warn
+ * объясняет, как починить.
+ */
+function buildIdentityRegistry(opts: {
+  store: IdentityStore;
+  logger: Logger;
+}): IdentityRegistry {
+  const storeRoles = opts.store.all().map((r) => r.role);
+  if (storeRoles.length > 0) {
+    return createIdentityRegistry(storeRoles);
+  }
+  try {
+    const manifest = loadManifest();
+    opts.logger.info(
+      { count: manifest.identities.length },
+      'identity registry: store empty, falling back to bootstrap manifest',
+    );
+    return createIdentityRegistryFromManifest(manifest);
+  } catch (err) {
+    opts.logger.warn(
+      { err: err instanceof Error ? err.message : String(err) },
+      'identity registry: store empty and manifest unreadable — ' +
+        'whitelist is empty until `make bootstrap` runs successfully',
+    );
+    return createIdentityRegistry([]);
+  }
+}
 
 // ---------------- bootstrap ----------------
 async function main(): Promise<void> {

@@ -5,8 +5,22 @@ import { join } from 'node:path';
 import { buildServer, type BuiltServer } from './server.js';
 import { loadConfig } from './config.js';
 import { createLogger } from './logger.js';
+import { IdentityStore } from './bootstrap/store.js';
 
 const TEST_TOKEN = 'a'.repeat(64); // ≥ 32 байт, не 'change_me' — проходит config
+
+// Полный список ролей из bootstrap manifest. Дублируем здесь, чтобы тесты
+// явно проверяли, какой набор whitelist'а сервер видит после bootstrap'а; в
+// прод-сборке этот список приходит из manifest.yaml → IdentityStore.
+const ALL_ROLES = [
+  'analyst-agent',
+  'developer-agent',
+  'security-auditor-agent',
+  'code-review-agent',
+  'qa-agent',
+  'doc-agent',
+  'merger-agent',
+] as const;
 
 function testEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return {
@@ -16,6 +30,24 @@ function testEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
     MCP_LOG_LEVEL: 'fatal',
     ...overrides,
   };
+}
+
+/**
+ * Предзаполняет временный identity store ролями, как это делает реальный
+ * `make bootstrap`. Открываем store, пишем строки, закрываем — buildServer
+ * откроет файл повторно и прочитает данные.
+ */
+function seedIdentityStore(path: string, roles: readonly string[]): void {
+  const seed = new IdentityStore({ path });
+  for (const role of roles) {
+    seed.upsert({
+      role,
+      email: `${role}@slonk.local`,
+      plane_user_id: null,
+      mode: 'per_user',
+    });
+  }
+  seed.close();
 }
 
 describe('mcp-kanban HTTP server', () => {
@@ -28,10 +60,12 @@ describe('mcp-kanban HTTP server', () => {
     // Тестам нельзя писать в `/mcp_data` (default-путь production-volume'а).
     // Создаём временный каталог и прокидываем пути ко всем SQLite-стораджам.
     tmpDir = mkdtempSync(join(tmpdir(), 'slonk-mcp-'));
+    const identityStorePath = join(tmpDir, 'identity.sqlite');
+    seedIdentityStore(identityStorePath, ALL_ROLES);
     built = await buildServer({
       config,
       logger,
-      identityStorePath: join(tmpDir, 'identity.sqlite'),
+      identityStorePath,
       auditStorePath: join(tmpDir, 'audit.sqlite'),
       gitRefsStorePath: join(tmpDir, 'git_refs.sqlite'),
     });
@@ -147,6 +181,36 @@ describe('mcp-kanban HTTP server', () => {
       const body = JSON.parse(r.body) as { error: { code: string } };
       expect(body.error.code).toBe('IDENTITY_REQUIRED');
     });
+
+    it('accepts merger-agent (regression: rejected when whitelist was hardcoded)', async () => {
+      // Сервер должен распознать merger-agent как валидную идентичность
+      // (whitelist собран из identity store, в котором bootstrap его создаёт).
+      // Сам JSON-RPC initialize вернётся успешно — ошибки IDENTITY_REQUIRED
+      // быть не должно. Подробности транспорта тут не важны: проверяем,
+      // что мы прошли валидацию identity.
+      const r = await built.app.inject({
+        method: 'POST',
+        url: '/mcp',
+        headers: {
+          authorization: `Bearer ${TEST_TOKEN}`,
+          'x-agent-identity': 'merger-agent',
+          'content-type': 'application/json',
+          accept: 'application/json, text/event-stream',
+        },
+        payload: {
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'initialize',
+          params: {
+            protocolVersion: '2024-11-05',
+            capabilities: {},
+            clientInfo: { name: 'test', version: '0' },
+          },
+        },
+      });
+      // 400 = identity отвергнут — это и есть регрессия, которую мы чиним.
+      expect(r.statusCode).not.toBe(400);
+    });
   });
 });
 
@@ -158,10 +222,12 @@ describe('mcp-kanban /metrics enabled', () => {
     const config = loadConfig(testEnv({ MCP_METRICS_ENABLED: '1' }));
     const logger = createLogger(config);
     tmpDir = mkdtempSync(join(tmpdir(), 'slonk-mcp-metrics-'));
+    const identityStorePath = join(tmpDir, 'identity.sqlite');
+    seedIdentityStore(identityStorePath, ALL_ROLES);
     built = await buildServer({
       config,
       logger,
-      identityStorePath: join(tmpDir, 'identity.sqlite'),
+      identityStorePath,
       auditStorePath: join(tmpDir, 'audit.sqlite'),
       gitRefsStorePath: join(tmpDir, 'git_refs.sqlite'),
     });

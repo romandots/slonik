@@ -149,6 +149,24 @@
   `CONFIGURATION.md`, `USER_GUIDE.md`).
 
 ### Fixed
+- **`X-Agent-Identity: merger-agent` больше не отвергается с
+  `IDENTITY_REQUIRED`** (SLONK-4). `src/identity.ts` хардкодил список из
+  6 ролей и забыл `merger-agent`, поэтому стадия `Merging` в конвейере
+  была недостижима. Хардкод убран: на старте `buildServer` собирает
+  `IdentityRegistry` динамически — primary-источник `IdentityStore`
+  (наполняется `make bootstrap` из `bootstrap/manifest.yaml`), fallback —
+  сам `loadManifest()` для свежей инсталляции до первого bootstrap'а.
+  Реестр прокидывается в `authenticate(...)` через `AuthOptions.identityRegistry`,
+  валидация `X-Agent-Identity` теперь рантайм-овая (`registry.has(id)`).
+  Тип `AgentIdentity` сужен до `string` — все потребители используют его
+  только как тип параметра (`grep` подтвердил отсутствие узловых
+  `=== 'role'`-сравнений). Добавление новой роли в manifest и пере-bootstrap
+  начинает её принимать без правок кода. Тесты: новый `src/identity.test.ts`
+  (фабрики из manifest/store, пустой ввод, дедупликация), `auth.test.ts`
+  переписан на fake-`IdentityRegistry` (плюс позитив для `merger-agent` и
+  кейс `INTERNAL` при пропущенном реестре), `server.test.ts` предзаполняет
+  временный store через `IdentityStore.upsert` до `buildServer` и
+  проверяет, что `merger-agent` не получает `400 IDENTITY_REQUIRED`.
 - **Caddy healthcheck в `docker-compose.proxy.yml` был битый — контейнер
   всегда был unhealthy**, из-за чего `make up-proxy` валился по таймауту
   `compose --wait`. Старая команда `wget -q -O- --spider http://127.0.0.1/

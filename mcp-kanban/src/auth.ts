@@ -1,6 +1,6 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { McpError } from './errors.js';
-import { isAgentIdentity, type AgentIdentity } from './identity.js';
+import type { AgentIdentity, IdentityRegistry } from './identity.js';
 
 const AUTH_SCHEME = /^Bearer\s+(.+)$/i;
 
@@ -12,6 +12,13 @@ export interface AuthOptions {
   expectedToken: string;
   /** Если false — проверяется только Bearer, identity не нужна. */
   requireIdentity?: boolean;
+  /**
+   * Whitelist допустимых X-Agent-Identity. Обязателен, если
+   * `requireIdentity !== false`. Реестр строится один раз в `buildServer`:
+   * primary — `IdentityStore` (после bootstrap), fallback —
+   * bootstrap manifest.
+   */
+  identityRegistry?: IdentityRegistry;
 }
 
 /**
@@ -38,12 +45,20 @@ export function authenticate(
   }
 
   if (options.requireIdentity !== false) {
+    if (options.identityRegistry === undefined) {
+      // Программная ошибка: server.ts обязан передать реестр. Лучше упасть
+      // на INTERNAL, чем тихо пропускать любые роли.
+      throw new McpError({
+        code: 'INTERNAL',
+        message: 'identity registry not configured',
+      });
+    }
     const idHeader = request.headers['x-agent-identity'];
     const id = Array.isArray(idHeader) ? idHeader[0] : idHeader;
     if (typeof id !== 'string' || id.length === 0) {
       throw new McpError({ code: 'IDENTITY_REQUIRED', message: 'X-Agent-Identity header required' });
     }
-    if (!isAgentIdentity(id)) {
+    if (!options.identityRegistry.has(id)) {
       throw new McpError({
         code: 'IDENTITY_REQUIRED',
         message: `Unknown agent identity: ${id}`,
