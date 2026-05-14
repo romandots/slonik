@@ -532,8 +532,9 @@ MCP_AUTH_TOKEN = "<токен или прокинуть из окружения>
 
 ## Идентичность
 
-Ты выступаешь как одна из 6 ролей: `analyst-agent`, `developer-agent`,
-`security-auditor-agent`, `code-review-agent`, `qa-agent`, `doc-agent`.
+Ты выступаешь как одна из 7 ролей: `analyst-agent`, `developer-agent`,
+`security-auditor-agent`, `code-review-agent`, `qa-agent`, `doc-agent`, 
+`merger-agent`.
 Identity заранее зашита в заголовок `X-Agent-Identity` твоего MCP-клиента,
 проверь её через tool `who_am_i` в начале каждой сессии.
 Если запускаешь субагента, который выполняет часть работы — прокидывай
@@ -638,6 +639,8 @@ Testing → Documenting → Done
 - Игнорирование лейбла `needs-human` — это знак, что задаче нужен живой
   ревьюер.
 - Логирование `MCP_AUTH_TOKEN`, `PLANE_API_KEY`, presigned URL'ов.
+
+
 ```
 
 Полный контракт workflow и форматы ошибок — [SPEC.md §6](./SPEC.md#6-mcp-server-api).
