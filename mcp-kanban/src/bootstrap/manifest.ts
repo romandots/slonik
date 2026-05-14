@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
@@ -91,7 +91,7 @@ export interface LoadManifestOptions {
 }
 
 export function loadManifest(opts: LoadManifestOptions = {}): Manifest {
-  const path = opts.path ?? defaultManifestPath();
+  const path = resolveManifestPath(opts.path);
   const raw = readFileSync(path, 'utf8');
   const parsed = parseYaml(raw) as unknown;
   const result = ManifestSchema.safeParse(parsed);
@@ -104,15 +104,67 @@ export function loadManifest(opts: LoadManifestOptions = {}): Manifest {
   return result.data;
 }
 
+function resolveManifestPath(optsPath: string | undefined): string {
+  if (optsPath === undefined) return defaultManifestPath();
+  // Если пользователь передал директорию — применяем ту же логику поиска,
+  // что и для дефолтного bootstrap/: предпочитаем manifest.yaml, иначе
+  // падаем на manifest.example.yaml, с громким warn'ом если рядом лежит
+  // typo-вариант (manifest.yml и пр.).
+  if (existsSync(optsPath) && statSync(optsPath).isDirectory()) {
+    return pickManifestInDir(optsPath);
+  }
+  return optsPath;
+}
+
 function defaultManifestPath(): string {
   // В dev (tsx) лежим в /src/bootstrap; в prod (dist) — в /dist/bootstrap.
   // bootstrap/ — рядом с package.json, поэтому поднимаемся на 2 уровня
-  // от текущего файла. Сначала ищем локальный manifest.yaml (gitignored,
-  // конфиг конкретной установки), при отсутствии — fallback на
-  // committed-шаблон manifest.example.yaml.
+  // от текущего файла.
   const here = dirname(fileURLToPath(import.meta.url));
   const bootstrapDir = join(here, '..', '..', 'bootstrap');
+  return pickManifestInDir(bootstrapDir);
+}
+
+function pickManifestInDir(bootstrapDir: string): string {
+  // Сначала ищем локальный manifest.yaml (gitignored, конфиг конкретной
+  // установки), при отсутствии — fallback на committed-шаблон
+  // manifest.example.yaml.
+  //
+  // Footgun, который мы здесь ловим: пользователь по опечатке создаёт
+  // manifest.yml (без `a`) или Manifest.yaml вместо manifest.yaml, loader
+  // молча подхватывает committed-шаблон, и пользователь долго не понимает,
+  // почему bootstrap не пересоздаёт его проекты. Если рядом лежит
+  // "почти правильный" файл — кричим в stderr, чтобы пользователь
+  // переименовал, а не размываем контракт «принимаем оба расширения».
   const local = join(bootstrapDir, 'manifest.yaml');
   if (existsSync(local)) return local;
+
+  const typo = findTypoManifest(bootstrapDir);
+  if (typo) {
+    console.warn(
+      `[slonk bootstrap] Found '${typo}' but loader expects 'manifest.yaml' — ` +
+        `falling back to 'manifest.example.yaml'. ` +
+        `Rename it to 'manifest.yaml' to use it.`,
+    );
+  }
+
   return join(bootstrapDir, 'manifest.example.yaml');
+}
+
+function findTypoManifest(bootstrapDir: string): string | null {
+  // Любой case/extension вариант имени, кроме точного 'manifest.yaml' и
+  // committed-шаблона 'manifest.example.yaml': manifest.yml, Manifest.yaml,
+  // manifest.YAML и т.п.
+  let entries: string[];
+  try {
+    entries = readdirSync(bootstrapDir);
+  } catch {
+    return null;
+  }
+  for (const name of entries) {
+    if (name === 'manifest.yaml' || name === 'manifest.example.yaml') continue;
+    const lower = name.toLowerCase();
+    if (lower === 'manifest.yml' || lower === 'manifest.yaml') return name;
+  }
+  return null;
 }

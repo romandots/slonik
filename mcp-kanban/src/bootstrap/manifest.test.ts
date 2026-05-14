@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { loadManifest, ManifestSchema } from './manifest.js';
 
 describe('loadManifest', () => {
@@ -69,6 +72,86 @@ describe('loadManifest', () => {
     // но дефис, подчёркивание, цифры и пробелы — ок (это валидно для Plane)
     const ok = { ...bad, projects: [{ ...bad.projects[0], name: 'Foo Bar_2 - baz' }] };
     expect(() => ManifestSchema.parse(ok)).not.toThrow(/Plane project name must match/);
+  });
+
+  describe('typo handling for manifest.yml', () => {
+    let warnSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      warnSpy.mockRestore();
+    });
+
+    function makeYaml(projectCount: number): string {
+      const projects = Array.from({ length: projectCount }, (_, i) => {
+        const n = i + 1;
+        return `  - slug: p${n}\n    name: "Project ${n}"\n    identifier: P${n}\n    modules: []`;
+      }).join('\n');
+      return [
+        'workspace:',
+        '  slug: agents',
+        '  name: "Agents"',
+        'projects:',
+        projects,
+        'states:',
+        '  - { name: Backlog, group: backlog, color: "#aaaaaa", order: 1 }',
+        'labels:',
+        '  - { name: agent-ready, color: "#00ff00" }',
+        'identities:',
+        '  - role: analyst-agent',
+        '    email: analyst@example.com',
+        '    first_name: Analyst',
+        '    last_name: Agent',
+        '    default_state: Backlog',
+      ].join('\n');
+    }
+
+    it('warns and falls back to manifest.example.yaml when only manifest.yml exists', () => {
+      // Reproduces the real user footgun from CHANGELOG: hostname `slonik`,
+      // user created `manifest.yml` (no `a`) and wondered why bootstrap kept
+      // recreating only the example's projects. Loader must scream loudly.
+      const dir = mkdtempSync(join(tmpdir(), 'slonk-manifest-typo-'));
+      writeFileSync(join(dir, 'manifest.yml'), makeYaml(5), 'utf8');
+      writeFileSync(join(dir, 'manifest.example.yaml'), makeYaml(2), 'utf8');
+
+      const m = loadManifest({ path: dir });
+
+      expect(m.projects).toHaveLength(2);
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      const msg = String(warnSpy.mock.calls[0][0]);
+      expect(msg).toMatch(/manifest\.yml/);
+      expect(msg).toMatch(/manifest\.yaml/);
+      expect(msg).toMatch(/manifest\.example\.yaml/);
+    });
+
+    it('also catches uppercase .YML extension', () => {
+      // На case-insensitive FS (macOS APFS, NTFS) `Manifest.yaml` совпадает
+      // с `manifest.yaml` и просто загружается без warn'а — это ок, файл
+      // реально используется. Реальный footgun — другое расширение
+      // (.yml вместо .yaml), которое не схлопывается case-folding'ом.
+      const dir = mkdtempSync(join(tmpdir(), 'slonk-manifest-typo-'));
+      writeFileSync(join(dir, 'manifest.YML'), makeYaml(3), 'utf8');
+      writeFileSync(join(dir, 'manifest.example.yaml'), makeYaml(2), 'utf8');
+
+      const m = loadManifest({ path: dir });
+
+      expect(m.projects).toHaveLength(2);
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not warn when manifest.yaml is present alongside example', () => {
+      const dir = mkdtempSync(join(tmpdir(), 'slonk-manifest-typo-'));
+      writeFileSync(join(dir, 'manifest.yaml'), makeYaml(5), 'utf8');
+      writeFileSync(join(dir, 'manifest.example.yaml'), makeYaml(2), 'utf8');
+
+      const m = loadManifest({ path: dir });
+
+      expect(m.projects).toHaveLength(5);
+      expect(warnSpy).not.toHaveBeenCalled();
+    });
   });
 
   it('rejects manifest with non-hex color', () => {

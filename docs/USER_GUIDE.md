@@ -50,6 +50,15 @@ states, labels, agent-identities), он gitignored. В git едет только
 инстанс делается **именно в `manifest.yaml`** (см. §2.2 ниже), правки
 шаблона коммитить не нужно.
 
+> **Имя файла важно — только `manifest.yaml`.** Loader ищет именно это
+> имя; `manifest.yml` (без `a`), `Manifest.yaml`, `manifest.YAML` и
+> любые другие варианты он **не подхватит** и молча упадёт на
+> committed-шаблон `manifest.example.yaml`. Чтобы такая опечатка не
+> съела час диагностики, при старте bootstrap'а печатается громкий
+> warn вида `[slonk bootstrap] Found 'manifest.yml' but loader expects
+> 'manifest.yaml' — falling back to 'manifest.example.yaml'.` — увидел
+> его, переименовал файл, перезапустил `make bootstrap`.
+
 ## 2. Настройка `.env`
 
 Открыть `.env` и заменить **все** значения `change_me` и пустые секреты.

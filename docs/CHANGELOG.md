@@ -51,6 +51,19 @@
   `docs/claude/` в рамках SLONK-4 — см. ниже.)_
 
 ### Changed
+- **Loader bootstrap-манифеста громко предупреждает об опечатке в имени
+  файла.** Если в `mcp-kanban/bootstrap/` нет `manifest.yaml`, но рядом лежит
+  «почти правильный» файл (`manifest.yml` без `a`, `Manifest.yaml`,
+  `manifest.YAML` — любой case/extension вариант), `src/bootstrap/manifest.ts`
+  печатает в `stderr` warn `[slonk bootstrap] Found '<typo>' but loader
+  expects 'manifest.yaml' — falling back to 'manifest.example.yaml'. Rename
+  it to 'manifest.yaml' to use it.` и дальше идёт fallback на committed-шаблон.
+  Раньше loader молча подхватывал `manifest.example.yaml`, и пользователь
+  долго не понимал, почему bootstrap не пересоздаёт его проекты (кейс
+  пользователя на хосте `slonik`). Имя файла не размывается на «принимаем
+  оба расширения» специально — цель в том, чтобы кричать «у тебя
+  опечатка», а не подменять. Покрыто `manifest.test.ts`
+  (`typo handling for manifest.yml`).
 - **Bootstrap устойчив к падению отдельного проекта + pre-flight валидация
   `project.name`.** В `src/bootstrap/runner.ts` цикл по проектам обёрнут в
   try/catch: ошибка на одном проекте (ensureProject / ensureStates /
