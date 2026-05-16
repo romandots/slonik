@@ -134,3 +134,66 @@ describe('PlaneClient.request — 429 handling', () => {
     expect(calls).toHaveLength(3);
   });
 });
+
+// SLONK-5: getIssueBySequenceId раньше делал `?per_page=500` на каждый
+// lookup `SLONK-N`. Это сериализовало сотни PlaneIssue (с description_html)
+// и било по памяти на маленьком хосте. Теперь — постраничный сканер с
+// early-exit и `per_page=50`.
+describe('PlaneClient.getIssueBySequenceId — paginated early-exit (SLONK-5)', () => {
+  function issue(seq: number): Record<string, unknown> {
+    return {
+      id: `uuid-${seq}`,
+      sequence_id: seq,
+      name: `Task ${seq}`,
+      state: 'st',
+      created_at: '2026-05-14T00:00:00Z',
+      updated_at: '2026-05-14T00:00:00Z',
+      project: 'proj-1',
+    };
+  }
+
+  it('hits the first page when the requested sequence is in it (early-exit)', async () => {
+    const firstPage = Array.from({ length: 50 }, (_, i) => issue(100 - i));
+    // Найдём seq=80 — он в первой странице (от 100 до 51). Должен быть ровно
+    // 1 HTTP-запрос, никакой второй страницы.
+    const { client, calls } = makeClient([
+      jsonResp(200, { results: firstPage, next: 'cursor-2' }),
+    ]);
+    const got = await client.getIssueBySequenceId('agents', 'proj-1', 'SLONK', 80);
+    expect(got?.sequence_id).toBe(80);
+    expect(calls).toHaveLength(1);
+    // Per-page подставился = 50 (а не legacy 500).
+    expect(calls[0]?.url).toMatch(/per_page=50/);
+  });
+
+  it('paginates with cursor when sequence is not in first page', async () => {
+    const page1 = Array.from({ length: 50 }, (_, i) => issue(200 - i));    // 200..151
+    const page2 = Array.from({ length: 50 }, (_, i) => issue(150 - i));    // 150..101
+    const { client, calls } = makeClient([
+      jsonResp(200, { results: page1, next: 'c2' }),
+      jsonResp(200, { results: page2, next: null }),
+    ]);
+    const got = await client.getIssueBySequenceId('agents', 'proj-1', 'SLONK', 110);
+    expect(got?.sequence_id).toBe(110);
+    expect(calls).toHaveLength(2);
+    expect(calls[1]?.url).toMatch(/cursor=c2/);
+  });
+
+  it('returns undefined when sequence not found and pagination ends', async () => {
+    const { client, calls } = makeClient([
+      jsonResp(200, { results: [issue(10), issue(9)], next: null }),
+    ]);
+    const got = await client.getIssueBySequenceId('agents', 'proj-1', 'SLONK', 999);
+    expect(got).toBeUndefined();
+    expect(calls).toHaveLength(1);
+  });
+
+  it('handles legacy non-paginated array shape', async () => {
+    const { client, calls } = makeClient([
+      jsonResp(200, [issue(3), issue(2), issue(1)]),
+    ]);
+    const got = await client.getIssueBySequenceId('agents', 'proj-1', 'SLONK', 2);
+    expect(got?.sequence_id).toBe(2);
+    expect(calls).toHaveLength(1);
+  });
+});

@@ -115,6 +115,39 @@
   `docs/claude/` в рамках SLONK-4 — см. ниже.)_
 
 ### Changed
+- **Bounded memory growth для mcp-kanban + `mem_limit:` на всех контейнерах
+  (SLONK-5).** Чтобы один контейнер не выедал всю RAM маленького хоста
+  (Plane backend + 4 frontend'а + Postgres + worker'ы в 2 GB не помещаются —
+  итог swap-thrashing) — выставлены `mem_limit:` на `postgres`, `redis`,
+  `rabbitmq`, `minio`, все четыре `plane-*` backend-сервиса, четыре
+  фронта (`plane-web/admin/space/live`), `plane-proxy` и `mcp-kanban`.
+  Сумма лимитов ~3.3 GB — рассчитано под 4 GB RAM хост (см.
+  `CONFIGURATION.md §5 Resource limits for small hosts`).
+  В `mcp-kanban`:
+  - `TtlCache` получил жёсткий cap по числу ключей (`MCP_CACHE_MAX_ENTRIES`,
+    default 2048) с FIFO-эвикцией; раньше Map росла бесконечно по уникальным
+    ключам (`get_issue` с разными issue-ref'ами в окне TTL=10s). Добавлен
+    периодический sweep устаревших записей (каждые 256 `set()`-ов) — чтобы
+    редкие, но многочисленные «hit-once-and-forget» ключи не доживали до
+    cap'а.
+  - `getIssueBySequenceId` теперь сканирует Plane постранично по 50 issue'ов
+    с early-exit'ом на найденном `sequence_id`, а не дёргает
+    `?per_page=500` каждый lookup. На типичном паттерне (свежие задачи
+    наверху) один HTTP-запрос вместо одного, но в 10 раз дешевле по памяти.
+  - MCP-сессии получили idle-timeout (`MCP_SESSION_IDLE_MS`, default
+    30 мин), периодический janitor (`MCP_SESSION_GC_INTERVAL_MS`, default
+    60s) и жёсткий cap (`MCP_MAX_SESSIONS`, default 256) с LRU-эвикцией.
+    Раньше `sessions: Map` удалял запись только через `transport.onclose`
+    — при OOM-kill / network drop / `docker restart` клиента сессия жила
+    forever, держа `McpServer` + 22 tool-замыкания.
+  - Метрики: `mcp_cache_size`, `mcp_cache_evictions_total{reason}`,
+    `mcp_active_sessions`, `mcp_sessions_evicted_total{reason}` — на
+    `/metrics` (когда `MCP_METRICS_ENABLED=1`).
+
+  Дока: `USER_GUIDE.md §1.1` теперь явно говорит, что 2 GB RAM не
+  поддерживается; `CONFIGURATION.md §2.6` и новая секция §5 «Resource
+  limits for small hosts» описывают новые ENV и `mem_limit`-baseline.
+
 - **Loader bootstrap-манифеста громко предупреждает об опечатке в имени
   файла.** Если в `mcp-kanban/bootstrap/` нет `manifest.yaml`, но рядом лежит
   «почти правильный» файл (`manifest.yml` без `a`, `Manifest.yaml`,

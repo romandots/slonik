@@ -449,5 +449,24 @@ MCP сам не клонирует репозитории. Все связи —
 
 - MCP экспонирует `/metrics` в Prometheus-формате: `mcp_tool_calls_total`,
   `mcp_tool_duration_seconds`, `mcp_plane_errors_total`, `mcp_rate_limited_total`.
+  Memory-bound метрики (SLONK-5): `mcp_cache_size` (gauge),
+  `mcp_cache_evictions_total{reason="ttl"|"cap"}`, `mcp_active_sessions`
+  (gauge), `mcp_sessions_evicted_total{reason="idle"|"cap"}`.
 - Plane стандартно метрик не отдаёт; парсим логи через promtail → Loki.
 - Grafana — преднастроенный дашборд `slonk-overview` (см. [CONFIGURATION.md](./CONFIGURATION.md#observability)).
+
+### 12.1 Memory-bound knobs (SLONK-5)
+
+mcp-kanban защищён от безграничного роста памяти на маленьких хостах
+четырьмя независимыми механизмами, конфигурируемыми через ENV (см.
+[CONFIGURATION.md §2.6](./CONFIGURATION.md#26-mcp-server) и
+[§5 Resource limits for small hosts](./CONFIGURATION.md#resource-limits-for-small-hosts)):
+
+- `MCP_CACHE_MAX_ENTRIES` (default 2048) — FIFO-cap на размер `TtlCache`.
+- `MCP_SESSION_IDLE_MS` (default 30 мин) — idle-timeout MCP-сессии.
+- `MCP_SESSION_GC_INTERVAL_MS` (default 60s) — период janitor'а; 0
+  отключает фоновую очистку.
+- `MCP_MAX_SESSIONS` (default 256) — LRU-cap на число одновременных сессий.
+
+Плюс на уровне infra все контейнеры compose имеют `mem_limit:` — см.
+secция [Resource limits for small hosts](./CONFIGURATION.md#resource-limits-for-small-hosts).
