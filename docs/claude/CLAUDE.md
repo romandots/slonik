@@ -110,7 +110,7 @@ Testing → Documenting → Merging → Done
    `agent-claimed` (для аналитика ещё и перенос в `Analysis`). Если `CONFLICT` —
    задачу держит другой агент, вернись к шагу 1.
 3. **Пойми контекст.** `get_issue({ issue_id })` — title, description, meta-блок
-   (`<!-- slonk:meta v1 -->`: `repos` / `branch` / `commits` / `pr_url`),
+   (`--- slonk:meta v1 ---`: `repos` / `branch` / `commits` / `pr_url`),
    **последние комментарии предыдущих ролей**; `get_issue_history` при нужде. Не
    дублируй уже сделанное — дополняй.
 4. **Свяжи с кодом.** Создай (или возьми из анализа) ветку по конвенции

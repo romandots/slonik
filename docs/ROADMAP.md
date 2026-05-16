@@ -138,7 +138,7 @@ Acceptance:
 - Tools: `list_workspaces`, `list_projects`, `list_states`, `list_labels`,
   `list_cycles`, `list_modules`, `list_issues`, `get_issue`, `search_issues`,
   `get_issue_history`.
-- Парсер meta-блока `<!-- slonk:meta v1 -->` (см. [SPEC.md](./SPEC.md#56-привязка-к-репозиториям)).
+- Парсер meta-блока `--- slonk:meta v1 ---` (см. [SPEC.md](./SPEC.md#56-привязка-к-репозиториям)). На чтение поддерживается и устаревший маркер `<!-- slonk:meta v1 -->`.
 - Schema-валидация входа по JSON Schema.
 - Кеш Plane-ответов в памяти на 10 секунд (по `tool+input_hash`).
 - Контрактные тесты: для каждого tool — входная схема, выходная форма.
