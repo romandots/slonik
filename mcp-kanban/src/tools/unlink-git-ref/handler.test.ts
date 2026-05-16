@@ -79,7 +79,7 @@ describe('unlinkGitRef', () => {
 
     // Описание не должно содержать meta-блока, если все repos удалены.
     const fresh = await plane.getIssue('agents', project.id, issue.id);
-    expect(fresh?.description ?? '').not.toContain(MetaBlockMarker);
+    expect(fresh?.description_html ?? '').not.toContain(MetaBlockMarker);
     gitRefs.close();
   });
 

@@ -53,7 +53,8 @@ export async function unlinkGitRef(deps: {
     deps.plane.listLabels(deps.workspace, project.id),
   ]);
 
-  const rawDescription = issue.description ?? '';
+  // См. комментарий в link-git-ref/handler.ts: источник правды — `description_html`.
+  const rawDescription = issue.description_html ?? issue.description ?? '';
   const parsedDesc = parseDescription(rawDescription);
 
   // При повреждённом блоке мы не можем безопасно удалить нужный ref —
@@ -79,7 +80,7 @@ export async function unlinkGitRef(deps: {
   let updated: PlaneIssue = issue;
   if (newDescription !== rawDescription) {
     updated = await deps.plane.updateIssue(deps.workspace, project.id, issueId, {
-      description: newDescription,
+      description_html: newDescription,
     });
   }
 

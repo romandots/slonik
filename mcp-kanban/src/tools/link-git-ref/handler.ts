@@ -57,7 +57,14 @@ export async function linkGitRef(deps: {
     deps.plane.listLabels(deps.workspace, project.id),
   ]);
 
-  const rawDescription = issue.description ?? '';
+  // Plane v1.3.0 хранит тело задачи в `description_html`; поле
+  // `description` сервер игнорирует на запись и не отдаёт на чтение для
+  // задач, созданных через UI. Источник правды — `description_html`.
+  // SPEC §5.6 meta-блок остаётся текстовым (`---\n<!-- slonk:meta v1 -->`)
+  // и пишется внутрь `description_html` как есть — маркер это HTML-комментарий,
+  // YAML — текст; парсер строит на регекспе, ему всё равно, обёрнуто оно
+  // в `<p>` или нет.
+  const rawDescription = issue.description_html ?? issue.description ?? '';
   const parsedDesc = parseDescription(rawDescription);
 
   const newRef: GitRef = {
@@ -103,7 +110,9 @@ export async function linkGitRef(deps: {
   let updated: PlaneIssue = issue;
   if (descriptionChanged || labelsChanged) {
     const patch: Parameters<PlaneClient['updateIssue']>[3] = {};
-    if (descriptionChanged) patch.description = newDescription;
+    // Пишем в `description_html` (см. комментарий выше про источник правды
+    // для тела задачи в Plane v1.3.0).
+    if (descriptionChanged) patch.description_html = newDescription;
     if (labelsChanged) patch.labels = labelPatch;
     updated = await deps.plane.updateIssue(deps.workspace, project.id, issueId, patch);
   }

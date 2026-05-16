@@ -611,7 +611,7 @@ Testing → Documenting → Merging → Done
 2. **Взять в работу.** `claim_issue({ issue_id })`. Если возврат `CONFLICT` —
    задачу уже забрал другой агент, ищи следующую.
 3. **Понять контекст.** `get_issue({ issue_id })` — прочитай title,
-   description, meta-блок (`<!-- slonk:meta v1 -->`), последние комментарии,
+   description, meta-блок (`--- slonk:meta v1 ---`), последние комментарии,
    `get_issue_history` если надо.
 4. **Связать с кодом.** Создай ветку по конвенции
    `feature/SLONK-<seq>-<slug>` и вызови
@@ -687,8 +687,8 @@ Testing → Documenting → Merging → Done
 1. Открыть проект «Code Agents» (identifier `SLONK`).
 2. Создать issue с состоянием `To Do` и лейблом `agent-ready` (обязательно
    — это маркер «бери в работу»).
-3. В description описать задачу по-человечески; meta-блок (`<!-- slonk:meta
-   v1 -->`) добавится автоматически при первом `link_git_ref`.
+3. В description описать задачу по-человечески; meta-блок
+   (`--- slonk:meta v1 ---`) добавится автоматически при первом `link_git_ref`.
 4. Опционально — повесить дополнительный лейбл (`bug`, `feature`, `docs`,
    `infra`, `security`, `high-priority`) для приоритезации.
 

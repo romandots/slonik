@@ -4,6 +4,7 @@ import { resolveProject } from '../project-resolver.js';
 import { summarise, type IssueSummary } from '../list-issues/handler.js';
 import type { CreateIssueInput } from './schema.js';
 import { McpError } from '../../errors.js';
+import { toPlaneDescriptionHtml } from '../../markdown-to-html.js';
 
 export interface CreateIssueResult extends IssueSummary {
   key: string;
@@ -33,7 +34,12 @@ export async function createIssue(deps: {
   const body: Parameters<PlaneClient['createIssue']>[2] = {
     name: deps.input.name,
   };
-  if (deps.input.description !== undefined) body.description = deps.input.description;
+  // Plane v1.3.0 хранит тело задачи в `description_html` (TipTap).
+  // Поле `description` сервер тихо игнорирует — поэтому конвертим
+  // пользовательский ввод в HTML и шлём его в `description_html`.
+  if (deps.input.description !== undefined) {
+    body.description_html = toPlaneDescriptionHtml(deps.input.description);
+  }
   if (deps.input.priority !== undefined) body.priority = deps.input.priority;
   if (deps.input.state !== undefined) {
     const stateId = resolveStateRef(deps.input.state, states);

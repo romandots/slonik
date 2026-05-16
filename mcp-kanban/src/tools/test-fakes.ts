@@ -127,6 +127,15 @@ export function addIssue(
 ): PlaneIssue {
   const arr = world.issues.get(projectId) ?? [];
   const seq = arr.length + 1;
+  // Plane v1.3.0 хранит тело задачи в `description_html` (TipTap), а поле
+  // `description` тихо игнорирует. Фейк должен моделировать ту же
+  // семантику, иначе тесты read-тулов прятали бы регрессии. Для удобства
+  // тестов, которые передают `description: "..."`, миксуем значение в
+  // `description_html` (а не в отдельное поле), чтобы `getIssue` его нашёл.
+  const seededHtml =
+    data.description_html ??
+    data.description ??
+    undefined;
   const issue: PlaneIssue = {
     id: data.id ?? `iss-${world.nextId++}`,
     name: data.name,
@@ -137,8 +146,7 @@ export function addIssue(
     project: projectId,
     workspace: world.workspaces[0]?.id ?? '',
     sequence_id: data.sequence_id ?? seq,
-    ...(data.description !== undefined ? { description: data.description } : {}),
-    ...(data.description_html !== undefined ? { description_html: data.description_html } : {}),
+    ...(seededHtml !== undefined ? { description_html: seededHtml } : {}),
     ...(data.created_at !== undefined ? { created_at: data.created_at } : { created_at: new Date(2026, 0, seq).toISOString() }),
     ...(data.updated_at !== undefined ? { updated_at: data.updated_at } : { updated_at: new Date(2026, 0, seq).toISOString() }),
     ...(data.cycle !== undefined ? { cycle: data.cycle } : {}),
@@ -277,10 +285,35 @@ export function fakePlane(world: FakeWorld): PlaneClient {
     async getIssueBySequenceId(_ws: string, projectId: string, _identifier: string, seq: number) {
       return world.issues.get(projectId)?.find((i) => i.sequence_id === seq);
     },
-    async createIssue(ws: string, projectId: string, input: { name: string; state?: string; description?: string; labels?: string[]; assignees?: string[]; priority?: string }) {
+    async createIssue(
+      ws: string,
+      projectId: string,
+      input: {
+        name: string;
+        state?: string;
+        description?: string;
+        description_html?: string;
+        labels?: string[];
+        assignees?: string[];
+        priority?: string;
+      },
+    ) {
       const arr = world.issues.get(projectId) ?? [];
       const seq = arr.length + 1;
       const fallbackState = world.states.get(projectId)?.[0]?.id ?? 'st-Backlog';
+      // Plane v1.3.0 пишет тело в `description_html`; параметр `description`
+      // сервер игнорирует. Моделируем то же в фейке: сохраняем только
+      // `description_html`. Если тест случайно передал legacy `description` —
+      // ОТБРАСЫВАЕМ его, как это сделает реальный Plane (это и ловит баг
+      // в `create-issue/handler.ts`, если кто-то снова отправит не то поле).
+      // Также эмулируем TipTap-санитайзер: вырезаем HTML-комментарии и
+      // оборачиваем результат в внешний <div>...</div> — без этого
+      // регрессии вида «meta-marker пропал после round-trip» (SLONK-7)
+      // ловились бы только в живом Plane.
+      const sanitizedHtml =
+        input.description_html !== undefined
+          ? simulateTipTap(input.description_html)
+          : undefined;
       const issue: PlaneIssue = {
         id: id('iss'),
         name: input.name,
@@ -291,7 +324,7 @@ export function fakePlane(world: FakeWorld): PlaneClient {
         project: projectId,
         workspace: ws,
         sequence_id: seq,
-        ...(input.description !== undefined ? { description: input.description } : {}),
+        ...(sanitizedHtml !== undefined ? { description_html: sanitizedHtml } : {}),
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       };
@@ -314,7 +347,18 @@ export function fakePlane(world: FakeWorld): PlaneClient {
           planeStatus: 404,
         });
       }
-      const next = { ...arr[idx]!, ...patch, updated_at: new Date().toISOString() };
+      // Та же семантика, что и в `createIssue`: поле `description` Plane
+      // игнорирует — выкидываем из патча. `description_html` прогоняем
+      // через TipTap-симулятор (см. createIssue).
+      const { description: _ignoredDescription, ...sanePatch } = patch as Partial<PlaneIssue> & {
+        description?: string;
+      };
+      void _ignoredDescription;
+      const finalPatch: typeof sanePatch =
+        sanePatch.description_html !== undefined
+          ? { ...sanePatch, description_html: simulateTipTap(sanePatch.description_html) }
+          : sanePatch;
+      const next = { ...arr[idx]!, ...finalPatch, updated_at: new Date().toISOString() };
       arr[idx] = next;
       return next;
     },
@@ -356,4 +400,32 @@ export function fakePlane(world: FakeWorld): PlaneClient {
 
 function stripTags(s: string): string {
   return s.replace(/<[^>]+>/g, '').trim();
+}
+
+/**
+ * Эмулятор того, что Plane v1.3.0 TipTap-санитайзер делает с
+ * `description_html` при сохранении. Покрывает наблюдаемые в проде
+ * трансформации (см. SLONK-7 smoke):
+ *   1. HTML-комментарии `<!-- ... -->` ВЫРЕЗАЮТСЯ (это и сломало
+ *      legacy `<!-- slonk:meta v1 -->` маркер).
+ *   2. Весь результат заворачивается в внешний `<div>...</div>`.
+ *   3. `<br />` нормализуется до `<br>` (некритично, но соответствует
+ *      проду).
+ * Поведение упрощённое; реальный TipTap делает больше (нормализация
+ * атрибутов, drop unknown tags), но для регрессий вокруг meta-блока
+ * этого достаточно — добавляй по мере необходимости.
+ */
+export function simulateTipTap(html: string): string {
+  if (html.length === 0) return '';
+  // 1. Strip HTML comments.
+  const noComments = html.replace(/<!--[\s\S]*?-->/g, '');
+  // 2. Normalize self-closing <br /> to <br>.
+  const normalized = noComments.replace(/<br\s*\/>/g, '<br>');
+  // 3. Wrap in <div>...</div> (Plane всегда это делает на чтение).
+  // Если вход уже начинается с <div>...</div>, не оборачиваем повторно —
+  // тест может передать уже-обёрнутый html, эмулятор должен быть идемпотентен.
+  if (/^<div\b/.test(normalized.trimStart()) && /<\/div>\s*$/.test(normalized.trimEnd())) {
+    return normalized;
+  }
+  return `<div>${normalized}</div>`;
 }
