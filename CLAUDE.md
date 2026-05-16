@@ -111,28 +111,7 @@ pnpm build           # tsc → dist/
 pnpm dev             # tsx watch src/server.ts (локальная разработка без Docker)
 ```
 
-## Текущее состояние (фазы)
-
-**Все Phase 0–10 закрыты — v1.0.0 (2026-05-12).** Подробно — в
-[CHANGELOG.md](./docs/CHANGELOG.md) и [ROADMAP.md](./docs/ROADMAP.md).
-
-- **Phase 10** — hardening + v1.0 release: `LICENSE` (Apache 2.0),
-  `SECURITY.md`, `make release` собирает `slonk/mcp-kanban:1.0.0` и
-  `slonk/backup:1.0.0`; опц. cosign-sign.
-- **Phase 9** — backup overlay: pg_dump + mc mirror MinIO + tar mcp_data
-  через `supercronic`-cron; `make up-backup`, `make backup-now`.
-- **Phase 8** — observability: `/metrics` (Prometheus) + Grafana/Loki/Promtail
-  overlay, дашборд `slonk-overview`, alert rules; `make up-obs`.
-- **Phase 7** — внешний Caddy TLS-шлюз (`docker-compose.proxy.yml` +
-  `caddy/Caddyfile`), `make up-proxy`.
-- **Phase 6** — git integration: `link_git_ref` / `unlink_git_ref` /
-  `find_issues_by_git_ref` + SQLite-индекс git_refs + corrupt-block recovery.
-- **Phase 5** — write tools + atomic claim + audit log + rate limit.
-- **Phase 4** — read-only tools + meta-block парсер + TTL cache.
-- **Phase 3** — идемпотентный bootstrap (workspace/project/states/labels/identities).
-- **Phase 2** — MCP server skeleton (Fastify + MCP StreamableHTTP).
-- **Phase 1** — Plane stack v1.3.0 в docker compose.
-- **Phase 0** — каркас репозитория и документация.
+## Текущее состояние
 
 В коде на сегодня — **22 MCP tool'а**: `who_am_i` + 10 read (`list_*`,
 `get_issue`, `search_issues`, `get_issue_history`) + 8 write
