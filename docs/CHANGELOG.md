@@ -7,6 +7,8 @@
 
 ## [Unreleased]
 
+## [1.0.1] — 2026-05-16
+
 ### Fixed
 - **`create_issue` и `update_issue` больше не теряют тело задачи**
   (SLONK-7). Plane v1.3.0 хранит описание в `description_html` (TipTap /
@@ -727,6 +729,7 @@ Backup: `pg_dump` + `mc mirror` MinIO + `tar mcp_data` по `BACKUP_CRON` чер
 
 | Версия | Дата | Контент |
 |---|---|---|
+| 1.0.1 | 2026-05-16 | Patch: фикс потери описания задачи в `create_issue`/`update_issue` (description_html) + TipTap-устойчивый маркер meta-блока (SLONK-7). |
 | 1.0.0 | 2026-05-12 | Первый стабильный релиз. Phases 0–10 закрыты. |
 
 <!--
