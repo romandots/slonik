@@ -41,10 +41,14 @@ describe('updateIssue (description handling)', () => {
       allowedProjects: ['SLONK'],
       issueRef: created.id,
     });
-    // description_body — описание без meta-блока; парсер не сдирает
-    // HTML-теги, поэтому он содержит обёрнутый параграф.
+    // description_body — описание без meta-блока; парсер снимает
+    // внешний <div>-wrapper, который Plane TipTap навешивает на
+    // description_html, но не сдирает остальные HTML-теги, поэтому
+    // он содержит обёрнутый параграф.
     expect(fetched.description_body).toBe('<p>Replaced</p>');
-    expect(fetched.description_raw).toBe('<p>Replaced</p>');
+    // description_raw — сырой ответ Plane: внутри <div>...</div>-обёртки
+    // (TipTap-санитайзер всегда её добавляет, см. SLONK-7).
+    expect(fetched.description_raw).toBe('<div><p>Replaced</p></div>');
   });
 
   it('updates without description: existing body is preserved', async () => {

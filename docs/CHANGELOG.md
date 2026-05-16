@@ -34,6 +34,40 @@
   HTML-эскейпом (`src/tools/create-issue/handler.test.ts`,
   `src/tools/update-issue/handler.test.ts`). Существующие тесты
   `link_git_ref` / `unlink_git_ref` обновлены под `description_html`.
+- **Маркер meta-блока сменён с HTML-комментария на текстовый sentinel**
+  (SLONK-7, второй pass). Plane v1.3.0 TipTap-санитайзер вырезает
+  HTML-комментарии из `description_html` при сохранении — поэтому первый
+  pass SLONK-7 пропустил критичную регрессию: `link_git_ref` / `unlink_git_ref`
+  записывали legacy-маркер `<!-- slonk:meta v1 -->`, который исчезал
+  после round-trip через реальный Plane, и `parseDescription` возвращал
+  `meta.repos: []`. На юнит-тестах баг не ловился, потому что фейк-Plane
+  не моделировал стрипание комментариев. Новый формат маркера —
+  `--- slonk:meta v1 ---` (`src/meta-block.ts`, `MetaBlockMarker`),
+  который TipTap не трогает (smoke-протестировано на живом Plane).
+  `HEADER_RE` распознаёт **и** новый маркер, **и** legacy
+  `<!-- slonk:meta v1 -->` — миграция для задач, созданных до фикса (на
+  запись всегда пишется новый маркер; legacy-форма безвозвратно теряется,
+  если задача уже один раз прошла через TipTap, — это документировано
+  в новых юнитах). `serializeDescription` упрощён: лишний `---\n`-сепаратор
+  перед маркером убран, так как новый маркер сам начинается с `---`.
+  `parseDescription` снимает внешний `<div>...</div>`, которым Plane
+  оборачивает любой `description_html`, чтобы маркер, прижатый к
+  открывающему `<div>` (когда body пустой), всё равно матчился якорем
+  `^` / `\n`. Маркер `slonk:corrupt-meta-preserved` для recovery тоже
+  переведён на текстовый sentinel — HTML-комментарий ушёл бы
+  TipTap-санитайзеру. Тест-фейк `src/tools/test-fakes.ts` получил
+  `simulateTipTap()` — эмулятор Plane'овской трансформации
+  description_html (strip HTML-комментариев + wrap в `<div>`); все
+  тесты `create_issue` / `update_issue` / `link_git_ref` /
+  `unlink_git_ref` теперь идут через него, что воспроизводит реальную
+  семантику Plane и ловит этот класс регрессий в юнитах. В
+  `src/meta-block.test.ts` добавлены 5 регрессионных кейсов: round-trip
+  через TipTap, edge-case пустого body, идемпотентность `link_git_ref`
+  ×2 (та самая, что упала на QA), миграция legacy-маркера на чтение,
+  документированный отказ legacy-формы после strip'а. Live-Plane smoke
+  17/17 PASS: AC#1 (create + XSS-escape), AC#2 (update overwrite),
+  AC#3 (link идемпотентность, marker survives), AC#4 (unlink → empty
+  meta, body preserved).
 
 ### Added
 - **`mcp-kanban/bootstrap/` пробрасывается bind-mount'ом** в контейнер

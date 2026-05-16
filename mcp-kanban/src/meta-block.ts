@@ -4,7 +4,7 @@ import { z } from 'zod';
 // Парсер машинно-читаемого блока в описании задачи. См. SPEC.md §5.6.
 //
 //   ---
-//   <!-- slonk:meta v1 -->
+//   --- slonk:meta v1 ---
 //   repos:
 //     - url: https://github.com/acme/backend
 //       branch: feature/SLONK-123-auth-flow
@@ -12,11 +12,20 @@ import { z } from 'zod';
 //       commits:
 //         - 4f1a2b3
 //
-// Маркер `<!-- slonk:meta v1 -->` обязателен. До маркера — произвольный
+// Маркер `--- slonk:meta v1 ---` обязателен. До маркера — произвольный
 // текст (контент описания), после — строгий YAML. Парсер идемпотентен:
 // `serialize(parse(text)) === stripped meta block`.
+//
+// История маркера: исторически использовался HTML-комментарий
+// `<!-- slonk:meta v1 -->`, но Plane v1.3.0 TipTap-санитайзер вырезает
+// HTML-комментарии из `description_html` при сохранении (см. SLONK-7),
+// поэтому маркер потерял бы себя после первого round-trip. Текущий
+// текстовый sentinel survival-tested на реальном Plane и не зависит от
+// поведения санитайзера. Старый маркер по-прежнему распознаётся на
+// чтение для миграции уже созданных задач — записывается всегда новый.
 
-export const MetaBlockMarker = '<!-- slonk:meta v1 -->';
+export const MetaBlockMarker = '--- slonk:meta v1 ---';
+const LegacyMetaBlockMarker = '<!-- slonk:meta v1 -->';
 
 const Sha = z.string().regex(/^[0-9a-f]{7,40}$/, 'expected commit sha (7..40 hex chars)');
 
@@ -45,7 +54,43 @@ export interface ParsedDescription {
   error?: string;
 }
 
-const HEADER_RE = new RegExp(`(^|\\n)---\\s*\\n${escapeRe(MetaBlockMarker)}\\s*\\n`, 'm');
+// Заголовок может быть в двух формах:
+//   - современный текстовый sentinel `--- slonk:meta v1 ---` на своей строке
+//     (опциональная обёртка `<p>...</p>`, опциональные ведущие пробелы);
+//   - устаревший `---\n<!-- slonk:meta v1 -->\n` — поддерживается **только**
+//     на чтение, чтобы прочитать meta-блок на задачах, созданных до фикса.
+//     На запись всегда используется современный маркер (`serializeDescription`
+//     не умеет писать legacy-форму).
+const HEADER_RE = new RegExp(
+  `(^|\\n)` +
+    `(?:` +
+      // Современный sentinel. Допускаем обёртку <p>...</p> (TipTap может
+      // подсунуть, если редактор задачу пересохранил).
+      `(?:<p>\\s*)?${escapeRe(MetaBlockMarker)}(?:\\s*</p>)?\\s*\\n` +
+      `|` +
+      // Legacy: `---\n<!-- slonk:meta v1 -->\n` (HTML-комментарий мог быть
+      // вырезан TipTap'ом — но если задача ни разу не была перечитана
+      // через Plane после создания через старый MCP, маркер ещё на месте).
+      `---\\s*\\n${escapeRe(LegacyMetaBlockMarker)}\\s*\\n` +
+    `)`,
+  'm',
+);
+
+/**
+ * Plane TipTap-санитайзер заворачивает весь description_html во внешний
+ * `<div>...</div>` (см. SLONK-7 smoke). При парсинге снимаем эту обёртку,
+ * чтобы маркер meta-блока, прижатый к `<div>` (когда body пустое), всё
+ * равно матчился `HEADER_RE` (там якорь `^` / `\n` перед маркером).
+ * Снимаем максимум один уровень обёртки — глубже копать не нужно, это
+ * наблюдаемый поверхностный wrapping Plane'а; вложенные `<div>` сохраняем
+ * (они — часть body).
+ */
+function unwrapPlaneDiv(text: string): string {
+  const trimmed = text.replace(/^\s+|\s+$/g, '');
+  const match = /^<div\b[^>]*>([\s\S]*)<\/div>$/.exec(trimmed);
+  if (match === null) return text;
+  return match[1] ?? text;
+}
 
 /**
  * Разрезает описание на body + meta. Никогда не выбрасывает: повреждённый
@@ -56,6 +101,10 @@ export function parseDescription(text: string | null | undefined): ParsedDescrip
   if (text === null || text === undefined || text.length === 0) {
     return { body: '', meta: { repos: [] }, corrupt: false };
   }
+  // Снимаем внешний <div>...</div>, который TipTap навешивает на любой
+  // description_html при чтении. Без этого маркер meta-блока, прижатый к
+  // открывающему `<div>` (когда body пустое), не матчится `HEADER_RE`.
+  text = unwrapPlaneDiv(text);
   const match = HEADER_RE.exec(text);
   if (match === null) {
     return { body: text, meta: { repos: [] }, corrupt: false };
@@ -65,7 +114,12 @@ export function parseDescription(text: string | null | undefined): ParsedDescrip
   // (исторический мусор). Берём первый, остальное оставляем «как есть»
   // в body — claim'ить ничей не будем.
   const body = text.slice(0, match.index).replace(/[\s\n]+$/, '');
-  const yamlBlock = text.slice(splitAt);
+  // Plane TipTap оборачивает весь description_html в внешний `<div>...</div>`
+  // (см. SLONK-7 smoke), поэтому YAML-блок в хвосте может быть закрыт
+  // одним или несколькими `</tag>` (`</div>`, `</p>`). Стрипаем их перед
+  // парсингом — на самом YAML символ `<` валиден только в quoted-strings,
+  // а snake/yaml не понимает голый HTML.
+  const yamlBlock = text.slice(splitAt).replace(/\s*(?:<\/[a-zA-Z][^>]*>\s*)+$/, '');
   try {
     const raw = parseYaml(yamlBlock) as unknown;
     const result = MetaBlockSchema.safeParse(raw ?? { repos: [] });
@@ -91,14 +145,18 @@ export function parseDescription(text: string | null | undefined): ParsedDescrip
 /**
  * Собирает описание обратно: body + маркер + YAML. Если meta пуст —
  * возвращает только body.
+ *
+ * Маркер пишется в современной текстовой форме (`--- slonk:meta v1 ---`),
+ * которую TipTap-санитайзер Plane не вырезает. Старая форма с
+ * HTML-комментарием поддерживается только на чтение (`HEADER_RE`).
  */
 export function serializeDescription(body: string, meta: MetaBlock): string {
   const trimmedBody = body.replace(/[\s\n]+$/, '');
   const hasMeta = meta.repos.length > 0;
   if (!hasMeta) return trimmedBody;
   const yaml = stringifyYaml(meta).replace(/[\s\n]+$/, '');
-  const header = trimmedBody.length > 0 ? `${trimmedBody}\n\n---\n` : `---\n`;
-  return `${header}${MetaBlockMarker}\n${yaml}\n`;
+  const header = trimmedBody.length > 0 ? `${trimmedBody}\n${MetaBlockMarker}\n` : `${MetaBlockMarker}\n`;
+  return `${header}${yaml}\n`;
 }
 
 /**
@@ -157,15 +215,23 @@ export function preserveCorruptDescription(rawDescription: string): {
   body: string;
   quoted: string;
 } {
-  const match = HEADER_RE.exec(rawDescription);
+  const unwrapped = unwrapPlaneDiv(rawDescription);
+  const match = HEADER_RE.exec(unwrapped);
   if (match === null) return { recovered: false, body: rawDescription, quoted: '' };
-  const before = rawDescription.slice(0, match.index).replace(/[\s\n]+$/, '');
-  const corruptBlock = rawDescription.slice(match.index + match[0].length);
+  const before = unwrapped.slice(0, match.index).replace(/[\s\n]+$/, '');
+  // Стрипаем хвостовые `</tag>` от TipTap-обёртки (см. parseDescription).
+  const corruptBlock = unwrapped
+    .slice(match.index + match[0].length)
+    .replace(/\s*(?:<\/[a-zA-Z][^>]*>\s*)+$/, '');
   // Экранируем потенциальные fenced-блоки в самом мусоре, чтобы наш
   // wrapper не сломался.
   const safeFence = pickSafeFence(corruptBlock);
+  // Маркер `slonk:corrupt-meta-preserved` сделан текстовым (а не HTML-комментарием),
+  // потому что Plane TipTap-санитайзер вырезает HTML-комментарии (см. SLONK-7).
+  // Видим в UI как обычный текст — это даже полезно: человек сразу видит, что
+  // у задачи спасли сломанный meta-блок.
   const quoted =
-    `<!-- slonk:corrupt-meta-preserved -->\n` +
+    `[slonk:corrupt-meta-preserved]\n` +
     `${safeFence}yaml\n${corruptBlock.trimEnd()}\n${safeFence}\n`;
   return { recovered: true, body: before, quoted };
 }
