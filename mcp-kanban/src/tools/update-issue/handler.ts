@@ -6,6 +6,7 @@ import { summarise, type IssueSummary } from '../list-issues/handler.js';
 import { resolveLabelRef } from '../create-issue/handler.js';
 import type { UpdateIssueInput } from './schema.js';
 import { McpError } from '../../errors.js';
+import { toPlaneDescriptionHtml } from '../../markdown-to-html.js';
 
 export async function updateIssue(deps: {
   plane: PlaneClient;
@@ -37,7 +38,13 @@ export async function updateIssue(deps: {
 
   const patch: Parameters<PlaneClient['updateIssue']>[3] = {};
   if (deps.input.name !== undefined) patch.name = deps.input.name;
-  if (deps.input.description !== undefined) patch.description = deps.input.description;
+  // См. комментарий в `create-issue/handler.ts`: Plane хранит тело в
+  // `description_html`, поле `description` игнорируется. Если описание
+  // в патче не задано — НЕ трогаем `description_html` (PATCH идемпотентен
+  // по неупомянутым полям).
+  if (deps.input.description !== undefined) {
+    patch.description_html = toPlaneDescriptionHtml(deps.input.description);
+  }
   if (deps.input.priority !== undefined) patch.priority = deps.input.priority;
   if (deps.input.labels !== undefined) {
     patch.labels = deps.input.labels.map((n) => resolveLabelRef(n, labels));

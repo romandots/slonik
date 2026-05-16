@@ -127,6 +127,15 @@ export function addIssue(
 ): PlaneIssue {
   const arr = world.issues.get(projectId) ?? [];
   const seq = arr.length + 1;
+  // Plane v1.3.0 хранит тело задачи в `description_html` (TipTap), а поле
+  // `description` тихо игнорирует. Фейк должен моделировать ту же
+  // семантику, иначе тесты read-тулов прятали бы регрессии. Для удобства
+  // тестов, которые передают `description: "..."`, миксуем значение в
+  // `description_html` (а не в отдельное поле), чтобы `getIssue` его нашёл.
+  const seededHtml =
+    data.description_html ??
+    data.description ??
+    undefined;
   const issue: PlaneIssue = {
     id: data.id ?? `iss-${world.nextId++}`,
     name: data.name,
@@ -137,8 +146,7 @@ export function addIssue(
     project: projectId,
     workspace: world.workspaces[0]?.id ?? '',
     sequence_id: data.sequence_id ?? seq,
-    ...(data.description !== undefined ? { description: data.description } : {}),
-    ...(data.description_html !== undefined ? { description_html: data.description_html } : {}),
+    ...(seededHtml !== undefined ? { description_html: seededHtml } : {}),
     ...(data.created_at !== undefined ? { created_at: data.created_at } : { created_at: new Date(2026, 0, seq).toISOString() }),
     ...(data.updated_at !== undefined ? { updated_at: data.updated_at } : { updated_at: new Date(2026, 0, seq).toISOString() }),
     ...(data.cycle !== undefined ? { cycle: data.cycle } : {}),
@@ -277,10 +285,27 @@ export function fakePlane(world: FakeWorld): PlaneClient {
     async getIssueBySequenceId(_ws: string, projectId: string, _identifier: string, seq: number) {
       return world.issues.get(projectId)?.find((i) => i.sequence_id === seq);
     },
-    async createIssue(ws: string, projectId: string, input: { name: string; state?: string; description?: string; labels?: string[]; assignees?: string[]; priority?: string }) {
+    async createIssue(
+      ws: string,
+      projectId: string,
+      input: {
+        name: string;
+        state?: string;
+        description?: string;
+        description_html?: string;
+        labels?: string[];
+        assignees?: string[];
+        priority?: string;
+      },
+    ) {
       const arr = world.issues.get(projectId) ?? [];
       const seq = arr.length + 1;
       const fallbackState = world.states.get(projectId)?.[0]?.id ?? 'st-Backlog';
+      // Plane v1.3.0 пишет тело в `description_html`; параметр `description`
+      // сервер игнорирует. Моделируем то же в фейке: сохраняем только
+      // `description_html`. Если тест случайно передал legacy `description` —
+      // ОТБРАСЫВАЕМ его, как это сделает реальный Plane (это и ловит баг
+      // в `create-issue/handler.ts`, если кто-то снова отправит не то поле).
       const issue: PlaneIssue = {
         id: id('iss'),
         name: input.name,
@@ -291,7 +316,9 @@ export function fakePlane(world: FakeWorld): PlaneClient {
         project: projectId,
         workspace: ws,
         sequence_id: seq,
-        ...(input.description !== undefined ? { description: input.description } : {}),
+        ...(input.description_html !== undefined
+          ? { description_html: input.description_html }
+          : {}),
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       };
@@ -314,7 +341,13 @@ export function fakePlane(world: FakeWorld): PlaneClient {
           planeStatus: 404,
         });
       }
-      const next = { ...arr[idx]!, ...patch, updated_at: new Date().toISOString() };
+      // Та же семантика, что и в `createIssue`: поле `description` Plane
+      // игнорирует — выкидываем из патча.
+      const { description: _ignoredDescription, ...sanePatch } = patch as Partial<PlaneIssue> & {
+        description?: string;
+      };
+      void _ignoredDescription;
+      const next = { ...arr[idx]!, ...sanePatch, updated_at: new Date().toISOString() };
       arr[idx] = next;
       return next;
     },

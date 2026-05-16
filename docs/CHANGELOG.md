@@ -7,6 +7,34 @@
 
 ## [Unreleased]
 
+### Fixed
+- **`create_issue` и `update_issue` больше не теряют тело задачи**
+  (SLONK-7). Plane v1.3.0 хранит описание в `description_html` (TipTap /
+  ProseMirror) и тихо игнорирует поле `description` — поэтому MCP отдавал
+  200 OK, а `get_issue` возвращал пустое тело. Теперь `create_issue` /
+  `update_issue` (`src/tools/create-issue/handler.ts`,
+  `src/tools/update-issue/handler.ts`) конвертят пользовательский ввод в
+  HTML через новый хелпер `src/markdown-to-html.ts` (HTML-escape +
+  обёртка параграфов в `<p>...</p>`, одиночный `\n` → `<br />`) и шлют
+  результат в `description_html`. `get_issue`
+  (`src/tools/get-issue/handler.ts`) теперь читает тело по приоритету
+  `description_html ?? description ?? ''` — `description_html` это
+  фактический источник правды у Plane, fallback оставлен для совместимости
+  с тест-фейками и старыми снапшотами. Та же правка применена к
+  `link_git_ref` / `unlink_git_ref` (`src/tools/link-git-ref/handler.ts`,
+  `src/tools/unlink-git-ref/handler.ts`): meta-блок теперь читается и
+  пишется в `description_html`, иначе git-связки тоже терялись на
+  задачах, созданных через UI. Тест-фейк (`src/tools/test-fakes.ts`)
+  переписан так, чтобы моделировать реальную семантику Plane —
+  `createIssue` / `updateIssue` принимают только `description_html`, а
+  поле `description` отбрасывают; это закрывает класс регрессий, при
+  которых MCP «работает в тестах», но молча роняет описание в
+  продакшене. Добавлены юниты на конвертер (`src/markdown-to-html.test.ts`),
+  на round-trip `create_issue → get_issue` и на `update_issue` с
+  HTML-эскейпом (`src/tools/create-issue/handler.test.ts`,
+  `src/tools/update-issue/handler.test.ts`). Существующие тесты
+  `link_git_ref` / `unlink_git_ref` обновлены под `description_html`.
+
 ### Added
 - **`mcp-kanban/bootstrap/` пробрасывается bind-mount'ом** в контейнер
   `mcp-kanban` (`./mcp-kanban/bootstrap:/app/bootstrap:ro` в

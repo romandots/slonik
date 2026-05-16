@@ -78,7 +78,10 @@ export async function getIssue(deps: {
   ]);
 
   const summary = summarise(realIssue, states, labels, project.identifier);
-  const description = realIssue.description ?? realIssue.description_html ?? '';
+  // Plane v1.3.0 хранит тело задачи в `description_html` (TipTap).
+  // `description` приходит только из совсем старых снапшотов / тестовых
+  // фейков; оставляем как fallback, но `description_html` приоритетнее.
+  const description = realIssue.description_html ?? realIssue.description ?? '';
   const meta = parseDescription(description);
   return {
     ...summary,

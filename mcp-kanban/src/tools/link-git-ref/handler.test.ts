@@ -39,10 +39,11 @@ describe('linkGitRef', () => {
     expect(r.meta.repos[0]?.url).toBe(REPO);
     expect(r.meta.repos[0]?.commits).toEqual(['abcdef1']);
 
-    // Plane description должно быть переписано с meta-блоком.
+    // Plane description_html должно быть переписано с meta-блоком
+    // (Plane v1.3.0 хранит тело задачи в `description_html`).
     const fresh = await plane.getIssue('agents', project.id, issue.id);
-    expect(fresh?.description).toContain(MetaBlockMarker);
-    expect(fresh?.description).toContain('Initial description.');
+    expect(fresh?.description_html).toContain(MetaBlockMarker);
+    expect(fresh?.description_html).toContain('Initial description.');
 
     // SQLite-индекс заполнен.
     const indexed = gitRefs.find({ commit_sha: 'abcdef1' });
@@ -171,10 +172,10 @@ repos:
 
     const fresh = await plane.getIssue('agents', project.id, issue.id);
     // Сломанный блок сохранён внутри fence-quote.
-    expect(fresh?.description).toContain('slonk:corrupt-meta-preserved');
-    expect(fresh?.description).toContain('NOT_A_HEX_SHA');
+    expect(fresh?.description_html).toContain('slonk:corrupt-meta-preserved');
+    expect(fresh?.description_html).toContain('NOT_A_HEX_SHA');
     // И есть валидный новый meta.
-    const parsed = parseDescription(fresh?.description ?? '');
+    const parsed = parseDescription(fresh?.description_html ?? '');
     expect(parsed.corrupt).toBe(false);
     expect(parsed.meta.repos[0]?.commits).toEqual(['abcdef1']);
 
