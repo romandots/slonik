@@ -301,10 +301,15 @@ identities:
 ## 6. Подключение агентов
 
 Общий контракт: `ALL /mcp` (StreamableHTTP), Bearer-токен в `Authorization`,
-identity в `X-Agent-Identity` (одна из 6 ролей bootstrap'а:
+identity в `X-Agent-Identity` (одна из ролей bootstrap'а: по умолчанию
 `analyst-agent`, `developer-agent`, `security-auditor-agent`,
-`code-review-agent`, `qa-agent`, `doc-agent`). URL — `http://localhost:8787/mcp`
-в dev, `https://mcp.slonk.example.com/mcp` в прод через caddy (Phase 7).
+`code-review-agent`, `qa-agent`, `doc-agent`, `merger-agent`). Whitelist
+собирается рантайм-овым `IdentityRegistry` из `identity.sqlite` (после
+`make bootstrap`) с fallback на `bootstrap/manifest.yaml`, поэтому добавить
+свою роль = поправить `identities:` в манифесте и пере-bootstrap'нуть —
+правки кода не нужны (см. [SPEC.md §5.5](./SPEC.md#55-agent-identity)).
+URL — `http://localhost:8787/mcp` в dev, `https://mcp.slonk.example.com/mcp`
+в прод через caddy (Phase 7).
 
 ### 6.1 Claude Code
 
