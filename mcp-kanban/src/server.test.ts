@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -214,6 +214,95 @@ describe('mcp-kanban HTTP server', () => {
   });
 });
 
+// SLONK-5: MCP-сессии раньше копились бесконечно — `transport.onclose`
+// срабатывал только на graceful shutdown клиента; при OOM-kill / network
+// drop / `docker restart` сессия оставалась forever, держа McpServer +
+// 22 tool-замыкания. На хосте 2 GB RAM это давало memory pressure.
+describe('mcp-kanban /mcp session eviction (SLONK-5)', () => {
+  // Каждый тест должен видеть изолированную карту сессий — иначе порядок
+  // тестов начинает влиять на результат (первый тест очищает сессии,
+  // второй вырастает на 3, и т.д.). Поднимаем сервер в beforeEach/afterEach,
+  // чтобы добавление новых кейсов не ломало уже существующие.
+  let built: BuiltServer;
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    // Короткий idle и cap=2 — чтобы тестам не приходилось ждать.
+    // GC_INTERVAL=0 отключает фоновый janitor; мы дёргаем sweepIdle() руками,
+    // чтобы тест был детерминирован.
+    const config = loadConfig(
+      testEnv({
+        MCP_SESSION_IDLE_MS: '50',
+        MCP_SESSION_GC_INTERVAL_MS: '0',
+        MCP_MAX_SESSIONS: '2',
+      }),
+    );
+    const logger = createLogger(config);
+    tmpDir = mkdtempSync(join(tmpdir(), 'slonk-mcp-sessions-'));
+    const identityStorePath = join(tmpDir, 'identity.sqlite');
+    seedIdentityStore(identityStorePath, ALL_ROLES);
+    built = await buildServer({
+      config,
+      logger,
+      identityStorePath,
+      auditStorePath: join(tmpDir, 'audit.sqlite'),
+      gitRefsStorePath: join(tmpDir, 'git_refs.sqlite'),
+    });
+    await built.app.ready();
+  });
+
+  afterEach(async () => {
+    await built.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  async function initOneSession(): Promise<void> {
+    await built.app.inject({
+      method: 'POST',
+      url: '/mcp',
+      headers: {
+        authorization: `Bearer ${TEST_TOKEN}`,
+        'x-agent-identity': 'developer-agent',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      payload: {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: {
+          protocolVersion: '2024-11-05',
+          capabilities: {},
+          clientInfo: { name: 'test', version: '0' },
+        },
+      },
+    });
+  }
+
+  it('evicts idle sessions on sweepIdle()', async () => {
+    // baseline: чисто
+    expect(built._sessions.size()).toBe(0);
+    await initOneSession();
+    // сессия открыта transport'ом, onsessioninitialized заносит её в Map
+    expect(built._sessions.size()).toBe(1);
+    // Ждём за idle-timeout (50ms) и дёргаем janitor вручную.
+    await new Promise((r) => setTimeout(r, 80));
+    built._sessions.sweepIdle();
+    expect(built._sessions.size()).toBe(0);
+  });
+
+  it('caps sessions at MCP_MAX_SESSIONS via LRU eviction', async () => {
+    // Открываем 3 сессии подряд при cap=2 → одна должна быть вытеснена.
+    await initOneSession();
+    await initOneSession();
+    await initOneSession();
+    // enforceMaxSessions вызывается из onsessioninitialized; даём ему
+    // тик на синхронную работу.
+    built._sessions.enforceMaxSessions();
+    expect(built._sessions.size()).toBe(2);
+  });
+});
+
 describe('mcp-kanban /metrics enabled', () => {
   let built: BuiltServer;
   let tmpDir: string;
@@ -248,5 +337,18 @@ describe('mcp-kanban /metrics enabled', () => {
     expect(r.headers['content-type']).toMatch(/text\/plain.*version=0\.0\.4/);
     expect(r.body).toContain('mcp_tool_calls_total');
     expect(r.body).toContain('tool="list_issues"');
+  });
+
+  // SLONK-5: memory-bound метрики обязаны присутствовать на /metrics
+  // (даже с нулевыми значениями), чтобы Prometheus сразу видел gauge'и
+  // и Grafana-дашборд не падал на missing series.
+  it('exposes SLONK-5 memory-bound metrics on /metrics', async () => {
+    const r = await built.app.inject({ method: 'GET', url: '/metrics' });
+    expect(r.statusCode).toBe(200);
+    // gauge'и появляются с # HELP / # TYPE даже без записанных значений
+    expect(r.body).toContain('mcp_cache_size');
+    expect(r.body).toContain('mcp_active_sessions');
+    expect(r.body).toContain('mcp_cache_evictions_total');
+    expect(r.body).toContain('mcp_sessions_evicted_total');
   });
 });

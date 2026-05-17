@@ -30,9 +30,19 @@
 |---|---|
 | ОС | macOS 13+, Linux (любой современный дистрибутив), Windows 11 + WSL2 |
 | Docker | Engine ≥ 24, Compose v2 |
-| CPU / RAM / диск | 4 CPU, 8 GB RAM, 20 GB свободного диска |
+| CPU / RAM / диск | 4 CPU, 8 GB RAM, 20 GB свободного диска (**жёсткий минимум — 4 GB RAM**; см. предупреждение ниже) |
 | Свободные порты на хосте | `3000` (Plane UI), `8787` (MCP). С `dev`-overlay'ем — также `8000`, `5432`, `6379`, `5672`, `15672`, `9000`, `9001`. |
 | Node.js (опционально) | 22 LTS — нужен только если хочется гонять `mcp-kanban` локально без Docker. Для штатного использования не требуется. |
+
+> **RAM < 4 GB не поддерживается.** На 2 GB RAM хосте стек уходит в
+> swap-thrashing (CPU/disk I/O синхронно растут до полки) — у Plane
+> backend нет ENV-tuning, чтобы влезть в 1 GB, и контейнеры начинают
+> вытеснять друг друга. mcp-kanban имеет защиту от безграничного роста
+> (TtlCache cap, idle-eviction MCP-сессий, постраничный seq lookup — см.
+> `MCP_CACHE_MAX_ENTRIES`, `MCP_SESSION_IDLE_MS`, `MCP_MAX_SESSIONS` в
+> [CONFIGURATION.md](./CONFIGURATION.md#resource-limits-for-small-hosts)),
+> но это не отменяет требования к Plane backend. Не пытайтесь запустить
+> на 2 GB.
 
 ### 1.2 Клонирование
 

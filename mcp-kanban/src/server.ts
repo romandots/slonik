@@ -60,6 +60,15 @@ export interface BuiltServer {
   metrics: MetricsRegistry;
   /** Closes Fastify, MCP transports, and SQLite stores. */
   close: () => Promise<void>;
+  /**
+   * Internal-only: access to MCP session bookkeeping for tests
+   * (idle-eviction, max-sessions cap, SLONK-5). Не использовать в проде.
+   */
+  _sessions: {
+    size: () => number;
+    sweepIdle: () => void;
+    enforceMaxSessions: () => void;
+  };
 }
 
 /**
@@ -83,7 +92,10 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
   });
 
   const plane = new PlaneClient({ config, logger });
-  const cache = new TtlCache({ ttlMs: 10_000 });
+  const cache = new TtlCache({
+    ttlMs: 10_000,
+    maxEntries: config.MCP_CACHE_MAX_ENTRIES,
+  });
   // Identity store открываем «лениво-безопасно»: если файла нет — better-sqlite3
   // создаст пустую БД (и identity mode по факту окажется default из конфига).
   // Bootstrap сам наполнит файл.
@@ -126,11 +138,39 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
   // Prometheus scrape endpoint (SPEC §12). Включается через
   // MCP_METRICS_ENABLED=1; иначе возвращает 404, чтобы не светить наружу.
   // Без авторизации — Prometheus scraper в internal_net'е, не на хосте.
+  // SLONK-5: cache не знает про metrics, поэтому на scrape'е считаем дельту
+  // эвикций и накатываем её в counter. Память на хранение пары int'ов.
+  //
+  // ВАЖНО — single-scraper assumption. Дельта (`cur.ttl - lastCacheEvict.ttl`)
+  // считается между двумя последовательными вызовами этого хэндлера. Если
+  // когда-нибудь поверх mcp-kanban встанут два независимых scraper'а
+  // (например HA-пара Prometheus или Push Gateway), они начнут
+  // «соревноваться» за дельту: первый зашедший подберёт прирост и сдвинет
+  // `lastCacheEvict`, второй увидит ноль и недосчитает evictions. Сейчас
+  // деплой строго один scraper (см. `prometheus/prometheus.yml` —
+  // singleton job `mcp-kanban`), и менять схему без переделки этого
+  // блока нельзя. Альтернатива на будущее — инкрементировать counter
+  // прямо из `cache.ts` через callback/EventEmitter; на текущей нагрузке
+  // не оправдано (TtlCache намеренно не знает про метрики).
+  let lastCacheEvict = { ttl: 0, cap: 0 };
   app.get('/metrics', async (_request, reply) => {
     if (!config.MCP_METRICS_ENABLED) {
       reply.status(404).send({ error: { code: 'NOT_FOUND', message: 'metrics disabled' } });
       return;
     }
+    // SLONK-5: на каждом scrape снимаем актуальные значения size'ов
+    // (gauge'и pull-стиля); счётчики эвикции обновляются в момент эвикции
+    // (сессии) или диффом против предыдущего scrape'а (cache, см. note выше).
+    metrics.cacheSize.set(cache.size());
+    metrics.sessionsActive.set(sessions.size);
+    const cur = cache.evictionStats();
+    if (cur.ttl > lastCacheEvict.ttl) {
+      metrics.cacheEvictions.inc({ reason: 'ttl' }, cur.ttl - lastCacheEvict.ttl);
+    }
+    if (cur.cap > lastCacheEvict.cap) {
+      metrics.cacheEvictions.inc({ reason: 'cap' }, cur.cap - lastCacheEvict.cap);
+    }
+    lastCacheEvict = cur;
     reply.header('content-type', metrics.contentType());
     return await metrics.metricsText();
   });
@@ -154,7 +194,90 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
   // Каждый POST с initialize создаёт новую сессию (новая пара
   // McpServer+transport); далее клиент пересылает mcp-session-id и
   // последующие запросы попадают в ту же транспортную сессию.
-  const sessions = new Map<string, StreamableHTTPServerTransport>();
+  //
+  // SLONK-5: каждая запись хранит `lastUsedAt`, periodic janitor
+  // (`setInterval(...).unref()`) закрывает сессии с idle >
+  // MCP_SESSION_IDLE_MS, и при превышении MCP_MAX_SESSIONS вытесняется
+  // самая старая по `lastUsedAt`. Это защищает от утечки сессий, когда
+  // клиент уронился без graceful shutdown (типичный паттерн `/loop`).
+  interface SessionEntry {
+    transport: StreamableHTTPServerTransport;
+    lastUsedAt: number;
+    // Монотонный sequence tie-breaker для LRU. `Date.now()` имеет
+    // миллисекундную гранулярность: при сценарии шторма (например,
+    // несколько клиентов одновременно открыли сессию в одном tick'е)
+    // несколько записей получат одинаковый `lastUsedAt`, и сравнение
+    // только по timestamp эвиктит «лотерейно» (зависит от порядка обхода
+    // Map). Прибавляем монотонно растущий `seq` и сортируем сначала по
+    // timestamp, затем по seq — самая недавно затронутая запись всегда
+    // выигрывает.
+    touchSeq: number;
+    identity: AgentIdentity | undefined;
+  }
+  const sessions = new Map<string, SessionEntry>();
+  let sessionTouchSeq = 0;
+  const nextTouchSeq = (): number => {
+    sessionTouchSeq += 1;
+    return sessionTouchSeq;
+  };
+
+  const evictSession = (sid: string, reason: 'idle' | 'cap'): void => {
+    const entry = sessions.get(sid);
+    if (entry === undefined) return;
+    sessions.delete(sid);
+    metrics.sessionsEvicted.inc({ reason });
+    logger.info({ session: sid, reason }, 'mcp session evicted');
+    // best-effort: транспорт сам триггерит onclose, но он уже сделает
+    // sessions.delete(sid) на пустой Map — безвредно.
+    void entry.transport.close().catch((err: unknown) => {
+      logger.warn(
+        { session: sid, err: err instanceof Error ? err.message : String(err) },
+        'mcp session close failed during eviction',
+      );
+    });
+  };
+
+  const enforceMaxSessions = (): void => {
+    while (sessions.size > config.MCP_MAX_SESSIONS) {
+      // LRU: ищем запись с минимальным lastUsedAt; при равных timestamp'ах
+      // (один tick Date.now() = 1ms) берём с минимальным touchSeq —
+      // монотонный счётчик гарантирует детерминированную FIFO-семантику
+      // и защищает только что добавленную сессию от случайной эвикции.
+      // Размер map ограничен сотнями — линейный проход дешевле, чем
+      // поддержание отдельного priority-queue.
+      let oldestSid: string | undefined;
+      let oldestTs = Infinity;
+      let oldestSeq = Infinity;
+      for (const [sid, entry] of sessions) {
+        if (
+          entry.lastUsedAt < oldestTs ||
+          (entry.lastUsedAt === oldestTs && entry.touchSeq < oldestSeq)
+        ) {
+          oldestTs = entry.lastUsedAt;
+          oldestSeq = entry.touchSeq;
+          oldestSid = sid;
+        }
+      }
+      if (oldestSid === undefined) return;
+      evictSession(oldestSid, 'cap');
+    }
+  };
+
+  const sweepIdleSessions = (): void => {
+    const cutoff = Date.now() - config.MCP_SESSION_IDLE_MS;
+    for (const [sid, entry] of sessions) {
+      if (entry.lastUsedAt <= cutoff) evictSession(sid, 'idle');
+    }
+  };
+
+  // Janitor: чистит idle-сессии раз в MCP_SESSION_GC_INTERVAL_MS.
+  // .unref() — чтобы interval не держал event-loop при graceful shutdown.
+  // 0 в конфиге отключает janitor (для тестов с ручным sweep).
+  let sessionJanitor: NodeJS.Timeout | undefined;
+  if (config.MCP_SESSION_GC_INTERVAL_MS > 0) {
+    sessionJanitor = setInterval(sweepIdleSessions, config.MCP_SESSION_GC_INTERVAL_MS);
+    sessionJanitor.unref();
+  }
 
   app.all('/mcp', async (request, reply) => {
     authenticate(request, reply, {
@@ -164,14 +287,31 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
     const identity = (request as unknown as AuthedRequest).identity;
 
     const sessionId = headerString(request.headers['mcp-session-id']);
-    let transport = sessionId !== undefined ? sessions.get(sessionId) : undefined;
+    const entry = sessionId !== undefined ? sessions.get(sessionId) : undefined;
+    // transport переприсваивается ниже, если сессия только создаётся (новый
+    // StreamableHTTPServerTransport), поэтому остаётся `let`.
+    let transport = entry?.transport;
+    if (entry !== undefined) {
+      entry.lastUsedAt = Date.now();
+      entry.touchSeq = nextTouchSeq();
+    }
 
     if (transport === undefined) {
       const newTransport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
         onsessioninitialized: (sid: string) => {
-          sessions.set(sid, newTransport);
+          sessions.set(sid, {
+            transport: newTransport,
+            lastUsedAt: Date.now(),
+            touchSeq: nextTouchSeq(),
+            identity,
+          });
           logger.info({ session: sid, identity }, 'mcp session opened');
+          // enforceMaxSessions запускается ПОСЛЕ insert'а новой записи:
+          // у новой записи самый свежий lastUsedAt+touchSeq, поэтому при
+          // переполнении вытесняется самая старая, а не только что
+          // открытая — это поведение детерминировано благодаря touchSeq.
+          enforceMaxSessions();
         },
       });
       newTransport.onclose = () => {
@@ -254,9 +394,13 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
   });
 
   const close = async (): Promise<void> => {
-    for (const [, t] of sessions) {
+    if (sessionJanitor !== undefined) {
+      clearInterval(sessionJanitor);
+      sessionJanitor = undefined;
+    }
+    for (const [, e] of sessions) {
       try {
-        await t.close();
+        await e.transport.close();
       } catch {
         // best-effort: продолжаем закрывать остальные
       }
@@ -280,7 +424,24 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
     }
   };
 
-  return { app, config, logger, plane, cache, identityStore, audit, rateLimiter, gitRefs, metrics, close };
+  return {
+    app,
+    config,
+    logger,
+    plane,
+    cache,
+    identityStore,
+    audit,
+    rateLimiter,
+    gitRefs,
+    metrics,
+    close,
+    _sessions: {
+      size: () => sessions.size,
+      sweepIdle: sweepIdleSessions,
+      enforceMaxSessions,
+    },
+  };
 }
 
 function headerString(v: string | string[] | undefined): string | undefined {

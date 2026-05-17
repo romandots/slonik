@@ -449,5 +449,59 @@ MCP сам не клонирует репозитории. Все связи —
 
 - MCP экспонирует `/metrics` в Prometheus-формате: `mcp_tool_calls_total`,
   `mcp_tool_duration_seconds`, `mcp_plane_errors_total`, `mcp_rate_limited_total`.
+  Memory-bound метрики (SLONK-5): `mcp_cache_size` (gauge),
+  `mcp_cache_evictions_total{reason="ttl"|"cap"}`, `mcp_active_sessions`
+  (gauge), `mcp_sessions_evicted_total{reason="idle"|"cap"}`.
 - Plane стандартно метрик не отдаёт; парсим логи через promtail → Loki.
 - Grafana — преднастроенный дашборд `slonk-overview` (см. [CONFIGURATION.md](./CONFIGURATION.md#observability)).
+
+### 12.1 Memory-bound knobs (SLONK-5)
+
+mcp-kanban защищён от безграничного роста памяти на маленьких хостах
+четырьмя независимыми механизмами, конфигурируемыми через ENV (см.
+[CONFIGURATION.md §2.6](./CONFIGURATION.md#26-mcp-server) и
+[§5 Resource limits for small hosts](./CONFIGURATION.md#resource-limits-for-small-hosts)):
+
+- `MCP_CACHE_MAX_ENTRIES` (default 2048) — FIFO-cap на размер `TtlCache`.
+- `MCP_SESSION_IDLE_MS` (default 30 мин) — idle-timeout MCP-сессии.
+- `MCP_SESSION_GC_INTERVAL_MS` (default 60s) — период janitor'а; 0
+  отключает фоновую очистку.
+- `MCP_MAX_SESSIONS` (default 256) — LRU-cap на число одновременных сессий.
+
+Поведение механизмов (контракт для агентов и тестов):
+
+- **`TtlCache` (cache-eviction).** Ключ — `tool + inputHash`, значение
+  кладётся на TTL=10s. Истёкшие записи удаляются (а) лениво на `get()`
+  для запрошенного ключа и (б) периодическим `sweepExpired()` каждые
+  256 `set()`-ов (амортизированно O(1) на запись). При превышении
+  `MCP_CACHE_MAX_ENTRIES` `set()` вытесняет **самый старый по порядку
+  вставки** ключ (FIFO, не LRU — `Map`-iteration order). Это
+  компромисс «дёшево + предсказуемо»; сценарий «hit-once и забыли»
+  превращает кеш в FIFO-очередь, что не хуже отсутствия кеша. После
+  любого успешного write-tool'а вызывается `cache.clear()`. Метрики:
+  `mcp_cache_size`, `mcp_cache_evictions_total{reason="ttl"|"cap"}`.
+- **MCP-сессии (idle + LRU).** Каждая сессия хранит `{transport,
+  lastUsedAt, touchSeq, identity}`. `lastUsedAt` и монотонный
+  `touchSeq` обновляются на `onsessioninitialized` и при каждом
+  входящем запросе. Janitor `setInterval(...).unref()` с периодом
+  `MCP_SESSION_GC_INTERVAL_MS` (`0` отключает) обходит карту и
+  закрывает сессии с `now - lastUsedAt > MCP_SESSION_IDLE_MS`
+  (`evictSession` делает best-effort `await transport.close()`; не
+  throw'ит при двойном close). LRU-cap отрабатывает после insert'а
+  новой сессии: если `size > MCP_MAX_SESSIONS`, вытесняется сессия с
+  минимальным `(lastUsedAt, touchSeq)` — `touchSeq` нужен как
+  детерминированный tie-breaker при равном `lastUsedAt` (1ms-burst
+  создаёт несколько записей с одинаковым `Date.now()`). Метрики:
+  `mcp_active_sessions`, `mcp_sessions_evicted_total{reason="idle"|"cap"}`.
+- **`getIssueBySequenceId` (sequence-id pagination).** Поиск задачи
+  по `<IDENT>-<seq>` идёт постранично по 50 issue'ов c early-exit'ом
+  на первой найденной записи: до SLONK-5 был один `?per_page=500`
+  запрос на каждый lookup, что давало пик heap'а на сериализации
+  всего списка. Курсор читается как `next_cursor` (Plane v1.3.0) с
+  fallback на `next` (pre-1.3 / совместимость); `MAX_PAGES=50` —
+  hard-cap (2500 issue'ов) против зацикленного next-cursor'а. Если
+  sequence_id фактически лежит дальше — tool вернёт `NOT_FOUND` (см.
+  CONFIGURATION.md §5 «Тюнинг под другие хосты»).
+
+Плюс на уровне infra все контейнеры compose имеют `mem_limit:` — см.
+секцию [Resource limits for small hosts](./CONFIGURATION.md#resource-limits-for-small-hosts).

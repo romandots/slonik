@@ -117,7 +117,11 @@ export interface PlaneComment {
 
 export interface ListResult<T> {
   results: T[];
+  // Plane v1.3.0 шлёт opaque cursor в поле `next_cursor`; более ранние
+  // pre-release сборки шлют `next`. Читаем оба, чтобы пагинация работала
+  // на обоих API shape'ах (см. также `extractNextCursor`).
   next?: string | null;
+  next_cursor?: string | null;
   count?: number;
 }
 
@@ -127,6 +131,16 @@ export interface ListResult<T> {
 function unwrapList<T>(resp: T[] | ListResult<T> | { results: T[] }): T[] {
   if (Array.isArray(resp)) return resp;
   return resp.results ?? [];
+}
+
+// Plane v1.3.0 называет cursor `next_cursor`; pre-1.3 сборки шлют `next`.
+// Возвращаем тот, что непустой, или undefined — это сигнал «страниц больше нет».
+function extractNextCursor<T>(resp: ListResult<T>): string | undefined {
+  const candidate = resp.next_cursor ?? resp.next;
+  if (candidate === undefined || candidate === null || candidate === '') {
+    return undefined;
+  }
+  return candidate;
 }
 
 export interface ListIssuesFilter {
@@ -595,12 +609,47 @@ export class PlaneClient {
   async getIssueBySequenceId(
     workspaceSlug: string,
     projectId: string,
-    identifier: string,
+    _identifier: string,
     sequenceId: number,
   ): Promise<PlaneIssue | undefined> {
-    // Plane не отдаёт прямого "lookup by SLONK-123" — фильтруем issues.
-    const all = await this.listIssues(workspaceSlug, projectId, { limit: 500 });
-    return all.find((i) => i.sequence_id === sequenceId);
+    // Раньше: один запрос `?per_page=500`, который сериализовал все
+    // 500 issue'ов c `description_html` каждый раз, когда агент адресовал
+    // задачу как `SLONK-N`. Это и memory-pressure (~10–100 KB на запись),
+    // и swap-триггер на маленьком хосте — см. SLONK-5.
+    //
+    // Теперь: страницы по `LOOKUP_PAGE_SIZE` (50) с early-exit на первой
+    // же странице, содержащей нужный sequence_id. В худшем случае
+    // (sequence_id у задачи в самом конце) суммарный объём чтения тот же,
+    // но в типичном (последняя задача / её соседи — top of recent list)
+    // обрывается на первой странице. Plane v1.3.0 сортирует issues
+    // `created_at DESC` по умолчанию.
+    const PAGE_SIZE = 50;
+    const MAX_PAGES = 50; // 50 * 50 = 2500 issue'ов; больше — это уже не
+                          // «маленький хост» и нужен real lookup. См. note ниже.
+    let cursor: string | undefined;
+    for (let page = 0; page < MAX_PAGES; page += 1) {
+      const query: Record<string, string | number | undefined> = {
+        per_page: PAGE_SIZE,
+      };
+      if (cursor !== undefined) query['cursor'] = cursor;
+      const resp = await this.request<ListResult<PlaneIssue> | PlaneIssue[]>(
+        `workspaces/${workspaceSlug}/projects/${projectId}/issues/`,
+        { query },
+      );
+      const items = Array.isArray(resp) ? resp : resp.results;
+      const found = items.find((i) => i.sequence_id === sequenceId);
+      if (found !== undefined) return found;
+      // Конец списка: либо пустая страница, либо явно нет next-cursor.
+      if (items.length === 0) return undefined;
+      if (Array.isArray(resp)) return undefined; // legacy non-paginated shape
+      // Plane v1.3.0: `next_cursor`; pre-1.3: `next`. Читаем оба.
+      const next = extractNextCursor(resp);
+      if (next === undefined) return undefined;
+      cursor = next;
+    }
+    // Защитная заглушка — мы намеренно прекращаем сканировать после
+    // MAX_PAGES, чтобы не зациклиться на бажном Plane (next === self).
+    return undefined;
   }
 
   async createIssue(

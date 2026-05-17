@@ -7,6 +7,79 @@
 
 ## [Unreleased]
 
+### Added
+- **Bounded memory growth для mcp-kanban на маленьких хостах (SLONK-5).**
+  Чтобы один контейнер не выедал всю RAM на 4-GB-хосте (Plane backend +
+  4 frontend'а + Postgres + worker'ы в 2 GB не помещаются), на уровне
+  инфры и приложения добавлены жёсткие верхние границы:
+  - `mem_limit:` на всех 12 длительных контейнерах `docker-compose.yml`
+    (`postgres 512m`, `redis 128m`, `rabbitmq 256m`, `minio 192m`,
+    `plane-api 512m`, `plane-worker 384m`, `plane-beat 128m`,
+    `plane-web/admin/space/live 192m` каждый, `plane-proxy 96m`,
+    `mcp-kanban 256m`, `plane-migrator 384m`). Сумма ~3.3 GB —
+    baseline под 4-GB-хост.
+  - `TtlCache` в `src/cache.ts` получил FIFO-cap по числу ключей
+    (`MCP_CACHE_MAX_ENTRIES`, default 2048) и периодический
+    `sweepExpired()` каждые 256 `set()`-ов. Раньше Map росла
+    бесконечно по уникальным ключам в окне TTL=10s.
+  - MCP-сессии в `src/server.ts` получили idle-timeout
+    (`MCP_SESSION_IDLE_MS`, default 30 мин), фоновый janitor
+    (`MCP_SESSION_GC_INTERVAL_MS`, default 60s) и жёсткий LRU-cap
+    (`MCP_MAX_SESSIONS`, default 256). До этого `sessions: Map`
+    удалял запись только через `transport.onclose` — при OOM-kill /
+    network drop / `docker restart` клиента сессия жила forever,
+    держа `McpServer` + 22 tool-замыкания.
+  - Поиск задачи по `<IDENT>-<seq>` в `plane-client.ts`
+    (`getIssueBySequenceId`) пейджинирует Plane постранично по 50
+    issue'ов с early-exit'ом на найденном `sequence_id` — раньше
+    тянулся `?per_page=500` на каждый lookup, что давало пик heap'а
+    на JSON-парсинге.
+  - Монотонный `touchSeq` в `SessionEntry` как детерминированный
+    tie-breaker для LRU-eviction'а при равных `lastUsedAt` (1ms-burst
+    одинаковых timestamp'ов больше не делает eviction «лотерейным»).
+  - Четыре новых ENV — `MCP_CACHE_MAX_ENTRIES`, `MCP_SESSION_IDLE_MS`,
+    `MCP_SESSION_GC_INTERVAL_MS`, `MCP_MAX_SESSIONS` — провалидированы
+    через zod в `src/config.ts`, дефолты зашиты в код; ручная правка
+    `.env` под базовый сценарий не требуется (закомментированные
+    значения с пояснениями есть в `.env.example`).
+  - Четыре новые Prometheus-метрики на `/metrics` (`MCP_METRICS_ENABLED=1`):
+    `mcp_cache_size` (gauge), `mcp_cache_evictions_total{reason="ttl"|"cap"}`
+    (counter), `mcp_active_sessions` (gauge),
+    `mcp_sessions_evicted_total{reason="idle"|"cap"}` (counter).
+
+### Changed
+- **`getIssueBySequenceId` теперь читает курсор пагинации Plane как
+  `next_cursor` с fallback на `next` (SLONK-5).** Поведение API
+  изменено: до SLONK-5 единственный запрос с `?per_page=500` отдавал
+  весь список без пагинации; теперь функция идёт постранично по
+  `per_page=50` и продолжает запрашивать следующую страницу пока
+  присутствует `next_cursor` (Plane v1.3.0) или `next` (pre-1.3 /
+  совместимость). Внешний контракт tool'ов `get_issue` /
+  `get_issue_history` не меняется — те же входы/выходы.
+
+### Documentation
+- **`docs/CONFIGURATION.md` — новая секция §5 «Resource limits for
+  small hosts» (SLONK-5).** Таблица `mem_limit:` по сервисам с
+  обоснованием, явная пометка «цифры — baseline под тюнинг» и
+  предупреждение про реальную OOM-нагрузку на `plane-worker` (Celery
+  под пиками автоматизаций); тюнинг под 2/4/8/16+ GB RAM; команды
+  проверки лимитов через `docker compose config | yq` и `docker
+  stats`; описание четырёх MCP-knob'ов и их метрик с явной ремаркой,
+  что для базового сценария ручная правка `.env` не нужна (дефолты
+  в `src/config.ts`, `.env.example` — справочный). Четыре новых ENV
+  добавлены в reference-таблицу §2.6.
+- **`docs/SPEC.md` §12 и новая §12.1 «Memory-bound knobs (SLONK-5)».**
+  Новые метрики добавлены в §12; в §12.1 описано **поведение**
+  механизмов — алгоритм cache-eviction (FIFO + lazy TTL + периодический
+  `sweepExpired`), session idle-timeout и LRU-cap с tie-breaker'ом
+  `touchSeq`, постраничный sequence-id lookup с `next_cursor`/`next`
+  и `MAX_PAGES=50`.
+- **`docs/USER_GUIDE.md` §1.1** теперь явно говорит, что RAM < 4 GB
+  не поддерживается (SLONK-5), со ссылкой на новые ENV и секцию
+  CONFIGURATION.md.
+- **`.env.example` — блок «Memory bounds (SLONK-5)»** с четырьмя
+  новыми ENV, дефолтами и комментариями (SLONK-5).
+
 ## [1.0.1] — 2026-05-16
 
 ### Fixed
