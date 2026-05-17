@@ -7,6 +7,7 @@ import type { AuditLog } from '../audit.js';
 import type { RateLimiter } from '../rate-limit.js';
 import type { GitRefsIndex } from '../git-refs.js';
 import type { MetricsRegistry } from '../metrics.js';
+import type { MinioClient } from '../minio-client.js';
 
 // Shared context для всех MCP tool'ов. Содержит то, что tool'ам нужно:
 // конфиг, идентичность вызывающего, обёртку Plane API, общий кеш.
@@ -41,6 +42,23 @@ export interface ToolContext {
   /** MinIO endpoint и bucket для attach_file. */
   minioEndpoint: string;
   minioBucket: string;
+  /**
+   * MinIO bucket для UI-аплоадов Plane (`MINIO_BUCKET_PLANE`,
+   * default `plane-uploads`). Используется в attachments discovery
+   * (SLONK-14).
+   */
+  minioBucketPlane: string;
+  /**
+   * Список known MinIO endpoints (origin'ы — `MINIO_PUBLIC_ENDPOINT`
+   * + `MINIO_INTERNAL_ENDPOINT`). Используется как whitelist в
+   * SSRF-фильтре парсера inline-asset'ов.
+   */
+  minioEndpoints: string[];
+  /**
+   * MinIO-клиент (presign / stat / list). В тестах подсовывается
+   * `FakeMinioClient`. SLONK-14.
+   */
+  minio: MinioClient;
   /** TTL presigned URL'ов в секундах. */
   signedUrlExpirationSec: number;
   /** SQLite-индекс git-привязок (Phase 6). */

@@ -39,6 +39,10 @@ import { unlinkGitRef } from './unlink-git-ref/handler.js';
 import { UnlinkGitRefInput } from './unlink-git-ref/schema.js';
 import { findIssuesByGitRef } from './find-issues-by-git-ref/handler.js';
 import { FindIssuesByGitRefInput, FindIssuesByGitRefShape } from './find-issues-by-git-ref/schema.js';
+import { listAttachments } from './list-attachments/handler.js';
+import { ListAttachmentsInput } from './list-attachments/schema.js';
+import { readAttachment } from './read-attachment/handler.js';
+import { ReadAttachmentInput } from './read-attachment/schema.js';
 import { hashInput, newTraceId } from '../audit.js';
 
 export type { ToolContext } from './context.js';
@@ -67,6 +71,8 @@ export const REGISTERED_TOOL_NAMES = [
   'link_git_ref',
   'unlink_git_ref',
   'find_issues_by_git_ref',
+  'list_attachments',
+  'read_attachment',
 ] as const;
 export type RegisteredToolName = (typeof REGISTERED_TOOL_NAMES)[number];
 
@@ -81,6 +87,10 @@ const WRITE_TOOLS = new Set<RegisteredToolName>([
   'attach_file',
   'link_git_ref',
   'unlink_git_ref',
+  // SLONK-14: read_attachment отдаёт presigned URL — каждый вызов
+  // логируется как write (один audit-row на вызов, rate-limit на
+  // identity), хотя в Plane не пишет.
+  'read_attachment',
 ]);
 
 // MCP SDK ожидает у tool-callback'а возврат с индексной сигнатурой
@@ -160,6 +170,11 @@ function recordPlaneErrorIfApplicable(ctx: ToolContext, err: unknown): void {
 /**
  * Обёртка для write-tools: rate-limit + trace_id + audit-write вокруг
  * пользовательского handler'а. Read-tools идут мимо этой обёртки.
+ *
+ * `auditMetadataFromResult` (опционально, SLONK-14): функция вытаскивает
+ * tool-specific метаданные из успешного результата для записи в
+ * `audit_log.metadata`. Используется `read_attachment` для записи
+ * `{bucket, object_key, expires_at}` — но НЕ самого presigned URL'а.
  */
 async function withWriteGuard<T>(args: {
   ctx: ToolContext;
@@ -167,6 +182,11 @@ async function withWriteGuard<T>(args: {
   input: unknown;
   issueIdFromInput?: (input: unknown) => string | undefined;
   fn: (traceId: string) => Promise<T>;
+  auditMetadataFromResult?: (result: T) => Record<string, unknown> | null;
+  /** Поля, которые нельзя возвращать клиенту-в-открытом-виде (e.g.
+   *  internal-only `audit` block в `read_attachment` — мы пишем его в
+   *  audit_log, но не отдаём клиенту). */
+  sanitiseResult?: (result: T) => unknown;
 }): Promise<ToolResult> {
   const traceId = newTraceId();
   const identity = args.ctx.resolveIdentity();
@@ -202,6 +222,7 @@ async function withWriteGuard<T>(args: {
   }
   try {
     const result = await args.fn(traceId);
+    const metadata = args.auditMetadataFromResult?.(result);
     args.ctx.audit.record({
       trace_id: traceId,
       identity,
@@ -212,9 +233,11 @@ async function withWriteGuard<T>(args: {
       error_code: null,
       event: args.tool === 'claim_issue' ? 'claim' : null,
       issue_id: args.issueIdFromInput?.(args.input) ?? null,
+      metadata: metadata !== undefined && metadata !== null ? JSON.stringify(metadata) : null,
     });
     finishMetrics('success', null);
-    return ok(result);
+    const sanitised = args.sanitiseResult !== undefined ? args.sanitiseResult(result) : result;
+    return ok(sanitised);
   } catch (err) {
     const code = err instanceof McpError ? err.code : 'INTERNAL';
     args.ctx.audit.record({
@@ -406,6 +429,12 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
           allowedProjects: ctx.allowedProjects,
           issueRef: input.issue_id,
           ...(input.project !== undefined ? { projectRef: input.project } : {}),
+          // SLONK-14: discovery вложений для preview-полей.
+          minio: ctx.minio,
+          planeBucket: ctx.minioBucketPlane,
+          mcpBucket: ctx.minioBucket,
+          minioEndpoints: ctx.minioEndpoints,
+          logger: ctx.logger,
         });
       }),
   );
@@ -753,5 +782,82 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
         const input = FindIssuesByGitRefInput.parse(args);
         return findIssuesByGitRef({ gitRefs: ctx.gitRefs, input });
       }),
+  );
+
+  // ---- list_attachments (SLONK-14) ----
+  // Read-tool: TTL-кэш на 10s, не пишет в audit, не учитывается в
+  // identity rate-limit. Объединяет 3 источника (Plane API attachments,
+  // inline-assets из comment_html, mcp-artifacts bucket) с partial-failure
+  // семантикой.
+  server.registerTool(
+    'list_attachments',
+    {
+      description:
+        'List attachments for an issue: Plane UI uploads, inline assets in comments, and MCP artifacts.',
+      inputSchema: ListAttachmentsInput.shape,
+    },
+    async (args) =>
+      await instrumentRead(ctx, 'list_attachments', async () => {
+        const input = ListAttachmentsInput.parse(args);
+        return await listAttachments({
+          plane: ctx.plane,
+          minio: ctx.minio,
+          cache: ctx.cache,
+          logger: ctx.logger,
+          workspace: ctx.defaultWorkspace,
+          defaultProjectRef: ctx.defaultProjectSlug,
+          allowedProjects: ctx.allowedProjects,
+          planeBucket: ctx.minioBucketPlane,
+          mcpBucket: ctx.minioBucket,
+          minioEndpoints: ctx.minioEndpoints,
+          input,
+        });
+      }),
+  );
+
+  // ---- read_attachment (SLONK-14) ----
+  // Write-tool в terms of audit: каждый вызов — отдельная audit-row с
+  // metadata `{bucket, object_key, expires_at}`. Сам presigned URL в
+  // audit/логи НЕ пишется — pino redact'ит поля `download_url`/`upload_url`.
+  server.registerTool(
+    'read_attachment',
+    {
+      description:
+        'Resolve an attachment id to a temporary presigned MinIO GET URL. Audited as a write op.',
+      inputSchema: ReadAttachmentInput.shape,
+    },
+    async (args) => {
+      const input = ReadAttachmentInput.parse(args);
+      return await withWriteGuard({
+        ctx,
+        tool: 'read_attachment',
+        input,
+        issueIdFromInput: (i) => (i as typeof input).issue_id,
+        fn: async () =>
+          await readAttachment({
+            plane: ctx.plane,
+            minio: ctx.minio,
+            cache: ctx.cache,
+            logger: ctx.logger,
+            workspace: ctx.defaultWorkspace,
+            defaultProjectRef: ctx.defaultProjectSlug,
+            allowedProjects: ctx.allowedProjects,
+            planeBucket: ctx.minioBucketPlane,
+            mcpBucket: ctx.minioBucket,
+            minioEndpoints: ctx.minioEndpoints,
+            expiresInSec: ctx.signedUrlExpirationSec,
+            input,
+          }),
+        auditMetadataFromResult: (result) => result.audit,
+        // Внутренний `audit`-блок отдавать клиенту не нужно — он же
+        // дублирует bucket/object_key, которые из абстракции MCP видеть
+        // незачем (id уже самодостаточен).
+        sanitiseResult: (result) => {
+          const { audit: _audit, ...rest } = result;
+          void _audit;
+          return rest;
+        },
+      });
+    },
   );
 }
