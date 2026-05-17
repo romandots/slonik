@@ -79,6 +79,14 @@
   Битый JSON в `state_aliases` лечится до `[]`, чтобы не валить
   стартап MCP из-за одной строки.
 
+### Documentation
+- **`docs/USER_GUIDE.md` §6.4 — документировано известное ограничение
+  `make smoke-roles` (SLONK-6).** Скрипт сейчас открывает identity-стор
+  по контейнерному пути `/mcp_data/identity.sqlite` и с хоста падает
+  `SqliteError`; зафиксирован обходной путь и ссылка на follow-up по
+  переезду пути в ENV. Основное поведение «claim_issue по всем ролям»
+  покрыто юнит-/интеграционными тестами.
+
 - **Bounded memory growth для mcp-kanban на маленьких хостах (SLONK-5).**
   Чтобы один контейнер не выедал всю RAM на 4-GB-хосте (Plane backend +
   4 frontend'а + Postgres + worker'ы в 2 GB не помещаются), на уровне
