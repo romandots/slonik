@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -219,10 +219,14 @@ describe('mcp-kanban HTTP server', () => {
 // drop / `docker restart` сессия оставалась forever, держа McpServer +
 // 22 tool-замыкания. На хосте 2 GB RAM это давало memory pressure.
 describe('mcp-kanban /mcp session eviction (SLONK-5)', () => {
+  // Каждый тест должен видеть изолированную карту сессий — иначе порядок
+  // тестов начинает влиять на результат (первый тест очищает сессии,
+  // второй вырастает на 3, и т.д.). Поднимаем сервер в beforeEach/afterEach,
+  // чтобы добавление новых кейсов не ломало уже существующие.
   let built: BuiltServer;
   let tmpDir: string;
 
-  beforeAll(async () => {
+  beforeEach(async () => {
     // Короткий idle и cap=2 — чтобы тестам не приходилось ждать.
     // GC_INTERVAL=0 отключает фоновый janitor; мы дёргаем sweepIdle() руками,
     // чтобы тест был детерминирован.
@@ -247,7 +251,7 @@ describe('mcp-kanban /mcp session eviction (SLONK-5)', () => {
     await built.app.ready();
   });
 
-  afterAll(async () => {
+  afterEach(async () => {
     await built.close();
     rmSync(tmpDir, { recursive: true, force: true });
   });
