@@ -191,9 +191,23 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
   interface SessionEntry {
     transport: StreamableHTTPServerTransport;
     lastUsedAt: number;
+    // Монотонный sequence tie-breaker для LRU. `Date.now()` имеет
+    // миллисекундную гранулярность: при сценарии шторма (например,
+    // несколько клиентов одновременно открыли сессию в одном tick'е)
+    // несколько записей получат одинаковый `lastUsedAt`, и сравнение
+    // только по timestamp эвиктит «лотерейно» (зависит от порядка обхода
+    // Map). Прибавляем монотонно растущий `seq` и сортируем сначала по
+    // timestamp, затем по seq — самая недавно затронутая запись всегда
+    // выигрывает.
+    touchSeq: number;
     identity: AgentIdentity | undefined;
   }
   const sessions = new Map<string, SessionEntry>();
+  let sessionTouchSeq = 0;
+  const nextTouchSeq = (): number => {
+    sessionTouchSeq += 1;
+    return sessionTouchSeq;
+  };
 
   const evictSession = (sid: string, reason: 'idle' | 'cap'): void => {
     const entry = sessions.get(sid);
@@ -213,14 +227,22 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
 
   const enforceMaxSessions = (): void => {
     while (sessions.size > config.MCP_MAX_SESSIONS) {
-      // LRU: ищем запись с минимальным lastUsedAt. Размер map ограничен
-      // сотнями — линейный проход дешевле, чем поддержание отдельного
-      // priority-queue.
+      // LRU: ищем запись с минимальным lastUsedAt; при равных timestamp'ах
+      // (один tick Date.now() = 1ms) берём с минимальным touchSeq —
+      // монотонный счётчик гарантирует детерминированную FIFO-семантику
+      // и защищает только что добавленную сессию от случайной эвикции.
+      // Размер map ограничен сотнями — линейный проход дешевле, чем
+      // поддержание отдельного priority-queue.
       let oldestSid: string | undefined;
       let oldestTs = Infinity;
+      let oldestSeq = Infinity;
       for (const [sid, entry] of sessions) {
-        if (entry.lastUsedAt < oldestTs) {
+        if (
+          entry.lastUsedAt < oldestTs ||
+          (entry.lastUsedAt === oldestTs && entry.touchSeq < oldestSeq)
+        ) {
           oldestTs = entry.lastUsedAt;
+          oldestSeq = entry.touchSeq;
           oldestSid = sid;
         }
       }
@@ -253,9 +275,14 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
     const identity = (request as unknown as AuthedRequest).identity;
 
     const sessionId = headerString(request.headers['mcp-session-id']);
-    let entry = sessionId !== undefined ? sessions.get(sessionId) : undefined;
+    const entry = sessionId !== undefined ? sessions.get(sessionId) : undefined;
+    // transport переприсваивается ниже, если сессия только создаётся (новый
+    // StreamableHTTPServerTransport), поэтому остаётся `let`.
     let transport = entry?.transport;
-    if (entry !== undefined) entry.lastUsedAt = Date.now();
+    if (entry !== undefined) {
+      entry.lastUsedAt = Date.now();
+      entry.touchSeq = nextTouchSeq();
+    }
 
     if (transport === undefined) {
       const newTransport = new StreamableHTTPServerTransport({
@@ -264,9 +291,14 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
           sessions.set(sid, {
             transport: newTransport,
             lastUsedAt: Date.now(),
+            touchSeq: nextTouchSeq(),
             identity,
           });
           logger.info({ session: sid, identity }, 'mcp session opened');
+          // enforceMaxSessions запускается ПОСЛЕ insert'а новой записи:
+          // у новой записи самый свежий lastUsedAt+touchSeq, поэтому при
+          // переполнении вытесняется самая старая, а не только что
+          // открытая — это поведение детерминировано благодаря touchSeq.
           enforceMaxSessions();
         },
       });
