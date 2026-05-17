@@ -388,6 +388,13 @@ MCP ограничивает:
 - Опциональный файловый sink — `MCP_LOG_FILE=/var/log/mcp/server.log` (том `mcp_logs`).
 - Аудит всех write-операций — отдельная таблица `audit_log` в `mcp_data/audit.sqlite`:
   `trace_id, ts, identity, tool, input_hash, plane_request_id, outcome, error_code`.
+- `read_attachment` (SLONK-14) формально read-only, но **аудитится как write**:
+  каждая выдача presigned URL пишет запись в `audit_log` с полем
+  `metadata = {bucket, object_key, expires_at}`. Сам URL и
+  `X-Amz-Signature` в audit **не** попадают.
+- Logger pino редактирует ключи `MCP_AUTH_TOKEN`, `PLANE_API_KEY`,
+  `*_PASSWORD`, `MINIO_SECRET_KEY`, `download_url`, `upload_url`,
+  `presigned_url` — они никогда не утекают в stdout/файловый лог.
 - В описание Plane-комментариев MCP **не** добавляет секретных значений (токены,
   пути с пользовательскими credentials).
 
