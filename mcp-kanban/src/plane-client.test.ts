@@ -196,4 +196,33 @@ describe('PlaneClient.getIssueBySequenceId — paginated early-exit (SLONK-5)', 
     expect(got?.sequence_id).toBe(2);
     expect(calls).toHaveLength(1);
   });
+
+  // Plane v1.3.0 называет cursor `next_cursor`, не `next`. Раньше код читал
+  // только `next`, из-за чего пагинация останавливалась после первой страницы
+  // и любой `SLONK-N` за пределами первой страницы возвращал NOT_FOUND.
+  it('paginates with next_cursor field (Plane v1.3.0 shape)', async () => {
+    const page1 = Array.from({ length: 50 }, (_, i) => issue(200 - i));    // 200..151
+    const page2 = Array.from({ length: 50 }, (_, i) => issue(150 - i));    // 150..101
+    const { client, calls } = makeClient([
+      jsonResp(200, { results: page1, next_cursor: 'c2' }),
+      jsonResp(200, { results: page2, next_cursor: null }),
+    ]);
+    const got = await client.getIssueBySequenceId('agents', 'proj-1', 'SLONK', 110);
+    expect(got?.sequence_id).toBe(110);
+    expect(calls).toHaveLength(2);
+    expect(calls[1]?.url).toMatch(/cursor=c2/);
+  });
+
+  it('prefers next_cursor over next when both fields are present', async () => {
+    const page1 = Array.from({ length: 50 }, (_, i) => issue(200 - i));
+    const page2 = Array.from({ length: 50 }, (_, i) => issue(150 - i));
+    const { client, calls } = makeClient([
+      // Plane может прислать оба поля; правильное — next_cursor.
+      jsonResp(200, { results: page1, next: 'wrong', next_cursor: 'right' }),
+      jsonResp(200, { results: page2, next_cursor: null }),
+    ]);
+    const got = await client.getIssueBySequenceId('agents', 'proj-1', 'SLONK', 110);
+    expect(got?.sequence_id).toBe(110);
+    expect(calls[1]?.url).toMatch(/cursor=right/);
+  });
 });

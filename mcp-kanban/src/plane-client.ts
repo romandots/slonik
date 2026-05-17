@@ -117,7 +117,11 @@ export interface PlaneComment {
 
 export interface ListResult<T> {
   results: T[];
+  // Plane v1.3.0 шлёт opaque cursor в поле `next_cursor`; более ранние
+  // pre-release сборки шлют `next`. Читаем оба, чтобы пагинация работала
+  // на обоих API shape'ах (см. также `extractNextCursor`).
   next?: string | null;
+  next_cursor?: string | null;
   count?: number;
 }
 
@@ -127,6 +131,16 @@ export interface ListResult<T> {
 function unwrapList<T>(resp: T[] | ListResult<T> | { results: T[] }): T[] {
   if (Array.isArray(resp)) return resp;
   return resp.results ?? [];
+}
+
+// Plane v1.3.0 называет cursor `next_cursor`; pre-1.3 сборки шлют `next`.
+// Возвращаем тот, что непустой, или undefined — это сигнал «страниц больше нет».
+function extractNextCursor<T>(resp: ListResult<T>): string | undefined {
+  const candidate = resp.next_cursor ?? resp.next;
+  if (candidate === undefined || candidate === null || candidate === '') {
+    return undefined;
+  }
+  return candidate;
 }
 
 export interface ListIssuesFilter {
@@ -628,8 +642,9 @@ export class PlaneClient {
       // Конец списка: либо пустая страница, либо явно нет next-cursor.
       if (items.length === 0) return undefined;
       if (Array.isArray(resp)) return undefined; // legacy non-paginated shape
-      const next = resp.next;
-      if (next === undefined || next === null || next === '') return undefined;
+      // Plane v1.3.0: `next_cursor`; pre-1.3: `next`. Читаем оба.
+      const next = extractNextCursor(resp);
+      if (next === undefined) return undefined;
       cursor = next;
     }
     // Защитная заглушка — мы намеренно прекращаем сканировать после
