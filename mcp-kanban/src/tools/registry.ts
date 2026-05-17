@@ -584,6 +584,7 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
             plane: ctx.plane,
             cache: ctx.cache,
             audit: ctx.audit,
+            identityStore: ctx.identityStore,
             workspace: ctx.defaultWorkspace,
             defaultProjectRef: ctx.defaultProjectSlug,
             allowedProjects: ctx.allowedProjects,

@@ -20,6 +20,19 @@ Thumbs.db
 # Содержит список проектов/идентичностей для конкретного инстанса и в git не едет.
 mcp-kanban/bootstrap/manifest.yaml
 
+# SLONK-6: кастомные agent-роли в `roles/`. Дефолтные 7 ролей и README
+# коммитятся, любые другие `*.md` — нет (пользователь добавляет свои
+# роли локально, они описывают конкретную инсталляцию).
+mcp-kanban/roles/*.md
+!mcp-kanban/roles/README.md
+!mcp-kanban/roles/analyst-agent.md
+!mcp-kanban/roles/developer-agent.md
+!mcp-kanban/roles/security-auditor-agent.md
+!mcp-kanban/roles/code-review-agent.md
+!mcp-kanban/roles/qa-agent.md
+!mcp-kanban/roles/doc-agent.md
+!mcp-kanban/roles/merger-agent.md
+
 # Node / pnpm (MCP server, Phase 2+)
 node_modules/
 dist/

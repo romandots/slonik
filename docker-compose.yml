@@ -89,6 +89,10 @@ services:
   postgres:
     image: postgres:15.7-alpine
     <<: [*restart-policy, *logging]
+    # SLONK-5: mem_limit на всех сервисах, чтобы один контейнер не выедал
+    # всю RAM маленького хоста (минимум — 4 GB, см. USER_GUIDE §3.1).
+    # Постгресу нужно больше всех — shared_buffers + work_mem + WAL.
+    mem_limit: 512m
     command: postgres -c max_connections=1000
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
@@ -112,6 +116,7 @@ services:
   redis:
     image: valkey/valkey:7.2.11-alpine
     <<: [*restart-policy, *logging]
+    mem_limit: 128m
     volumes:
       - redis_data:/data
     networks:
@@ -127,6 +132,7 @@ services:
   rabbitmq:
     image: rabbitmq:3.13.6-management-alpine
     <<: [*restart-policy, *logging]
+    mem_limit: 256m
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS}
@@ -146,6 +152,7 @@ services:
   minio:
     image: minio/minio:RELEASE.2025-09-07T16-13-09Z
     <<: [*restart-policy, *logging]
+    mem_limit: 192m
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
@@ -171,6 +178,7 @@ services:
     image: makeplane/plane-backend:${PLANE_IMAGE_TAG}
     <<: *logging
     restart: "no"
+    mem_limit: 384m
     command: ./bin/docker-entrypoint-migrator.sh
     environment:
       <<: *plane-backend-env
@@ -185,6 +193,9 @@ services:
   plane-api:
     image: makeplane/plane-backend:${PLANE_IMAGE_TAG}
     <<: [*restart-policy, *logging]
+    # Подходит для GUNICORN_WORKERS=1; при >1 workers — поднимать.
+    # См. docs/CONFIGURATION.md «Resource limits for small hosts».
+    mem_limit: 512m
     command: ./bin/docker-entrypoint-api.sh
     environment:
       <<: *plane-backend-env
@@ -215,6 +226,7 @@ services:
   plane-worker:
     image: makeplane/plane-backend:${PLANE_IMAGE_TAG}
     <<: [*restart-policy, *logging]
+    mem_limit: 384m
     command: ./bin/docker-entrypoint-worker.sh
     environment:
       <<: *plane-backend-env
@@ -229,6 +241,7 @@ services:
   plane-beat:
     image: makeplane/plane-backend:${PLANE_IMAGE_TAG}
     <<: [*restart-policy, *logging]
+    mem_limit: 128m
     command: ./bin/docker-entrypoint-beat.sh
     environment:
       <<: *plane-backend-env
@@ -247,6 +260,7 @@ services:
   plane-web:
     image: makeplane/plane-frontend:${PLANE_IMAGE_TAG}
     <<: [*restart-policy, *logging]
+    mem_limit: 192m
     depends_on:
       plane-api:
         condition: service_healthy
@@ -263,6 +277,7 @@ services:
   plane-admin:
     image: makeplane/plane-admin:${PLANE_IMAGE_TAG}
     <<: [*restart-policy, *logging]
+    mem_limit: 192m
     depends_on:
       plane-api:
         condition: service_healthy
@@ -279,6 +294,7 @@ services:
   plane-space:
     image: makeplane/plane-space:${PLANE_IMAGE_TAG}
     <<: [*restart-policy, *logging]
+    mem_limit: 192m
     depends_on:
       plane-api:
         condition: service_healthy
@@ -295,6 +311,7 @@ services:
   plane-live:
     image: makeplane/plane-live:${PLANE_IMAGE_TAG}
     <<: [*restart-policy, *logging]
+    mem_limit: 192m
     environment:
       REDIS_URL: redis://${REDIS_HOST}:${REDIS_PORT}/
       API_BASE_URL: http://api:8000
@@ -329,6 +346,9 @@ services:
       context: ./mcp-kanban
       dockerfile: Dockerfile
     <<: [*restart-policy, *logging]
+    # Узкий лимит — у mcp-kanban нет тяжёлых рабочих наборов в RAM
+    # (TtlCache bounded, MCP-сессии с idle-eviction; см. SLONK-5).
+    mem_limit: 256m
     environment:
       NODE_ENV: production
       MCP_SERVER_PORT: ${MCP_SERVER_PORT}
@@ -347,6 +367,15 @@ services:
       MCP_RETRY_BACKOFF_MS: ${MCP_RETRY_BACKOFF_MS}
       MCP_PLANE_TIMEOUT_MS: ${MCP_PLANE_TIMEOUT_MS}
       MCP_METRICS_ENABLED: ${MCP_METRICS_ENABLED}
+      # SLONK-6: путь к директории `roles/`. По умолчанию пусто — loader
+      # ищет рядом с package.json (`/app/roles`).
+      MCP_ROLES_DIR: ${MCP_ROLES_DIR:-}
+      # SLONK-5: bounded growth knobs. Дефолты в src/config.ts; через env
+      # можно ослабить или ужесточить под конкретный хост (см. docs).
+      MCP_CACHE_MAX_ENTRIES: ${MCP_CACHE_MAX_ENTRIES:-2048}
+      MCP_SESSION_IDLE_MS: ${MCP_SESSION_IDLE_MS:-1800000}
+      MCP_SESSION_GC_INTERVAL_MS: ${MCP_SESSION_GC_INTERVAL_MS:-60000}
+      MCP_MAX_SESSIONS: ${MCP_MAX_SESSIONS:-256}
       PLANE_API_BASE_URL: ${PLANE_API_BASE_URL}
       PLANE_API_KEY: ${PLANE_API_KEY:-}
       # Phase 5: attach_file использует bundled-MinIO как S3 backend.
@@ -372,6 +401,12 @@ services:
       # Loader сам выбирает manifest.yaml → manifest.example.yaml (см.
       # `src/bootstrap/manifest.ts`), так что fresh-checkout без `cp` работает.
       - ./mcp-kanban/bootstrap:/app/bootstrap:ro
+      # SLONK-6: roles/ — primary-источник agent-identities. Пользователь
+      # добавляет кастомные роли через `cp` нового `*.md` в эту директорию +
+      # `make bootstrap` (без rebuild'а образа). В образе лежит коробочный
+      # набор из 7 ролей (`COPY ./roles` в Dockerfile) — fallback, если bind
+      # источник пустой.
+      - ./mcp-kanban/roles:/app/roles:ro
     ports:
       - "${MCP_SERVER_PORT}:${MCP_SERVER_PORT}"
     depends_on:
@@ -402,6 +437,7 @@ services:
   plane-proxy:
     image: makeplane/plane-proxy:${PLANE_IMAGE_TAG}
     <<: [*restart-policy, *logging]
+    mem_limit: 96m
     environment:
       APP_DOMAIN: ${PLANE_APP_DOMAIN}
       SITE_ADDRESS: ${PLANE_SITE_ADDRESS}

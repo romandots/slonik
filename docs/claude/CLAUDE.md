@@ -203,6 +203,10 @@ Testing → Documenting → Merging → Done`) — это путь по умол
 - Игнорирование лейбла `needs-human` — это знак, что задаче нужен живой ревьюер.
 - `--no-verify` для pre-commit/CI-хуков; `force-push` в защищённые ветки.
 - Логирование `MCP_AUTH_TOKEN`, `PLANE_API_KEY`, `*_PASSWORD`, presigned URL'ов.
+- Работать над задачей в основном working tree клона вместо отдельной
+  git-worktree (см. подсекцию «Worktree (обязательно)» в секции «Git: дефолтные
+  правила» ниже) — за исключением случаев, когда это явно разрешено в
+  комментариях задачи.
 
 ## Версионирование и git (кастомизируется под проект)
 
@@ -221,6 +225,36 @@ Testing → Documenting → Merging → Done`) — это путь по умол
 `merger-agent` сливает фичевую ветку в `develop` и закрывает worktree,
 а `release-agent` (если есть) делает PR/MR из `develop` в `main`.
 Прямой push в `main` запрещён — только через PR с зелёным CI и approve.
+
+**Worktree (обязательно).** `developer-agent` **обязан** работать в отдельной
+git-worktree под каждую задачу — не в основном working tree клона. Worktree
+создаётся единой командой в самом начале шага 5 (до первого редактирования
+файлов), путь — рядом с основным клоном, в каталоге уровнем выше (рекомендуемая
+схема: `../<repo-name>-<IDENT>-<seq>` или `../-worktrees/<IDENT>-<seq>-<slug>`):
+
+```bash
+git worktree add ../<repo-name>-<IDENT>-<seq> -b <type>/<IDENT>-<seq>-<slug> main
+# где <type> = feature | fix | chore — по типу задачи
+```
+
+Все дальнейшие действия по задаче (редактирование, прогон тестов, `git add` /
+`git commit` / `git push`, `link_git_ref`) — **только из этого worktree**. В
+основном клоне ничего не трогать. Если worktree создать невозможно (явное
+указание пользователя; репо, которое ломается на worktree, — например, из-за
+submodule-конфигурации или хуков) — `block_issue` с причиной, **не работай
+молча в основном клоне**.
+
+Закрытие worktree — обязанность `merger-agent`-а после успешного мержа
+фичевой ветки и перевода задачи в `Done`:
+
+```bash
+git worktree remove ../<repo-name>-<IDENT>-<seq>
+# + git branch -d <type>/<IDENT>-<seq>-<slug>, если ветка слита и так принято в репо
+```
+
+Если worktree-каталога нет (developer работал в нестандартном пути,
+worktree уже снят) — отметить это в комментарии к задаче и пропустить шаг,
+не падать.
 
 **Имя ветки.** `feature/<IDENT>-<seq>-<slug>`, где `<IDENT>-<seq>` —
 issue_id из канбана, `<slug>` — kebab-case из 2–5 слов. Для багфиксов —

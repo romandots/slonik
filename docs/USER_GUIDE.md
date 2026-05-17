@@ -16,8 +16,10 @@
   — Default Project», identifier `SLONK`, с 11 канбан-состояниями и 14 лейблами);
 - MCP-сервер на `http://localhost:8787/mcp` с 24 tool'ами (3 git-tool'а +
   11 read + 9 write + `who_am_i`);
-- 6 идентичностей агентов в Plane: `analyst-agent`, `developer-agent`,
-  `security-auditor-agent`, `code-review-agent`, `qa-agent`, `doc-agent`;
+- 7 идентичностей агентов в Plane: `analyst-agent`, `developer-agent`,
+  `security-auditor-agent`, `code-review-agent`, `qa-agent`, `doc-agent`,
+  `merger-agent` (любую можно дополнить кастомными ролями через
+  `mcp-kanban/roles/<role>.md` — см. §6.4);
 - Claude Code (и/или Claude Desktop / Codex CLI) подключённый к MCP и
   обученный жить по workflow: `claim_issue` → работа → `transition_issue` →
   `link_git_ref` → `comment_issue` → `release_issue` / `Done`.
@@ -30,9 +32,19 @@
 |---|---|
 | ОС | macOS 13+, Linux (любой современный дистрибутив), Windows 11 + WSL2 |
 | Docker | Engine ≥ 24, Compose v2 |
-| CPU / RAM / диск | 4 CPU, 8 GB RAM, 20 GB свободного диска |
+| CPU / RAM / диск | 4 CPU, 8 GB RAM, 20 GB свободного диска (**жёсткий минимум — 4 GB RAM**; см. предупреждение ниже) |
 | Свободные порты на хосте | `3000` (Plane UI), `8787` (MCP). С `dev`-overlay'ем — также `8000`, `5432`, `6379`, `5672`, `15672`, `9000`, `9001`. |
 | Node.js (опционально) | 22 LTS — нужен только если хочется гонять `mcp-kanban` локально без Docker. Для штатного использования не требуется. |
+
+> **RAM < 4 GB не поддерживается.** На 2 GB RAM хосте стек уходит в
+> swap-thrashing (CPU/disk I/O синхронно растут до полки) — у Plane
+> backend нет ENV-tuning, чтобы влезть в 1 GB, и контейнеры начинают
+> вытеснять друг друга. mcp-kanban имеет защиту от безграничного роста
+> (TtlCache cap, idle-eviction MCP-сессий, постраничный seq lookup — см.
+> `MCP_CACHE_MAX_ENTRIES`, `MCP_SESSION_IDLE_MS`, `MCP_MAX_SESSIONS` в
+> [CONFIGURATION.md](./CONFIGURATION.md#resource-limits-for-small-hosts)),
+> но это не отменяет требования к Plane backend. Не пытайтесь запустить
+> на 2 GB.
 
 ### 1.2 Клонирование
 
@@ -613,9 +625,15 @@ Testing → Documenting → Merging → Done
 3. **Понять контекст.** `get_issue({ issue_id })` — прочитай title,
    description, meta-блок (`--- slonk:meta v1 ---`), последние комментарии,
    `get_issue_history` если надо.
-4. **Связать с кодом.** Создай ветку по конвенции
-   `feature/SLONK-<seq>-<slug>` и вызови
-   `link_git_ref({ issue_id, repo_url, branch })` сразу при первом push'е.
+4. **Связать с кодом.** `developer-agent` создаёт **отдельный git-worktree
+   под задачу** (это первое действие, до любых правок): `git worktree add
+   ../<repo-name>-<IDENT>-<seq> -b <type>/<IDENT>-<seq>-<slug> main`. Все
+   дальнейшие действия (правки, тесты, коммиты, push, `link_git_ref`) — только
+   из этого worktree, не из основного клона. `merger-agent` после успешного
+   мержа закрывает worktree (`git worktree remove …`). Полные правила и
+   исключения — подсекция «Worktree (обязательно)» в `CLAUDE.md` / разделе
+   «8.0 Git worktree» в `docs/CONVENTIONS.md`. При первом push'е — вызови
+   `link_git_ref({ issue_id, repo_url, branch })`.
 5. **Сделай работу.** Пиши код, тесты, документацию — в зависимости от роли.
    Каждый значимый шаг — `comment_issue({ issue_id, body })` коротким
    человеческим языком. Субагенты должны фиксировать результаты своей
@@ -702,7 +720,171 @@ Testing → Documenting → Merging → Done
 Агент вызовет `create_issue` — задача появится в `Backlog` workspace `agents`,
 проекта `SLONK` (переведите её в `To Do`, чтобы агенты взяли её в работу).
 
-### 6.4 Что увидите в логах после первого цикла
+### 6.4 Кастомные роли (SLONK-6)
+
+slonk не ограничивает тебя коробочными 7 ролями. Каждая identity
+описана **отдельным `*.md`-файлом** в `mcp-kanban/roles/` с YAML
+front-matter:
+
+```yaml
+---
+role: release-agent
+email: release-agent@slonk.local
+first_name: Release
+last_name: Agent
+default_state: Merging
+state_aliases:
+  - Release
+  - Релиз
+---
+# release-agent
+
+Описание роли для оператора (markdown ниже front-matter'а bootstrap
+не парсит, это документация).
+```
+
+Как добавить (рекомендуемый путь — интерактивная CLI, SLONK-12):
+
+```bash
+make add-role
+```
+
+Команда задаст по очереди обязательные поля (`role`, `email`,
+`first_name`, `last_name`, `default_state`), затем опционально —
+повторяющиеся `state_aliases` (Enter с пустой строкой завершает ввод
+алиасов), и положит готовый `<role>.md` в `mcp-kanban/roles/`. Каждое
+поле валидируется тем же `RoleDefinitionSchema`, что и `make bootstrap`,
+поэтому файл, который CLI создала, гарантированно будет прочитан
+loader'ом — single source of truth.
+
+Если файл `<role>.md` уже существует, команда откажется его
+перезаписать и завершится non-zero exit. Передай `--force`, если
+действительно нужно перезаписать.
+
+Non-interactive режим (для CI, provisioning-скриптов, сред без TTY) —
+полный набор флагов передаётся одной строкой:
+
+```bash
+make add-role ARGS='--role release-agent \
+  --email release-agent@slonk.local \
+  --first-name Release \
+  --last-name Agent \
+  --default-state Merging \
+  --state-alias Release \
+  --state-alias Релиз \
+  --dir ./mcp-kanban/roles \
+  --force'
+```
+
+Доступные флаги:
+
+| Флаг | Значение | Пример |
+|---|---|---|
+| `--role` | snake-case-with-dash идентификатор роли (обязательно) | `release-agent` |
+| `--email` | валидный email — нужен Plane для инвайта (обязательно) | `release-agent@slonk.local` |
+| `--first-name` | имя пользователя в Plane (обязательно) | `Release` |
+| `--last-name` | фамилия пользователя в Plane (обязательно) | `Agent` |
+| `--default-state` | каноническая колонка Plane, куда `claim_issue` переводит задачу для этой роли (обязательно) | `Merging` |
+| `--state-alias` | синоним колонки (повторяемый); можно указывать несколько раз для разных языков | `--state-alias Релиз --state-alias Shipping` |
+| `--dir` | директория, куда положить `<role>.md` (по умолчанию `MCP_ROLES_DIR` или `./roles`); создаётся автоматически | `./mcp-kanban/roles` |
+| `--force` | разрешить перезапись существующего `<role>.md` | — |
+
+Альтернатива — скопировать готовый шаблон руками:
+
+```bash
+cd mcp-kanban/roles
+cp merger-agent.md release-agent.md
+# поправь role, email, default_state, state_aliases
+cd ../..
+```
+
+В любом случае после создания файла:
+
+```bash
+make bootstrap
+```
+
+После `make bootstrap`:
+
+- `release-agent` появится в whitelist'е `X-Agent-Identity` (MCP начнёт
+  принимать запросы с этим заголовком);
+- `claim_issue` от этой роли будет переводить задачу в колонку
+  `Merging` (или в любой из `state_aliases`, если у вас она называется
+  «Release»);
+- Plane получит инвайт `release-agent@slonk.local` (в режиме
+  `per_user`).
+
+`make add-role` сама **не зовёт Plane** и не требует `PLANE_API_KEY` —
+она только пишет файл; инвайт пользователя и запись identity в
+`mcp_data/identity.sqlite` происходят следующим `make bootstrap`.
+Перебилд образа **не нужен** — директория `roles/` пробрасывается
+bind-mount'ом `./mcp-kanban/roles:/app/roles:ro`. Все `*.md`, кроме
+дефолтных 7 ролей и `README.md`, **в git не идут** (см. `.gitignore`):
+каждый инстанс держит свой набор ролей локально.
+
+**Локализованные колонки.** Если ты переименовал колонки Plane на
+русский (например, `Development` → `Разработка`), допиши их в
+`state_aliases` соответствующей роли. `claim_issue` принимает
+case-insensitive совпадение по любому из алиасов:
+
+```yaml
+default_state: Development
+state_aliases:
+  - Разработка
+  - Coding
+```
+
+При отсутствии совпадения tool возвращает `INVALID_INPUT` со списком
+фактических колонок проекта и подсказкой, что переименовать / куда
+добавить alias.
+
+**Smoke-проверка.** После добавления ролей рекомендуется прогнать
+интеграционный smoke против живого Plane:
+
+```bash
+make smoke-roles
+```
+
+Скрипт создаёт временную задачу в `MCP_DEFAULT_PROJECT`, для каждой
+identity из стора вызывает `claim_issue`, проверяет, что задача
+оказалась в колонке `default_state` (или одном из алиасов), и удаляет
+issue после прогона. JSON-вывод в stdout: одна строка на роль +
+summary.
+
+**Важно (SLONK-11): identity SQLite живёт в named-volume.**
+`make bootstrap` пишет `identity.sqlite` внутрь named-volume
+`slonk_mcp_data` (точка монтирования внутри контейнера —
+`/mcp_data/identity.sqlite`). С хоста этой директории нет, а
+`make smoke-roles` запускается через `pnpm tsx` именно с хоста.
+Чтобы smoke увидел стор, перед первым запуском скопируйте файл из
+volume на хост:
+
+```bash
+mkdir -p ./mcp_data
+docker compose cp slonk-mcp-kanban-1:/mcp_data/identity.sqlite ./mcp_data/identity.sqlite
+```
+
+(Имя контейнера зависит от compose-project — посмотрите своё через
+`docker compose ps`; по умолчанию это `<project>-mcp-kanban-1`, где
+`<project>` = имя директории с `docker-compose.yml`, т.е.
+`slonk-mcp-kanban-1` для канонического чекаута.)
+
+Путь до identity SQLite берётся из ENV `MCP_IDENTITY_STORE_PATH`;
+`Makefile`-таргет `smoke-roles` сам проставляет
+`MCP_IDENTITY_STORE_PATH=$(CURDIR)/mcp_data/identity.sqlite`. Если
+кладёте копию в нестандартное место — переопределите ENV вручную:
+
+```bash
+MCP_IDENTITY_STORE_PATH=/path/to/identity.sqlite \
+  cd mcp-kanban && pnpm tsx scripts/smoke-roles-claim.ts
+```
+
+После доливки новых ролей (`make add-role` + `make bootstrap`) копию
+нужно обновить тем же `docker compose cp`. В контейнере (`make bootstrap`
+через `docker compose run`) ENV не нужен — bootstrap-CLI продолжает
+писать в `/mcp_data/identity.sqlite` по умолчанию.
+
+### 6.5 Что увидите в логах после первого цикла
 
 Все write-операции пишутся в `mcp_data/audit.sqlite` (таблица `audit_log`).
 Каждая запись содержит `trace_id`, `identity`, `tool`, `outcome`. Это

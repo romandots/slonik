@@ -80,6 +80,32 @@ const ConfigSchema = z.object({
   MCP_PLANE_TIMEOUT_MS: PositiveInt.default(10_000),
   MCP_METRICS_ENABLED: Bool01.default(false),
 
+  // Roles directory (SLONK-6). По умолчанию — undefined: loader сам ищет
+  // `roles/` рядом с package.json. Переопределяется, если оператор смонтировал
+  // директорию в нестандартное место.
+  MCP_ROLES_DIR: optionalNonEmpty,
+
+  // Путь до identity SQLite (SLONK-11). По умолчанию — undefined; в контейнере
+  // bootstrap-CLI падает на `BOOTSTRAP_STORE_DEFAULT_PATH` (`/mcp_data/identity.sqlite`),
+  // а с хоста (`make smoke-roles`, ручной `pnpm tsx`) Makefile проставляет
+  // путь до bind/cp-копии (например, `$(CURDIR)/mcp_data/identity.sqlite`).
+  // Loader не выставляет дефолт сам, чтобы in-container bootstrap без ENV
+  // продолжал работать с исторической константой.
+  MCP_IDENTITY_STORE_PATH: optionalNonEmpty,
+
+  // Memory bounds (SLONK-5). Дефолты подобраны под хост 2 GB RAM, чтобы
+  // mcp-kanban не вытеснял Plane в swap при долгой работе агентов.
+  // TtlCache: FIFO-cap, защищает от безграничного роста по уникальным
+  // ключам (типичный сценарий — `get_issue` с разными issue-ref'ами).
+  MCP_CACHE_MAX_ENTRIES: PositiveInt.default(2048),
+  // MCP-сессии: idle-timeout + жёсткий cap. Если клиент уронился без
+  // graceful shutdown — сессия живёт здесь до janitor'а. 30 минут —
+  // запас, чтобы интерактивная работа агента в `/loop` не отвалилась.
+  MCP_SESSION_IDLE_MS: PositiveInt.default(30 * 60 * 1000),
+  // 0 отключает периодический janitor (для тестов и одноразовых CLI).
+  MCP_SESSION_GC_INTERVAL_MS: NonNegativeInt.default(60 * 1000),
+  MCP_MAX_SESSIONS: PositiveInt.default(256),
+
   // Метаданные процесса
   NODE_ENV: z.enum(['development', 'test', 'production']).default('production'),
 });

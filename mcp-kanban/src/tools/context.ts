@@ -4,6 +4,7 @@ import type { Logger } from '../logger.js';
 import type { PlaneClient } from '../plane-client.js';
 import type { TtlCache } from '../cache.js';
 import type { AuditLog } from '../audit.js';
+import type { IdentityStore } from '../bootstrap/store.js';
 import type { RateLimiter } from '../rate-limit.js';
 import type { GitRefsIndex } from '../git-refs.js';
 import type { MetricsRegistry } from '../metrics.js';
@@ -35,6 +36,11 @@ export interface ToolContext {
   allowedProjects: string[];
   /** Audit log (SQLite). Write-tools обязаны писать сюда каждое действие. */
   audit: AuditLog;
+  /**
+   * Identity-стор (SQLite). `claim_issue` читает отсюда `default_state`
+   * и `state_aliases` для маппинга «роль → колонка» (SLONK-6).
+   */
+  identityStore: IdentityStore;
   /** Rate limiter. Write-tools зовут .consume() перед Plane-вызовом. */
   rateLimiter: RateLimiter;
   /** Возвращает plane_user_id текущей identity, если known. */
