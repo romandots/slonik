@@ -351,11 +351,10 @@ identities:                                            # SLONK-6: legacy fallbac
 | `plane-proxy` | `96m` | Caddy reverse-proxy. |
 | `mcp-kanban` | `256m` | TtlCache bounded (`MCP_CACHE_MAX_ENTRIES`), MCP-сессии с idle-eviction (`MCP_SESSION_IDLE_MS` + `MCP_MAX_SESSIONS`). |
 
-Итоговая сумма — ~3.7 GB лимитов. На 4 GB хосте остаётся ~300 MB для
-ОС и Docker engine — это уже впритык: на голом 4 GB-хосте без
-overlay'ев (observability/backup) баseline ещё работает, но при
-включении любого из них лучше иметь 6 GB. Под 8 GB можно поднять
-лимиты по таблице ниже.
+Итоговая сумма — ~3.9 GiB лимитов. На 4 GB хосте остаётся ~100 MiB для
+ОС и Docker engine — baseline уже не помещается на голом 4 GB-хосте;
+рекомендуется минимум 6 GB даже без overlay'ев (observability/backup).
+Под 8 GB можно поднять лимиты по таблице ниже.
 
 > **Цифры — baseline под тюнинг.** Значения подобраны так, чтобы стек
 > выдерживал лёгкую интерактивную нагрузку (1–2 агента, единичные
