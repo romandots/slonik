@@ -39,12 +39,26 @@ function testEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
  */
 function seedIdentityStore(path: string, roles: readonly string[]): void {
   const seed = new IdentityStore({ path });
+  // SLONK-6: default_state / state_aliases — обязательная часть записи.
+  // Маппинг роль → колонка зашит в DEFAULT_STATES для теста; кастомные
+  // тесты могут не использовать этот хелпер и звать upsert напрямую.
+  const DEFAULT_STATES: Record<string, string> = {
+    'analyst-agent': 'Analysis',
+    'developer-agent': 'Development',
+    'security-auditor-agent': 'Security Review',
+    'code-review-agent': 'Code Review',
+    'qa-agent': 'Testing',
+    'doc-agent': 'Documenting',
+    'merger-agent': 'Merging',
+  };
   for (const role of roles) {
     seed.upsert({
       role,
       email: `${role}@slonk.local`,
       plane_user_id: null,
       mode: 'per_user',
+      default_state: DEFAULT_STATES[role] ?? 'Development',
+      state_aliases: [],
     });
   }
   seed.close();

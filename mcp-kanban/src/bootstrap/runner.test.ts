@@ -567,4 +567,96 @@ describe('runBootstrap', () => {
       ['Backlog', 'Development', 'Done', 'Review', 'To Do'].sort(),
     );
   });
+
+  // ---------- SLONK-6: identities source ----------
+
+  it('SLONK-6: identitiesSource=roles writes default_state + state_aliases into store', async () => {
+    const world = newWorld();
+    const manifest = makeManifest();
+    seedWorkspace(world, manifest);
+    const plane = fakePlane(world);
+    const r = await runBootstrap({
+      plane,
+      store,
+      logger: silentLogger,
+      manifest,
+      identitiesSource: {
+        kind: 'roles',
+        roles: [
+          {
+            role: 'release-agent',
+            email: 'release-agent@slonk.local',
+            first_name: 'Release',
+            last_name: 'Agent',
+            default_state: 'Done',
+            state_aliases: ['Release', 'Релиз'],
+          },
+        ],
+      },
+      config: { MCP_AGENT_IDENTITY_MODE: 'per_user' },
+    });
+    expect(r.identities.source).toBe('roles');
+    expect(r.identities.invited).toBe(1);
+    const rec = store.get('release-agent');
+    expect(rec?.default_state).toBe('Done');
+    expect(rec?.state_aliases).toEqual(['Release', 'Релиз']);
+  });
+
+  it('SLONK-6: identitiesSource=manifest writes default_state from manifest, empty aliases', async () => {
+    const world = newWorld();
+    const manifest = makeManifest();
+    seedWorkspace(world, manifest);
+    const plane = fakePlane(world);
+    const r = await runBootstrap({
+      plane,
+      store,
+      logger: silentLogger,
+      manifest,
+      identitiesSource: { kind: 'manifest' },
+      config: { MCP_AGENT_IDENTITY_MODE: 'per_user' },
+    });
+    expect(r.identities.source).toBe('manifest');
+    const dev = store.get('developer-agent');
+    expect(dev?.default_state).toBe('Development');
+    expect(dev?.state_aliases).toEqual([]);
+  });
+
+  it('SLONK-6: identitiesSource is idempotent — second run keeps state_aliases', async () => {
+    const world = newWorld();
+    const manifest = makeManifest();
+    seedWorkspace(world, manifest);
+    const plane = fakePlane(world);
+    const rolesSource = {
+      kind: 'roles' as const,
+      roles: [
+        {
+          role: 'developer-agent',
+          email: 'developer-agent@slonk.local',
+          first_name: 'Developer',
+          last_name: 'Agent',
+          default_state: 'Development',
+          state_aliases: ['Разработка'],
+        },
+      ],
+    };
+    await runBootstrap({
+      plane,
+      store,
+      logger: silentLogger,
+      manifest,
+      identitiesSource: rolesSource,
+      config: { MCP_AGENT_IDENTITY_MODE: 'per_user' },
+    });
+    const second = await runBootstrap({
+      plane,
+      store,
+      logger: silentLogger,
+      manifest,
+      identitiesSource: rolesSource,
+      config: { MCP_AGENT_IDENTITY_MODE: 'per_user' },
+    });
+    expect(second.identities.invited).toBe(0);
+    expect(second.identities.skipped).toBe(1);
+    expect(store.get('developer-agent')?.state_aliases).toEqual(['Разработка']);
+  });
 });

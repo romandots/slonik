@@ -16,8 +16,10 @@
   — Default Project», identifier `SLONK`, с 11 канбан-состояниями и 14 лейблами);
 - MCP-сервер на `http://localhost:8787/mcp` с 22 tool'ами (3 git-tool'а +
   10 read + 8 write + `who_am_i`);
-- 6 идентичностей агентов в Plane: `analyst-agent`, `developer-agent`,
-  `security-auditor-agent`, `code-review-agent`, `qa-agent`, `doc-agent`;
+- 7 идентичностей агентов в Plane: `analyst-agent`, `developer-agent`,
+  `security-auditor-agent`, `code-review-agent`, `qa-agent`, `doc-agent`,
+  `merger-agent` (любую можно дополнить кастомными ролями через
+  `mcp-kanban/roles/<role>.md` — см. §6.4);
 - Claude Code (и/или Claude Desktop / Codex CLI) подключённый к MCP и
   обученный жить по workflow: `claim_issue` → работа → `transition_issue` →
   `link_git_ref` → `comment_issue` → `release_issue` / `Done`.
@@ -712,7 +714,101 @@ Testing → Documenting → Merging → Done
 Агент вызовет `create_issue` — задача появится в `Backlog` workspace `agents`,
 проекта `SLONK` (переведите её в `To Do`, чтобы агенты взяли её в работу).
 
-### 6.4 Что увидите в логах после первого цикла
+### 6.4 Кастомные роли (SLONK-6)
+
+slonk не ограничивает тебя коробочными 7 ролями. Каждая identity
+описана **отдельным `*.md`-файлом** в `mcp-kanban/roles/` с YAML
+front-matter:
+
+```yaml
+---
+role: release-agent
+email: release-agent@slonk.local
+first_name: Release
+last_name: Agent
+default_state: Merging
+state_aliases:
+  - Release
+  - Релиз
+---
+# release-agent
+
+Описание роли для оператора (markdown ниже front-matter'а bootstrap
+не парсит, это документация).
+```
+
+Как добавить:
+
+```bash
+cd mcp-kanban/roles
+cp merger-agent.md release-agent.md
+# поправь role, email, default_state, state_aliases
+cd ../..
+make bootstrap
+```
+
+После `make bootstrap`:
+
+- `release-agent` появится в whitelist'е `X-Agent-Identity` (MCP начнёт
+  принимать запросы с этим заголовком);
+- `claim_issue` от этой роли будет переводить задачу в колонку
+  `Merging` (или в любой из `state_aliases`, если у вас она называется
+  «Release»);
+- Plane получит инвайт `release-agent@slonk.local` (в режиме
+  `per_user`).
+
+Перебилд образа **не нужен** — директория `roles/` пробрасывается
+bind-mount'ом `./mcp-kanban/roles:/app/roles:ro`. Все `*.md`, кроме
+дефолтных 7 ролей и `README.md`, **в git не идут** (см. `.gitignore`):
+каждый инстанс держит свой набор ролей локально.
+
+**Локализованные колонки.** Если ты переименовал колонки Plane на
+русский (например, `Development` → `Разработка`), допиши их в
+`state_aliases` соответствующей роли. `claim_issue` принимает
+case-insensitive совпадение по любому из алиасов:
+
+```yaml
+default_state: Development
+state_aliases:
+  - Разработка
+  - Coding
+```
+
+При отсутствии совпадения tool возвращает `INVALID_INPUT` со списком
+фактических колонок проекта и подсказкой, что переименовать / куда
+добавить alias.
+
+**Smoke-проверка.** После добавления ролей рекомендуется прогнать
+интеграционный smoke против живого Plane:
+
+```bash
+make smoke-roles
+```
+
+Скрипт создаёт временную задачу в `MCP_DEFAULT_PROJECT`, для каждой
+identity из стора вызывает `claim_issue`, проверяет, что задача
+оказалась в колонке `default_state` (или одном из алиасов), и удаляет
+issue после прогона. JSON-вывод в stdout: одна строка на роль +
+summary.
+
+> **Известное ограничение (SLONK-6).** `make smoke-roles` запускается
+> через `pnpm tsx` с **хоста**, но `scripts/smoke-roles-claim.ts`
+> сейчас открывает identity-стор по контейнерному пути
+> `/mcp_data/identity.sqlite` (константа `BOOTSTRAP_STORE_DEFAULT_PATH`).
+> На хосте этой директории нет — скрипт упадёт
+> `SqliteError: unable to open database file`. Обходной путь до фикса:
+> либо смонтировать `mcp_data/` хоста на `/mcp_data` внутри среды
+> запуска (например, временный bind-mount при ручном запуске через
+> `docker compose run --rm -v "$(pwd)/mcp_data:/mcp_data" mcp-kanban
+> node …`, при условии что `scripts/` будет скопирован в образ —
+> сейчас не копируется), либо подождать follow-up issue, в котором путь
+> переедет в переопределяемый ENV (`MCP_IDENTITY_STORE_PATH`). До тех
+> пор основное покрытие сценария «claim_issue по всем ролям с
+> default_state/state_aliases» обеспечивается юнит-/интеграционными
+> тестами `claim-issue/handler.test.ts` (43 теста, в т.ч. SLONK-6
+> кейсы) и проходит на `pnpm test`.
+
+### 6.5 Что увидите в логах после первого цикла
 
 Все write-операции пишутся в `mcp_data/audit.sqlite` (таблица `audit_log`).
 Каждая запись содержит `trace_id`, `identity`, `tool`, `outcome`. Это

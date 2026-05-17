@@ -71,6 +71,11 @@ const ConfigSchema = z.object({
   MCP_PLANE_TIMEOUT_MS: PositiveInt.default(10_000),
   MCP_METRICS_ENABLED: Bool01.default(false),
 
+  // Roles directory (SLONK-6). По умолчанию — undefined: loader сам ищет
+  // `roles/` рядом с package.json. Переопределяется, если оператор смонтировал
+  // директорию в нестандартное место.
+  MCP_ROLES_DIR: optionalNonEmpty,
+
   // Memory bounds (SLONK-5). Дефолты подобраны под хост 2 GB RAM, чтобы
   // mcp-kanban не вытеснял Plane в swap при долгой работе агентов.
   // TtlCache: FIFO-cap, защищает от безграничного роста по уникальным

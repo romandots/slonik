@@ -367,6 +367,9 @@ services:
       MCP_RETRY_BACKOFF_MS: ${MCP_RETRY_BACKOFF_MS}
       MCP_PLANE_TIMEOUT_MS: ${MCP_PLANE_TIMEOUT_MS}
       MCP_METRICS_ENABLED: ${MCP_METRICS_ENABLED}
+      # SLONK-6: путь к директории `roles/`. По умолчанию пусто — loader
+      # ищет рядом с package.json (`/app/roles`).
+      MCP_ROLES_DIR: ${MCP_ROLES_DIR:-}
       # SLONK-5: bounded growth knobs. Дефолты в src/config.ts; через env
       # можно ослабить или ужесточить под конкретный хост (см. docs).
       MCP_CACHE_MAX_ENTRIES: ${MCP_CACHE_MAX_ENTRIES:-2048}
@@ -390,6 +393,12 @@ services:
       # Loader сам выбирает manifest.yaml → manifest.example.yaml (см.
       # `src/bootstrap/manifest.ts`), так что fresh-checkout без `cp` работает.
       - ./mcp-kanban/bootstrap:/app/bootstrap:ro
+      # SLONK-6: roles/ — primary-источник agent-identities. Пользователь
+      # добавляет кастомные роли через `cp` нового `*.md` в эту директорию +
+      # `make bootstrap` (без rebuild'а образа). В образе лежит коробочный
+      # набор из 7 ролей (`COPY ./roles` в Dockerfile) — fallback, если bind
+      # источник пустой.
+      - ./mcp-kanban/roles:/app/roles:ro
     ports:
       - "${MCP_SERVER_PORT}:${MCP_SERVER_PORT}"
     depends_on:

@@ -25,7 +25,7 @@ ifeq ($(backup),1)
 	COMPOSE_FILES += -f docker-compose.backup.yml
 endif
 
-.PHONY: help up up-dev up-proxy up-obs up-backup backup-now down down-v logs ps smoke test build release bootstrap config pull
+.PHONY: help up up-dev up-proxy up-obs up-backup backup-now down down-v logs ps smoke smoke-roles test build release bootstrap config pull
 
 help: ## Показать доступные цели
 	@awk 'BEGIN { FS = ":.*##"; printf "Доступные цели:\n" } \
@@ -129,3 +129,6 @@ endif
 
 bootstrap: ## Идемпотентная инициализация Plane (workspace/project/states/labels/identities)
 	$(COMPOSE) $(COMPOSE_FILES) run --rm mcp-kanban node dist/server.js bootstrap
+
+smoke-roles: ## SLONK-6: smoke claim_issue по всем ролям против ЖИВОГО Plane
+	cd mcp-kanban && pnpm tsx scripts/smoke-roles-claim.ts

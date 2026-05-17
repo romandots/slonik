@@ -22,6 +22,7 @@ import {
 import { IdentityStore } from './bootstrap/store.js';
 import { BOOTSTRAP_STORE_DEFAULT_PATH } from './bootstrap/cli.js';
 import { loadManifest } from './bootstrap/manifest.js';
+import { loadRoles } from './bootstrap/roles.js';
 import { AuditLog } from './audit.js';
 import { RateLimiter } from './rate-limit.js';
 import { GitRefsIndex } from './git-refs.js';
@@ -102,7 +103,11 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
   const identityStore = new IdentityStore({
     path: opts.identityStorePath ?? BOOTSTRAP_STORE_DEFAULT_PATH,
   });
-  const identityRegistry = buildIdentityRegistry({ store: identityStore, logger });
+  const identityRegistry = buildIdentityRegistry({
+    store: identityStore,
+    logger,
+    ...(config.MCP_ROLES_DIR !== undefined ? { rolesDir: config.MCP_ROLES_DIR } : {}),
+  });
   logger.info(
     { roles: identityRegistry.list(), size: identityRegistry.size },
     'identity whitelist loaded',
@@ -344,6 +349,7 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
         defaultProjectSlug: config.MCP_DEFAULT_PROJECT,
         allowedProjects: config.MCP_ALLOWED_PROJECTS,
         audit,
+        identityStore,
         rateLimiter,
         resolvePlaneUserId: () => identityStore.get(identity)?.plane_user_id ?? null,
         minioBucket: config.MINIO_BUCKET_MCP,
@@ -471,32 +477,53 @@ export {
 };
 
 /**
- * Собирает реестр идентичностей при старте сервера. Primary-источник — данные,
- * наполненные `make bootstrap` в `identity.sqlite`; fallback — bootstrap
- * manifest (актуален до первого bootstrap'а или если файл стора был стёрт).
- * Если оба источника пусты/невалидны, реестр пустой и любой запрос с
- * `X-Agent-Identity` будет отклонён — это безопасный дефолт; в логах warn
- * объясняет, как починить.
+ * Собирает реестр идентичностей при старте сервера. Primary-источник —
+ * данные, наполненные `make bootstrap` в `identity.sqlite`. Fallback'и
+ * для случая «стор пустой» (свежая установка до первого bootstrap'а
+ * или стёртый volume):
+ *   1. `roles/` директория (SLONK-6) — основной форвард-совместимый
+ *      источник.
+ *   2. `bootstrap/manifest.yaml.identities` — legacy fallback.
+ * Если все три источника пусты/невалидны, реестр пустой и любой запрос
+ * с `X-Agent-Identity` будет отклонён — это безопасный дефолт; в логах
+ * warn объясняет, как починить.
  */
 function buildIdentityRegistry(opts: {
   store: IdentityStore;
   logger: Logger;
+  rolesDir?: string;
 }): IdentityRegistry {
   const storeRoles = opts.store.all().map((r) => r.role);
   if (storeRoles.length > 0) {
     return createIdentityRegistry(storeRoles);
   }
+  // Store пуст — пробуем roles/, потом manifest.
+  try {
+    const rolesResult = loadRoles(opts.rolesDir !== undefined ? { dir: opts.rolesDir } : {});
+    if (rolesResult.found) {
+      opts.logger.info(
+        { count: rolesResult.roles.length, roles_dir: rolesResult.path },
+        'identity registry: store empty, falling back to roles/',
+      );
+      return createIdentityRegistry(rolesResult.roles.map((r) => r.role));
+    }
+  } catch (err) {
+    opts.logger.warn(
+      { err: err instanceof Error ? err.message : String(err) },
+      'identity registry: roles/ unreadable — falling back to bootstrap manifest',
+    );
+  }
   try {
     const manifest = loadManifest();
     opts.logger.info(
       { count: manifest.identities.length },
-      'identity registry: store empty, falling back to bootstrap manifest',
+      'identity registry: store and roles/ empty, falling back to bootstrap manifest',
     );
     return createIdentityRegistryFromManifest(manifest);
   } catch (err) {
     opts.logger.warn(
       { err: err instanceof Error ? err.message : String(err) },
-      'identity registry: store empty and manifest unreadable — ' +
+      'identity registry: store, roles/ and manifest unreadable — ' +
         'whitelist is empty until `make bootstrap` runs successfully',
     );
     return createIdentityRegistry([]);
