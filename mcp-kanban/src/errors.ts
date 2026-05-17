@@ -5,6 +5,7 @@ export type ErrorCode =
   | 'NOT_FOUND'
   | 'CONFLICT'
   | 'PLANE_UNAVAILABLE'
+  | 'STORAGE_UNAVAILABLE'
   | 'RATE_LIMITED'
   | 'INTERNAL';
 
@@ -53,6 +54,8 @@ function defaultHttpStatusFor(code: ErrorCode): number {
     case 'RATE_LIMITED':
       return 429;
     case 'PLANE_UNAVAILABLE':
+      return 502;
+    case 'STORAGE_UNAVAILABLE':
       return 502;
     case 'INTERNAL':
       return 500;

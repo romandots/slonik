@@ -14,8 +14,8 @@
 
 - Plane UI на `http://localhost:3000` (workspace `agents`, проект «Code Agents
   — Default Project», identifier `SLONK`, с 11 канбан-состояниями и 14 лейблами);
-- MCP-сервер на `http://localhost:8787/mcp` с 22 tool'ами (3 git-tool'а +
-  10 read + 8 write + `who_am_i`);
+- MCP-сервер на `http://localhost:8787/mcp` с 24 tool'ами (3 git-tool'а +
+  11 read + 9 write + `who_am_i`);
 - 7 идентичностей агентов в Plane: `analyst-agent`, `developer-agent`,
   `security-auditor-agent`, `code-review-agent`, `qa-agent`, `doc-agent`,
   `merger-agent` (любую можно дополнить кастомными ролями через
@@ -459,7 +459,7 @@ claude mcp add --transport http slonk http://localhost:8787/mcp \
 ```
 
 Проверка: внутри `claude` выполнить `/mcp` — сервер `slonk` должен быть в
-статусе `connected` со списком 22 tool'ов.
+статусе `connected` со списком 24 tool'ов.
 
 ### 5.2 Claude Desktop
 

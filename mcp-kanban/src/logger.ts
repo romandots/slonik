@@ -20,6 +20,22 @@ export function createLogger(config: Pick<Config, 'MCP_LOG_LEVEL' | 'MCP_LOG_FIL
         '*.PLANE_API_KEY',
         '*.POSTGRES_PASSWORD',
         '*.MINIO_ROOT_PASSWORD',
+        '*.MINIO_SECRET_KEY',
+        // Presigned URL'ы содержат `X-Amz-Signature` — короткоживущий, но
+        // всё равно секретный credential. Никогда не логируем ни как
+        // отдельное поле, ни в составе chained-объектов: вместо URL пишем
+        // {bucket, object_key, expires_at}.
+        //
+        // Pino-redact: wildcard `*.foo` матчит ТОЛЬКО nested-варианты
+        // (`{ctx:{foo:...}}`), top-level `{foo:...}` остаётся открытым.
+        // Поэтому держим обе формы — голое имя поля для top-level и
+        // `*.foo` для одноуровневой вложенности (см. pino #1561).
+        'download_url',
+        'upload_url',
+        'presigned_url',
+        '*.download_url',
+        '*.upload_url',
+        '*.presigned_url',
       ],
       remove: true,
     },

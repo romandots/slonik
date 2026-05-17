@@ -34,9 +34,18 @@ const ConfigSchema = z.object({
   PLANE_API_BASE_URL: z.string().url(),
   PLANE_API_KEY: optionalNonEmpty,
 
-  // MinIO (для attach_file presign — Phase 5)
+  // MinIO (для attach_file presign и read_attachment, SLONK-14)
   MINIO_BUCKET_MCP: z.string().min(1).default('mcp-artifacts'),
+  MINIO_BUCKET_PLANE: z.string().min(1).default('plane-uploads'),
   MINIO_INTERNAL_ENDPOINT: z.string().url().default('http://minio:9000'),
+  // Опциональный public endpoint для presigned URL'ов, видимых снаружи
+  // docker-сети. Если не задан — используется INTERNAL.
+  MINIO_PUBLIC_ENDPOINT: optionalNonEmpty.pipe(z.string().url().optional()),
+  // Service-account creds для MinIO. В v1 — те же root-creds, что у Plane;
+  // в Phase 7 (TLS) разделим на read-only policy + separate keys.
+  MINIO_ACCESS_KEY: optionalNonEmpty,
+  MINIO_SECRET_KEY: optionalNonEmpty,
+  MINIO_USE_SSL: Bool01.default(false),
   PLANE_SIGNED_URL_EXPIRATION: PositiveInt.default(3600),
 
   // Бизнес-логика

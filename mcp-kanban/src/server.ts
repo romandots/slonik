@@ -10,6 +10,7 @@ import { loadConfig, type Config } from './config.js';
 import { McpError } from './errors.js';
 import { createLogger, type Logger } from './logger.js';
 import { PlaneClient } from './plane-client.js';
+import { RealMinioClient, type MinioClient } from './minio-client.js';
 import { registerTools, REGISTERED_TOOL_NAMES } from './tools/registry.js';
 import { TtlCache } from './cache.js';
 import {
@@ -43,6 +44,11 @@ export interface BuildServerOptions {
   auditStorePath?: string;
   /** Путь к git-refs индексу (`git_refs.sqlite`). По умолчанию — в томе. */
   gitRefsStorePath?: string;
+  /**
+   * Опциональный MinIO-клиент (для тестов: `FakeMinioClient`). По умолчанию —
+   * `RealMinioClient` поверх `minio` SDK. SLONK-14.
+   */
+  minio?: MinioClient;
 }
 
 export const AUDIT_STORE_DEFAULT_PATH = '/mcp_data/audit.sqlite';
@@ -53,6 +59,7 @@ export interface BuiltServer {
   config: Config;
   logger: Logger;
   plane: PlaneClient;
+  minio: MinioClient;
   cache: TtlCache;
   identityStore: IdentityStore;
   audit: AuditLog;
@@ -93,6 +100,12 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
   });
 
   const plane = new PlaneClient({ config, logger });
+  const minio: MinioClient =
+    opts.minio ??
+    new RealMinioClient({
+      config,
+      logger,
+    });
   const cache = new TtlCache({
     ttlMs: 10_000,
     maxEntries: config.MCP_CACHE_MAX_ENTRIES,
@@ -353,7 +366,10 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
         rateLimiter,
         resolvePlaneUserId: () => identityStore.get(identity)?.plane_user_id ?? null,
         minioBucket: config.MINIO_BUCKET_MCP,
+        minioBucketPlane: config.MINIO_BUCKET_PLANE,
         minioEndpoint: config.MINIO_INTERNAL_ENDPOINT,
+        minioEndpoints: collectMinioEndpoints(config),
+        minio,
         signedUrlExpirationSec: config.PLANE_SIGNED_URL_EXPIRATION,
         gitRefs,
         metrics,
@@ -435,6 +451,7 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
     config,
     logger,
     plane,
+    minio,
     cache,
     identityStore,
     audit,
@@ -448,6 +465,21 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
       enforceMaxSessions,
     },
   };
+}
+
+/**
+ * SLONK-14: список known MinIO endpoints (origin'ы), которые
+ * SSRF-фильтр inline-asset парсера считает доверенными. Включает
+ * INTERNAL (всегда) и PUBLIC (если задан). Это единственный whitelist —
+ * любой URL за его пределами игнорируется.
+ */
+function collectMinioEndpoints(config: Pick<Config, 'MINIO_INTERNAL_ENDPOINT' | 'MINIO_PUBLIC_ENDPOINT'>): string[] {
+  const set = new Set<string>();
+  set.add(config.MINIO_INTERNAL_ENDPOINT);
+  if (config.MINIO_PUBLIC_ENDPOINT !== undefined && config.MINIO_PUBLIC_ENDPOINT.length > 0) {
+    set.add(config.MINIO_PUBLIC_ENDPOINT);
+  }
+  return Array.from(set);
 }
 
 function headerString(v: string | string[] | undefined): string | undefined {

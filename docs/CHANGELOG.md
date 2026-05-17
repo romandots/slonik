@@ -7,6 +7,44 @@
 
 ## [Unreleased]
 
+## [1.5.0] — 2026-05-17
+
+### Added
+- **Read-side interface for issue attachments (SLONK-14).** Three MCP
+  surface points: (1) new tool `list_attachments` — read-only, объединяет
+  три источника файлов (Plane UI uploads `pi_*`, inline-asset из
+  `comment_html` `pci_*`, mcp-artifacts из bucket `mcp-artifacts`
+  `mca_*`); поддерживает фильтры `source` / `comment_id` / `since` +
+  cursor-пагинацию; partial-failure семантика (упал один source →
+  `partial: true`, остальные продолжают работать). (2) Новый tool
+  `read_attachment` — резолвит `attachment_id` в **presigned MinIO GET
+  URL** (а не байты); делает `statObject` перед выдачей URL'а
+  (контракт «вернули URL → файл точно есть»); аудитится как write,
+  пишет в `audit_log.metadata` только `{bucket, object_key, expires_at}`
+  — не сам URL. (3) Расширение `get_issue` — обратносовместимо
+  добавлены поля `attachments_count: number` и
+  `attachments_preview: Attachment[]` (top-3 по `uploaded_at DESC`).
+  Новые ENV: `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`,
+  `MINIO_BUCKET_PLANE`, `MINIO_PUBLIC_ENDPOINT`, `MINIO_USE_SSL`.
+  Новый код ошибки `STORAGE_UNAVAILABLE` (HTTP 502). Реализация —
+  `mcp-kanban/src/{minio-client,attachments/{types,comment-assets,
+  discovery}}.ts` + `tools/{list-attachments,read-attachment}/`,
+  расширение `plane-client.ts::listIssueAttachments`.
+- **SSRF-strict парсер inline-asset'ов комментариев.** В
+  `mcp-kanban/src/attachments/comment-assets.ts`: принимаем asset URL
+  **только** если scheme = http/https, origin (host:port) совпадает с
+  одним из known MinIO endpoints (`MINIO_PUBLIC_ENDPOINT` +
+  `MINIO_INTERNAL_ENDPOINT`), pathname нормализован (без `..`/`.`),
+  и первый сегмент path равен `MINIO_BUCKET_PLANE`. Любой URL вне
+  whitelist (включая ссылки на `mcp-artifacts` через комментарий
+  человека, path-traversal формы и percent-encoded `%2e%2e`) —
+  игнорируется. Покрыто unit-тестами на SSRF-fixture'ах.
+- **Pino redact для presigned URL'ов.** В `mcp-kanban/src/logger.ts`
+  добавлены поля `*.MINIO_SECRET_KEY`, `*.download_url`, `*.upload_url`,
+  `*.presigned_url` — никогда не попадают в логи. `X-Amz-Signature`
+  не утекает, так как сам URL не сериализуется как отдельное поле в
+  audit/log.
+
 ## [1.4.0] — 2026-05-17
 
 ### Added
