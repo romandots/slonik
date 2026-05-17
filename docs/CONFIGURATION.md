@@ -345,27 +345,28 @@ identities:                                            # SLONK-6: legacy fallbac
 | `minio` | `192m` | Memory grows linearly with active uploads. |
 | `plane-migrator` | `384m` | one-shot Django migrations, лимит для safety. |
 | `plane-api` | `512m` | gunicorn worker (`GUNICORN_WORKERS=1`); при >1 — поднимать. |
-| `plane-worker` | `384m` | Celery worker. |
+| `plane-worker` | `768m` | Celery worker; на пиках автоматизаций / mass-update'ов `384m` даёт OOM-kill (SLONK-9). |
 | `plane-beat` | `128m` | scheduler-only, minimal footprint. |
 | `plane-web` / `admin` / `space` / `live` | `192m` каждый | Next.js SSR; 128m даёт OOM при build cache warmup. |
 | `plane-proxy` | `96m` | Caddy reverse-proxy. |
 | `mcp-kanban` | `256m` | TtlCache bounded (`MCP_CACHE_MAX_ENTRIES`), MCP-сессии с idle-eviction (`MCP_SESSION_IDLE_MS` + `MCP_MAX_SESSIONS`). |
 
-Итоговая сумма — ~3.3 GB лимитов. На 4 GB хосте остаётся ~700 MB для
-ОС и Docker engine — это рабочая полка. Под 8 GB можно поднять лимиты
-вдвое (см. ниже).
+Итоговая сумма — ~3.7 GB лимитов. На 4 GB хосте остаётся ~300 MB для
+ОС и Docker engine — это уже впритык: на голом 4 GB-хосте без
+overlay'ев (observability/backup) баseline ещё работает, но при
+включении любого из них лучше иметь 6 GB. Под 8 GB можно поднять
+лимиты по таблице ниже.
 
-> **Цифры — baseline под тюнинг.** Значения подобраны под пустой стек +
-> лёгкую интерактивную нагрузку (1–2 агента, единичные `make bootstrap`).
-> На реальной нагрузке отдельным сервисам нужно больше: в частности
-> **`plane-worker` (Celery) под пиками автоматизаций / mass-update'ов
-> ловит OOM-kill на `384m`** — наблюдалось в QA SLONK-5 как
-> циклические рестарты `slonk-plane-worker-1` с exit `137`. Если в
-> `docker events` видны `oom-kill` для plane-worker (или другого
-> сервиса) — поднимай его `mem_limit` в первую очередь: `plane-worker`
-> до `512m–768m`, дальше — пропорционально доступной RAM (см. тюнинг
-> ниже). Лимиты в репозитории остаются защитой от unbounded growth, а
-> не «правильным» размером под прод.
+> **Цифры — baseline под тюнинг.** Значения подобраны так, чтобы стек
+> выдерживал лёгкую интерактивную нагрузку (1–2 агента, единичные
+> `make bootstrap`) и типичные пики Celery-автоматизаций без OOM-kill.
+> Изначальный baseline `plane-worker: 384m` (до SLONK-9) ловил OOM-kill
+> на пиках mass-update'ов — наблюдалось в QA SLONK-5 как циклические
+> рестарты `slonk-plane-worker-1` с exit `137`. После SLONK-9 baseline
+> поднят до `768m`. Если в `docker events` видны `oom-kill` на другом
+> сервисе — поднимай его `mem_limit` пропорционально доступной RAM
+> (см. тюнинг ниже). Лимиты в репозитории остаются защитой от
+> unbounded growth, а не «правильным» размером под прод.
 
 #### MCP-kanban memory bounds
 
@@ -405,8 +406,9 @@ identities:                                            # SLONK-6: legacy fallbac
 - **2 GB RAM.** Не пытайся — Plane backend сам по себе не помещается.
 - **4 GB RAM.** Baseline-цифры выше.
 - **8 GB RAM.** Можно удвоить `postgres → 1g`, `plane-api → 1g`,
-  `plane-worker → 768m`, остальные оставить. Это даёт головному
-  worker'у Plane дышать на пиках (миграции, mass-update).
+  `plane-worker → 1g`, остальные оставить. Это даёт головному
+  worker'у Plane дополнительный запас на длинных пиках (миграции,
+  mass-update) поверх baseline'а в `768m`.
 - **16+ GB RAM.** `mem_limit` всё ещё полезен (защита от unbounded
   growth bug'ов в upstream), но цифры можно умножить на 2–4. Альтернатива
   — `mem_reservation` (soft-лимит) + `mem_limit` ×2 от него.

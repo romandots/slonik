@@ -7,6 +7,16 @@
 
 ## [Unreleased]
 
+### Changed
+- **`plane-worker` baseline `mem_limit` поднят `384m → 768m` (SLONK-9).**
+  В SLONK-5 baseline был рассчитан под пустой стек; QA-прогон на живой
+  Celery-нагрузке (notifications, webhooks, recurring schedulers,
+  mass-update'ы) показал циклические OOM-kill'ы `slonk-plane-worker-1`
+  (exit 137). Новое значение даёт +50% к лимиту и покрывает наблюдаемый
+  пик; ремарка про предел 4 GB-хоста и таблица «Тюнинг под другие хосты»
+  в `docs/CONFIGURATION.md §5` синхронизированы (`8 GB RAM` → `plane-worker
+  → 1g`).
+
 ## [1.3.1] — 2026-05-17
 
 ### Changed
