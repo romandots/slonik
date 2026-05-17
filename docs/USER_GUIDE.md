@@ -38,7 +38,7 @@
 > swap-thrashing (CPU/disk I/O синхронно растут до полки) — у Plane
 > backend нет ENV-tuning, чтобы влезть в 1 GB, и контейнеры начинают
 > вытеснять друг друга. mcp-kanban имеет защиту от безграничного роста
-> (TtlCache cap, idle-eviction MCP-сессий, postraged seq lookup — см.
+> (TtlCache cap, idle-eviction MCP-сессий, постраничный seq lookup — см.
 > `MCP_CACHE_MAX_ENTRIES`, `MCP_SESSION_IDLE_MS`, `MCP_MAX_SESSIONS` в
 > [CONFIGURATION.md](./CONFIGURATION.md#resource-limits-for-small-hosts)),
 > но это не отменяет требования к Plane backend. Не пытайтесь запустить
