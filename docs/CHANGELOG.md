@@ -7,6 +7,8 @@
 
 ## [Unreleased]
 
+## [1.4.0] — 2026-05-17
+
 ### Added
 - **ENV `MCP_IDENTITY_STORE_PATH` для переопределения пути до identity SQLite
   (SLONK-11).** Опциональная переменная (`optionalNonEmpty`, дефолт —
