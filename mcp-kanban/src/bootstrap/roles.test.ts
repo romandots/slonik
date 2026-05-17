@@ -1,8 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadRoles, RoleDefinitionSchema } from './roles.js';
+
+const VALID_ROLE_FRONT_MATTER =
+  '---\n' +
+  'role: doc-agent\n' +
+  'email: doc-agent@slonk.local\n' +
+  'first_name: Doc\n' +
+  'last_name: Agent\n' +
+  'default_state: Documenting\n' +
+  '---\n';
 
 function newDir(): string {
   return mkdtempSync(join(tmpdir(), 'slonk-roles-'));
@@ -10,6 +19,31 @@ function newDir(): string {
 
 function writeRole(dir: string, filename: string, content: string): void {
   writeFileSync(join(dir, filename), content, 'utf8');
+}
+
+/**
+ * Минимальная заглушка pino-логгера: запоминает только bindings из `.warn()`,
+ * остальные методы — no-op. Используется в SLONK-10-тестах, чтобы проверить,
+ * что loader не утечёт в лог содержимое / путь цели симлинка.
+ */
+function makeStubLogger(
+  onWarn: (bindings: Record<string, unknown>) => void,
+): import('../logger.js').Logger {
+  const noop = (): void => {};
+  const stub = {
+    warn: (bindings: Record<string, unknown>): void => {
+      onWarn(bindings);
+    },
+    info: noop,
+    error: noop,
+    debug: noop,
+    trace: noop,
+    fatal: noop,
+    silent: noop,
+    level: 'warn',
+    child: () => stub,
+  } as unknown as import('../logger.js').Logger;
+  return stub;
 }
 
 describe('loadRoles', () => {
@@ -162,6 +196,70 @@ describe('loadRoles', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  // SLONK-10: симлинки в `roles/` не должны следоваться — иначе атакующий с
+  // write-доступом к директории может подсунуть `evil.md -> /etc/passwd` и
+  // выгрузить первые байты файла в stderr через YAML/zod-падение.
+  // Тесты пропускаем на Windows, потому что `symlinkSync` требует прав
+  // администратора и на нашем Linux/macOS CI это не релевантно.
+  const itPosix = process.platform === 'win32' ? it.skip : it;
+
+  itPosix(
+    'SLONK-10: skips symlink pointing to an external file without reading the target',
+    () => {
+      const dir = newDir();
+      const externalDir = newDir();
+      const externalFile = join(externalDir, 'secret.txt');
+      try {
+        // Цель симлинка — файл вне `dir`, начинающийся с `---` (чтобы при
+        // случайном чтении он попал в `parseYaml` и выдал бы read-сигнал в
+        // throw-сообщении). Loader не должен его коснуться вообще.
+        writeFileSync(externalFile, '---\nsecret: do-not-read\n---\n', 'utf8');
+        symlinkSync(externalFile, join(dir, 'evil.md'));
+
+        const warnings: Array<{ name?: string; kind?: string }> = [];
+        const logger = makeStubLogger((bindings) => warnings.push(bindings));
+
+        const r = loadRoles({ dir, logger });
+
+        expect(r.found).toBe(false);
+        expect(r.roles).toEqual([]);
+        // Одна warn-запись на пропущенный symlink, без содержимого / target'а.
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0]).toMatchObject({ name: 'evil.md', kind: 'symlink' });
+        const serialized = JSON.stringify(warnings[0]);
+        expect(serialized).not.toContain('secret');
+        expect(serialized).not.toContain(externalFile);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+        rmSync(externalDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  itPosix(
+    'SLONK-10: skips symlink pointing to a valid role file in a sibling directory',
+    () => {
+      const dir = newDir();
+      const externalDir = newDir();
+      const externalRole = join(externalDir, 'doc-agent.md');
+      try {
+        // Даже если target — настоящая корректная роль, loader не должен
+        // тащить её через ссылку: иначе через `..` можно подложить
+        // identity, которой нет в директории `MCP_ROLES_DIR`.
+        writeFileSync(externalRole, VALID_ROLE_FRONT_MATTER, 'utf8');
+        symlinkSync(externalRole, join(dir, 'dev.md'));
+
+        const r = loadRoles({ dir });
+
+        expect(r.found).toBe(false);
+        expect(r.roles).toEqual([]);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+        rmSync(externalDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it('schema rejects unknown role naming patterns', () => {
     // Roles в скиллах и MCP-серверах матчатся по name, регэксп задаёт

@@ -7,6 +7,23 @@
 
 ## [Unreleased]
 
+### Security
+- **Bootstrap roles loader больше не следует за symlink'ами в
+  `MCP_ROLES_DIR` (SLONK-10).** `loadRoles` теперь читает директорию через
+  `readdirSync(path, { withFileTypes: true })` и пропускает любую запись,
+  для которой `dirent.isFile()` возвращает `false` (включая symlinks,
+  directories, FIFO/сокеты). Раньше `evil.md -> /etc/passwd`, подложенный
+  в `roles/`, выгружался в `readFileSync` — и при провале zod-валидации
+  фрагмент содержимого цели мог попасть в throw-сообщение / stderr
+  bootstrap'а. Поверхность уже была ограничена write-доступом к
+  `MCP_ROLES_DIR` (compose-mount `:ro` для контейнера), но как defense
+  in depth теперь подсунутый symlink молча пропускается. Loader
+  опционально принимает pino-логгер через `LoadRolesOptions.logger` и
+  пишет одну warn-строку на пропущенный нерегулярный файл
+  (`name` + `kind`, без содержимого / цели); `bootstrapCli` уже
+  прокидывает свой логгер. README-fallback и проверка дубликатов
+  не изменились.
+
 ## [1.3.1] — 2026-05-17
 
 ### Changed

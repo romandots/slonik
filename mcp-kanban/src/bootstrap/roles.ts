@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, extname, join } from 'node:path';
 import { parse as parseYaml, YAMLParseError } from 'yaml';
 import { z } from 'zod';
+import type { Logger } from '../logger.js';
 
 // Loader для директории `roles/` — основной источник agent-identities
 // начиная с SLONK-6.
@@ -38,6 +39,14 @@ export type RoleDefinition = z.infer<typeof RoleDefinitionSchema>;
 export interface LoadRolesOptions {
   /** Путь до директории с `*.md`-файлами. По умолчанию — `<root>/roles`. */
   dir?: string;
+  /**
+   * Опциональный pino-логгер. Если передан, loader пишет одну warn-строку
+   * на каждый пропущенный нерегулярный файл (symlink, directory, FIFO и т.п.).
+   * В логе НЕТ содержимого / цели — только имя записи в `roles/` и её тип,
+   * чтобы не раскрывать через лог структуру хоста, на которую указывает
+   * подсунутый симлинк.
+   */
+  logger?: Logger;
 }
 
 export interface LoadRolesResult {
@@ -70,8 +79,29 @@ export function loadRoles(opts: LoadRolesOptions = {}): LoadRolesResult {
       `Roles path is not a directory: ${path}. Set MCP_ROLES_DIR to a directory or remove the file.`,
     );
   }
-  const entries = readdirSync(path);
-  const mdFiles = entries.filter((name) => extname(name).toLowerCase() === '.md');
+  // SLONK-10: используем `withFileTypes: true`, чтобы получить `Dirent`'ы и
+  // отфильтровать всё, что не является регулярным файлом. `Dirent.isFile()`
+  // для симлинка возвращает `false` (документированное поведение Node), цель
+  // ссылки не резолвится — а значит подсунутый `evil.md -> /etc/passwd` будет
+  // молча пропущен ещё до любого `readFileSync`. Это defense-in-depth поверх
+  // того, что `MCP_ROLES_DIR` уже монтируется в контейнер как `:ro` и
+  // редактируется только тем, у кого write-доступ к репозиторию / хосту.
+  const entries = readdirSync(path, { withFileTypes: true });
+  const mdFiles: string[] = [];
+  for (const dirent of entries) {
+    if (extname(dirent.name).toLowerCase() !== '.md') continue;
+    if (!dirent.isFile()) {
+      // Логируем только имя записи и её тип. Цель симлинка / содержимое
+      // НЕ попадают в лог — иначе атакующий смог бы через подсунутый
+      // `evil.md -> /etc/passwd` выгрузить первую строку файла в stderr.
+      opts.logger?.warn(
+        { name: dirent.name, kind: direntKind(dirent) },
+        'roles loader: skipping non-regular entry',
+      );
+      continue;
+    }
+    mdFiles.push(dirent.name);
+  }
   // README.md и любой другой служебный файл — кастомизация формата контракта
   // обозначена front-matter'ом. Если в файле НЕТ YAML front-matter'а — он
   // не описывает роль, и мы пропускаем его без ошибки (для README.md это
@@ -150,6 +180,28 @@ function extractFrontMatter(raw: string): string | null {
   const closingMatch = afterOpening.match(/^---\s*$/m);
   if (closingMatch === null || closingMatch.index === undefined) return null;
   return afterOpening.slice(0, closingMatch.index);
+}
+
+/**
+ * Возвращает короткое human-readable имя типа `Dirent`'а для лога.
+ * Намеренно избегаем `lstatSync`/`statSync` — они потенциально следуют за
+ * ссылкой / делают лишний syscall; `Dirent` уже знает свой тип.
+ */
+function direntKind(dirent: {
+  isSymbolicLink: () => boolean;
+  isDirectory: () => boolean;
+  isFIFO: () => boolean;
+  isSocket: () => boolean;
+  isBlockDevice: () => boolean;
+  isCharacterDevice: () => boolean;
+}): string {
+  if (dirent.isSymbolicLink()) return 'symlink';
+  if (dirent.isDirectory()) return 'directory';
+  if (dirent.isFIFO()) return 'fifo';
+  if (dirent.isSocket()) return 'socket';
+  if (dirent.isBlockDevice()) return 'block-device';
+  if (dirent.isCharacterDevice()) return 'character-device';
+  return 'other';
 }
 
 function defaultRolesDir(): string {

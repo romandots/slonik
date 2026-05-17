@@ -28,7 +28,13 @@ export async function bootstrapCli(opts: BootstrapCliOptions = {}): Promise<void
   // `manifest.identities` (для инсталляций, обновляющихся с версии без
   // поддержки `roles/`).
   const rolesDir = opts.rolesDir ?? config.MCP_ROLES_DIR;
-  const rolesResult = loadRoles(rolesDir !== undefined ? { dir: rolesDir } : {});
+  // Передаём bootstrap-логгер в loadRoles, чтобы пропуски нерегулярных файлов
+  // (symlink / directory / FIFO) попадали в стандартный канал bootstrap'а
+  // как warn-строка. См. SLONK-10 — defense-in-depth против symlink-следования.
+  const rolesResult = loadRoles({
+    ...(rolesDir !== undefined ? { dir: rolesDir } : {}),
+    logger,
+  });
   const identitiesSource: IdentitiesSource = rolesResult.found
     ? { kind: 'roles', roles: rolesResult.roles }
     : { kind: 'manifest' };
