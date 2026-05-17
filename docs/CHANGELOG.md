@@ -7,6 +7,8 @@
 
 ## [Unreleased]
 
+## [1.3.2] — 2026-05-17
+
 ### Security
 - **Bootstrap roles loader больше не следует за symlink'ами в
   `MCP_ROLES_DIR` (SLONK-10).** `loadRoles` теперь читает директорию через
