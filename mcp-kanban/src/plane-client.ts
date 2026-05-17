@@ -115,6 +115,31 @@ export interface PlaneComment {
   updated_at?: string;
 }
 
+/**
+ * Plane v1.3.0: GET /workspaces/<slug>/projects/<pid>/issues/<iid>/issue-attachments/
+ *
+ * Поля наблюдаемые в реальном ответе:
+ *   - `id`             — UUID вложения внутри Plane.
+ *   - `attributes`     — embedded объект с `name` (filename), `size` (bytes),
+ *                        `type` (mime). Это исторически Plane хранит как
+ *                        Django JSONField; форма стабильна для v1.x.
+ *   - `asset`          — object_key в bucket `plane-uploads` (без bucket-
+ *                        prefix'а). Это то, что MinIO presign забирает.
+ *   - `created_at`     — ISO8601 timestamp.
+ *   - `created_by`     — UUID пользователя, который аплоадил.
+ */
+export interface PlaneAttachment {
+  id: string;
+  attributes: {
+    name: string;
+    size: number;
+    type: string;
+  };
+  asset: string;
+  created_at: string;
+  created_by?: string;
+}
+
 export interface ListResult<T> {
   results: T[];
   next?: string | null;
@@ -682,6 +707,27 @@ export class PlaneClient {
       `workspaces/${workspaceSlug}/projects/${projectId}/issues/${issueId}/comments/`,
       { method: 'POST', body: input },
     );
+  }
+
+  // ---------------- high-level: issue attachments ----------------
+
+  /**
+   * Список UI-attachments задачи (то, что пользователь приложил через Plane
+   * UI). v1.3.0 endpoint: `/issues/<id>/issue-attachments/`.
+   *
+   * Возвращает голый массив (или `{results: [...]}` — оба варианта
+   * нормализуем). Если задача не найдена — Plane отдаёт 404, который
+   * пробрасывается как `PlaneError → NOT_FOUND` (см. ErrorCode mapping).
+   */
+  async listIssueAttachments(
+    workspaceSlug: string,
+    projectId: string,
+    issueId: string,
+  ): Promise<PlaneAttachment[]> {
+    const resp = await this.request<ListResult<PlaneAttachment> | PlaneAttachment[]>(
+      `workspaces/${workspaceSlug}/projects/${projectId}/issues/${issueId}/issue-attachments/`,
+    );
+    return unwrapList(resp);
   }
 
   // ---------------- high-level: users / members ----------------
