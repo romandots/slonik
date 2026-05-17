@@ -3,9 +3,25 @@ import type { Config } from '../config.js';
 import { PlaneClient, type PlaneProject, type PlaneState } from '../plane-client.js';
 import { PlaneError } from '../errors.js';
 import type { Manifest } from './manifest.js';
+import type { RoleDefinition } from './roles.js';
 import type { IdentityStore } from './store.js';
 
 export type IdentityMode = 'per_user' | 'single_bot';
+
+/**
+ * Источник identity для bootstrap'а. SLONK-6:
+ *   - `roles/` (массив `RoleDefinition`, prim'ary source);
+ *   - `manifest.yaml.identities` (legacy fallback для инсталляций,
+ *     обновляющихся с версии без поддержки `roles/`).
+ *
+ * Runner получает уже готовый источник: cli.ts вызывает `loadRoles()` и
+ * передаёт сюда либо `{ kind: 'roles', roles }`, либо
+ * `{ kind: 'manifest' }`. Тесты передают `kind: 'roles'` с
+ * inline-массивом.
+ */
+export type IdentitiesSource =
+  | { kind: 'roles'; roles: RoleDefinition[] }
+  | { kind: 'manifest' };
 
 export interface BootstrapProjectError {
   /** Стабильный код для grep/мониторинга. На сегодня — единственное значение. */
@@ -39,6 +55,8 @@ export interface BootstrapReport {
     mode: IdentityMode;
     invited: number;
     skipped: number;
+    /** SLONK-6: какой источник identities использовался (`roles/` vs `manifest`). */
+    source: 'roles' | 'manifest';
     fallback_reason?: string;
   };
   duration_ms: number;
@@ -49,6 +67,12 @@ export interface RunnerDeps {
   store: IdentityStore;
   logger: Logger;
   manifest: Manifest;
+  /**
+   * Источник identity. SLONK-6: основной — `{ kind: 'roles', roles: [...] }`,
+   * fallback — `{ kind: 'manifest' }`. Если параметр не передан, runner
+   * читает `manifest.identities` (для обратной совместимости с тестами).
+   */
+  identitiesSource?: IdentitiesSource;
   config: Pick<Config, 'MCP_AGENT_IDENTITY_MODE'>;
 }
 
@@ -70,6 +94,8 @@ export interface RunnerDeps {
  */
 export async function runBootstrap(deps: RunnerDeps): Promise<BootstrapReport> {
   const { plane, manifest, logger, store, config } = deps;
+  const identitiesSource: IdentitiesSource =
+    deps.identitiesSource ?? { kind: 'manifest' };
   const t0 = performance.now();
 
   const ws = await ensureWorkspace(plane, manifest, logger);
@@ -159,6 +185,7 @@ export async function runBootstrap(deps: RunnerDeps): Promise<BootstrapReport> {
     store,
     logger,
     manifest,
+    source: identitiesSource,
     desiredMode: config.MCP_AGENT_IDENTITY_MODE,
   });
 
@@ -384,17 +411,54 @@ async function ensureLabels(
 
 // ---------------- identities ----------------
 
+/**
+ * Унифицированное представление identity, с которым работает runner.
+ * Собирается из `RoleDefinition` (SLONK-6 — primary source) или из
+ * `manifest.identities` (legacy fallback). `default_state` и
+ * `state_aliases` идут только из roles/ — manifest их не несёт
+ * (zod-схема манифеста знает только `default_state` без алиасов).
+ */
+interface ResolvedIdentity {
+  role: string;
+  email: string;
+  default_state: string;
+  state_aliases: string[];
+}
+
+function resolveIdentities(source: IdentitiesSource, manifest: Manifest): ResolvedIdentity[] {
+  if (source.kind === 'roles') {
+    return source.roles.map((r) => ({
+      role: r.role,
+      email: r.email,
+      default_state: r.default_state,
+      state_aliases: r.state_aliases,
+    }));
+  }
+  return manifest.identities.map((i) => ({
+    role: i.role,
+    email: i.email,
+    default_state: i.default_state,
+    // Manifest legacy не несёт алиасов — пустой список. Это нормально:
+    // claim_issue резолвит default_state точным совпадением, и для
+    // дефолтной слонк-инсталляции имена колонок совпадают с манифестом.
+    state_aliases: [],
+  }));
+}
+
 async function ensureIdentities(args: {
   plane: PlaneClient;
   store: IdentityStore;
   logger: Logger;
   manifest: Manifest;
+  source: IdentitiesSource;
   desiredMode: IdentityMode;
 }): Promise<BootstrapReport['identities']> {
-  const { plane, store, logger, manifest, desiredMode } = args;
+  const { plane, store, logger, manifest, source, desiredMode } = args;
+  const identities = resolveIdentities(source, manifest);
+  const sourceTag: 'roles' | 'manifest' = source.kind;
 
   if (desiredMode === 'single_bot') {
-    return await recordSingleBot(store, manifest, undefined);
+    return await recordSingleBot(store, identities, sourceTag, undefined);
   }
 
   // per_user: достаём текущих членов workspace, ищем по email; чего нет —
@@ -405,13 +469,13 @@ async function ensureIdentities(args: {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.warn({ err: msg }, 'cannot list workspace members; falling back to single_bot');
-    return await recordSingleBot(store, manifest, msg);
+    return await recordSingleBot(store, identities, sourceTag, msg);
   }
   const byEmail = new Map(members.map((m) => [m.email, m]));
 
   let invited = 0;
   let skipped = 0;
-  for (const ident of manifest.identities) {
+  for (const ident of identities) {
     const existing = byEmail.get(ident.email);
     if (existing !== undefined) {
       store.upsert({
@@ -419,6 +483,8 @@ async function ensureIdentities(args: {
         email: ident.email,
         plane_user_id: existing.id,
         mode: 'per_user',
+        default_state: ident.default_state,
+        state_aliases: ident.state_aliases,
       });
       skipped += 1;
       continue;
@@ -436,6 +502,8 @@ async function ensureIdentities(args: {
         email: ident.email,
         plane_user_id: null,
         mode: 'per_user',
+        default_state: ident.default_state,
+        state_aliases: ident.state_aliases,
       });
       invited += 1;
       logger.info(
@@ -450,31 +518,35 @@ async function ensureIdentities(args: {
       );
       // Откатываемся на single_bot для всего набора, иначе получится
       // частичный per_user, что хуже для воспроизводимости.
-      return await recordSingleBot(store, manifest, msg);
+      return await recordSingleBot(store, identities, sourceTag, msg);
     }
   }
   store.setMeta('identity_mode', 'per_user');
-  return { mode: 'per_user', invited, skipped };
+  return { mode: 'per_user', invited, skipped, source: sourceTag };
 }
 
 async function recordSingleBot(
   store: IdentityStore,
-  manifest: Manifest,
+  identities: ResolvedIdentity[],
+  sourceTag: 'roles' | 'manifest',
   reason: string | undefined,
 ): Promise<BootstrapReport['identities']> {
-  for (const ident of manifest.identities) {
+  for (const ident of identities) {
     store.upsert({
       role: ident.role,
       email: ident.email,
       plane_user_id: null,
       mode: 'single_bot',
+      default_state: ident.default_state,
+      state_aliases: ident.state_aliases,
     });
   }
   store.setMeta('identity_mode', 'single_bot');
   return {
     mode: 'single_bot',
     invited: 0,
-    skipped: manifest.identities.length,
+    skipped: identities.length,
+    source: sourceTag,
     ...(reason !== undefined ? { fallback_reason: reason } : {}),
   };
 }
