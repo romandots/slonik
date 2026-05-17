@@ -1,7 +1,7 @@
 # Design — Reading attachments via MCP
 
 **Date:** 2026-05-17
-**Status:** Draft, awaiting user review
+**Status:** Final, implemented in SLONK-14 (Analysis → Development → Security Review → Code Review → Testing accepted; pending merge to `develop`).
 **Scope:** Read-side only (`list_attachments`, `read_attachment`, `get_issue` preview). Write-side (`attach_file`) — out of scope, parity tracked separately.
 
 ## 1. Контекст и проблема
