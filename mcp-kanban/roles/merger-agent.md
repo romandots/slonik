@@ -15,4 +15,8 @@ state_aliases:
 задачу переводом в `Done`. Единственная роль, которой разрешено двигать карточку в
 `Done` (см. `docs/USER_GUIDE.md §6.1`).
 
+После закрытия задачи закрывает worktree задачи (`git worktree remove`), в
+которой работал `developer-agent`. Подробности — в `CLAUDE.md` («Git workflow»
+→ «Worktree (обязательно)») и в `docs/CONVENTIONS.md` («Git worktree»).
+
 `default_state` — `Merging`.

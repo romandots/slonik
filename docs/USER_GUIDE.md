@@ -625,9 +625,15 @@ Testing → Documenting → Merging → Done
 3. **Понять контекст.** `get_issue({ issue_id })` — прочитай title,
    description, meta-блок (`--- slonk:meta v1 ---`), последние комментарии,
    `get_issue_history` если надо.
-4. **Связать с кодом.** Создай ветку по конвенции
-   `feature/SLONK-<seq>-<slug>` и вызови
-   `link_git_ref({ issue_id, repo_url, branch })` сразу при первом push'е.
+4. **Связать с кодом.** `developer-agent` создаёт **отдельный git-worktree
+   под задачу** (это первое действие, до любых правок): `git worktree add
+   ../<repo-name>-<IDENT>-<seq> -b <type>/<IDENT>-<seq>-<slug> main`. Все
+   дальнейшие действия (правки, тесты, коммиты, push, `link_git_ref`) — только
+   из этого worktree, не из основного клона. `merger-agent` после успешного
+   мержа закрывает worktree (`git worktree remove …`). Полные правила и
+   исключения — подсекция «Worktree (обязательно)» в `CLAUDE.md` / разделе
+   «8.0 Git worktree» в `docs/CONVENTIONS.md`. При первом push'е — вызови
+   `link_git_ref({ issue_id, repo_url, branch })`.
 5. **Сделай работу.** Пиши код, тесты, документацию — в зависимости от роли.
    Каждый значимый шаг — `comment_issue({ issue_id, body })` коротким
    человеческим языком. Субагенты должны фиксировать результаты своей
