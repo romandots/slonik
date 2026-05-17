@@ -7,6 +7,8 @@
 
 ## [Unreleased]
 
+## [1.5.0] — 2026-05-17
+
 ### Added
 - **Read-side interface for issue attachments (SLONK-14).** Three MCP
   surface points: (1) new tool `list_attachments` — read-only, объединяет
