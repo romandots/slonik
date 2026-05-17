@@ -8,6 +8,77 @@
 ## [Unreleased]
 
 ### Added
+- **Data-driven маппинг «роль → колонка канбана» через `roles/*.md`
+  (SLONK-6).** Список agent-identities и их дефолтные колонки больше не
+  захардкожены в коде MCP. Каждая роль описана отдельным
+  `mcp-kanban/roles/<role>.md` файлом с YAML front-matter:
+  `role` / `email` / `first_name` / `last_name` / `default_state` /
+  опциональные `state_aliases[]`. Bootstrap (`make bootstrap`) читает
+  все `*.md` в директории, валидирует zod-схемой, наполняет SQLite-стор
+  (`mcp_data/identity.sqlite`, новые колонки `default_state` /
+  `state_aliases`) и инвайтит пользователей в Plane. Кастомные роли
+  (например, `release-agent`) добавляются одним новым файлом без
+  правки кода — после `make bootstrap` MCP начинает принимать
+  `X-Agent-Identity: release-agent` и `claim_issue` переводит задачу в
+  колонку из `default_state`. Директория пробрасывается
+  bind-mount'ом `./mcp-kanban/roles:/app/roles:ro` — перебилд образа
+  для добавления роли не нужен; путь переопределяется опц. ENV
+  `MCP_ROLES_DIR`. В git едут только коробочные 7 ролей и `README.md`;
+  любые кастомные `*.md` — gitignored (см. `.gitignore`).
+- **`state_aliases` для локализованных канбанов (SLONK-6).** Если в
+  Plane колонки переименованы (`Development` → `Разработка`),
+  `claim_issue` всё равно резолвит `default_state` через
+  case-insensitive совпадение с любым из `state_aliases` —
+  переименование колонки не требует правки кода или пересборки.
+  Дефолтные 7 ролей идут с предзаполненным набором русских/английских
+  синонимов (см. `roles/<role>.md`). При отсутствии совпадения tool
+  возвращает `INVALID_INPUT` с понятным сообщением: фактическим
+  списком колонок проекта и подсказкой, что переименовать / куда
+  добавить alias.
+- **Smoke-сценарий `make smoke-roles` против ЖИВОГО Plane (SLONK-6).**
+  Скрипт `mcp-kanban/scripts/smoke-roles-claim.ts` создаёт временный
+  issue в `MCP_DEFAULT_PROJECT`, для каждой identity из стора зовёт
+  `claim_issue`, проверяет, что задача оказалась в колонке
+  `default_state` (или одном из алиасов), и удаляет issue после
+  прогона. JSON-вывод: одна строка на роль + summary; exit code 0 —
+  все роли OK, 1 — хотя бы одна сломана. Запускается отдельно от
+  `pnpm test`, чтобы юнит-тесты не требовали поднятого Plane.
+
+### Changed
+- **`claim_issue.target_state` — произвольная строка вместо enum
+  (SLONK-6).** Раньше схема ограничивала `target_state` фиксированным
+  набором из 6 имён (`Analysis`/`Development`/…), и `claim_issue` падал
+  `INVALID_INPUT`, если оператор переименовал колонки в Plane UI или
+  завёл кастомную (`Triage`, `Backport`). Теперь это любая строка;
+  резолв в `state_id` — через приоритет: точное совпадение по `name`
+  → case-insensitive → case-insensitive по `state_aliases`. Маппинг
+  `role → default_state` тоже убран из `DEFAULT_STATE_BY_IDENTITY` и
+  читается из `IdentityStore` (`src/tools/claim-issue/schema.ts`,
+  `handler.ts`).
+- **`list_states` — фактический набор колонок Plane, не манифест
+  (SLONK-6).** Поведение уже было таким (`list_states.handler.ts` →
+  `plane.listStates`), но теперь оно явно зафиксировано в SPEC §5.3 и
+  покрыто тестом `claim-issue` через override `state_aliases` для
+  переименованной колонки. Кастомные ручные колонки оператора в Plane
+  UI попадают в выдачу `list_states` сразу — MCP их не фильтрует.
+- **Источник identity для bootstrap — `roles/` вместо
+  `manifest.yaml.identities` (SLONK-6).** Секция `identities:` в
+  `bootstrap/manifest.yaml` объявлена legacy: используется только как
+  fallback, если `roles/` пустая (для инсталляций, обновляющихся с
+  версии без поддержки `roles/`). Новые инсталляции должны держать
+  identity-набор в `roles/*.md`. `BootstrapReport.identities.source`
+  пишет, какой источник был использован (`'roles'` | `'manifest'`);
+  `make bootstrap` печатает это в отчёте.
+- **`IdentityStore` миграция: добавлены колонки `default_state`
+  (nullable) и `state_aliases` (JSON array, NOT NULL DEFAULT `'[]'`)
+  (SLONK-6).** Идемпотентная forward-only миграция через
+  `ALTER TABLE … ADD COLUMN` в конструкторе `IdentityStore`. Старые
+  базы (`identity.sqlite` без новых колонок) подхватываются на
+  старте; legacy-строки читаются как `default_state: null,
+  state_aliases: []` и обновляются на следующем `make bootstrap`.
+  Битый JSON в `state_aliases` лечится до `[]`, чтобы не валить
+  стартап MCP из-за одной строки.
+
 - **Bounded memory growth для mcp-kanban на маленьких хостах (SLONK-5).**
   Чтобы один контейнер не выедал всю RAM на 4-GB-хосте (Plane backend +
   4 frontend'а + Postgres + worker'ы в 2 GB не помещаются), на уровне
