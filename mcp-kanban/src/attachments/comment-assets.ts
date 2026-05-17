@@ -113,6 +113,27 @@ export function extractInlineAssets(
  * URL'ах, у которых pathname после `decodeURI` содержит подстроку `..`
  * — это защищает от закодированных `%2e%2e` и других кривых форм
  * (защита глубже, чем нужно, но стоит дёшево).
+ *
+ * Accepted risk (см. security-review SLONK-14):
+ *
+ * 1. **Double-encoded path-traversal** (`%252e%252e/`, `%25252e…`):
+ *    `decodeURI` снимает только один слой percent-encoding. После
+ *    одного раунда `%252e` → `%2e`, что не содержит подстроку `..`
+ *    (decoded[‘.’,‘.’] не получаем), и проверка проходит. Это **не**
+ *    эксплуатируется в нашей модели: получившийся `object_key` всё
+ *    равно проверяется по bucket-whitelist (`segments[0] === planeBucket`),
+ *    и S3-keys у нас плоские (`issues/<uuid>/<filename>`) — каталоговая
+ *    структура без `..`-сегментов на стороне MinIO. Чинить здесь нет
+ *    смысла без перехода на полный recursive decode-loop, который
+ *    создаст риск infinite-loop на патологически закодированных URL.
+ *
+ * 2. **Null-byte / CRLF в pathname** (`%00`, `%0d`, `%0a`):
+ *    `new URL` сохраняет их в `pathname` дословно (`%00` остаётся `%00`).
+ *    Дальше они уходят в `object_key`, который передаётся в MinIO SDK.
+ *    MinIO SDK сам percent-encode'ит ключ перед запросом, поэтому
+ *    request-smuggling/header-injection не получается. На уровень
+ *    log-injection пробить тоже не выйдет: pino сериализует строки в
+ *    JSON, экранируя управляющие символы. Принимаем риск.
  */
 function parseSafeUrl(raw: string): { origin: string; pathname: string; href: string } | null {
   try {
