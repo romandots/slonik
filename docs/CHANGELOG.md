@@ -7,6 +7,8 @@
 
 ## [Unreleased]
 
+## [1.3.0] — 2026-05-17
+
 ### Added
 - **CLI-команда `add-role` для интерактивного создания новой роли
   (SLONK-12).** Команда `node dist/server.js add-role` (или
