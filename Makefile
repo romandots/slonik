@@ -139,4 +139,4 @@ add-role: ## SLONK-12: интерактивно добавить новую ро
 	cd mcp-kanban && pnpm tsx src/server.ts add-role $(ARGS)
 
 smoke-roles: ## SLONK-6: smoke claim_issue по всем ролям против ЖИВОГО Plane
-	cd mcp-kanban && pnpm tsx scripts/smoke-roles-claim.ts
+	cd mcp-kanban && MCP_IDENTITY_STORE_PATH="$(CURDIR)/mcp_data/identity.sqlite" pnpm tsx scripts/smoke-roles-claim.ts

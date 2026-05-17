@@ -7,6 +7,28 @@
 
 ## [Unreleased]
 
+### Added
+- **ENV `MCP_IDENTITY_STORE_PATH` для переопределения пути до identity SQLite
+  (SLONK-11).** Опциональная переменная (`optionalNonEmpty`, дефолт —
+  `undefined`) добавлена в `src/config.ts`. Используется
+  `bootstrapCli` и `scripts/smoke-roles-claim.ts` в порядке
+  CLI-флаг → ENV → исторический контейнерный дефолт
+  `BOOTSTRAP_STORE_DEFAULT_PATH` (`/mcp_data/identity.sqlite`).
+  Никакой регрессии для `make bootstrap` в контейнере (без ENV) — путь
+  остаётся прежним.
+
+### Fixed
+- **`make smoke-roles` запускается с хоста без `SqliteError`
+  (SLONK-11).** Скрипт `scripts/smoke-roles-claim.ts` больше не хардкодит
+  контейнерный путь до identity SQLite — он берётся из
+  `MCP_IDENTITY_STORE_PATH`. Makefile-таргет `smoke-roles` проставляет
+  `MCP_IDENTITY_STORE_PATH=$(CURDIR)/mcp_data/identity.sqlite`. До правки
+  путь был `/mcp_data/identity.sqlite` (контейнерный mount, на хосте не
+  существует) и smoke падал на открытии БД. Раздел USER_GUIDE §6.4
+  обновлён: вместо «известного ограничения» — готовая инструкция
+  с `docker compose cp` для извлечения identity SQLite из named-volume
+  `slonk_mcp_data`.
+
 ## [1.3.2] — 2026-05-17
 
 ### Security

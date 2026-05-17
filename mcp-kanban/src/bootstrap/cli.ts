@@ -60,7 +60,14 @@ export async function bootstrapCli(opts: BootstrapCliOptions = {}): Promise<void
   }
 
   const plane = new PlaneClient({ config, logger });
-  const store = new IdentityStore({ path: opts.storePath ?? BOOTSTRAP_STORE_DEFAULT_PATH });
+  // SLONK-11: путь до identity SQLite берётся в порядке CLI-флаг → ENV → дефолт.
+  // Дефолт `BOOTSTRAP_STORE_DEFAULT_PATH` = `/mcp_data/identity.sqlite` — это
+  // контейнерный путь, поэтому in-container `make bootstrap` без ENV работает
+  // как раньше. С хоста (smoke-сценарий) ENV `MCP_IDENTITY_STORE_PATH`
+  // перебивает дефолт на путь до bind/cp-копии identity-стора.
+  const storePath =
+    opts.storePath ?? config.MCP_IDENTITY_STORE_PATH ?? BOOTSTRAP_STORE_DEFAULT_PATH;
+  const store = new IdentityStore({ path: storePath });
   try {
     const report = await runBootstrap({
       plane,

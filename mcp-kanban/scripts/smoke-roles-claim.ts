@@ -13,7 +13,13 @@
  *
  * Как запускать:
  *   - Стек поднят (`make up`), bootstrap отработал (`make bootstrap`).
- *   - `cd mcp-kanban && pnpm tsx scripts/smoke-roles-claim.ts`.
+ *   - `make smoke-roles` (Makefile сам выставляет
+ *     `MCP_IDENTITY_STORE_PATH=$(CURDIR)/mcp_data/identity.sqlite`).
+ *   - Или вручную с хоста: сначала скопировать identity-стор из named-volume
+ *     (`docker compose cp slonk-mcp-kanban-1:/mcp_data/identity.sqlite
+ *     ./mcp_data/identity.sqlite`), затем
+ *     `MCP_IDENTITY_STORE_PATH="$PWD/../mcp_data/identity.sqlite" \
+ *      pnpm tsx scripts/smoke-roles-claim.ts` (из `mcp-kanban/`).
  *   - Или из контейнера: `docker compose run --rm mcp-kanban node
  *     dist/scripts/smoke-roles-claim.js` (после `pnpm build`).
  *
@@ -55,7 +61,12 @@ async function main(): Promise<void> {
     process.exit(2);
   }
   const plane = new PlaneClient({ config, logger });
-  const store = new IdentityStore({ path: BOOTSTRAP_STORE_DEFAULT_PATH });
+  // SLONK-11: путь до identity SQLite берётся из ENV (Makefile-таргет проставляет
+  // его в `$(CURDIR)/mcp_data/identity.sqlite`); fallback на контейнерный
+  // дефолт оставлен для запуска из контейнера через `node dist/...`.
+  const store = new IdentityStore({
+    path: config.MCP_IDENTITY_STORE_PATH ?? BOOTSTRAP_STORE_DEFAULT_PATH,
+  });
   const tmp = mkdtempSync(join(tmpdir(), 'slonk-smoke-roles-'));
   const audit = new AuditLog({ path: join(tmp, 'audit.sqlite') });
   const cache = new TtlCache();

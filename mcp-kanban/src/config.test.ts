@@ -43,4 +43,30 @@ describe('loadConfig', () => {
       loadConfig({ ...validBase, MCP_AGENT_IDENTITY_MODE: 'bot_swarm' }),
     ).toThrow(/MCP_AGENT_IDENTITY_MODE/);
   });
+
+  // SLONK-11: путь до identity SQLite — опциональный ENV, тип
+  // `optionalNonEmpty`. Пустая строка эквивалентна «не задано», непустая
+  // принимается как есть; loader не подставляет дефолт (его держит
+  // bootstrapCli / smoke-скрипт через BOOTSTRAP_STORE_DEFAULT_PATH).
+  describe('MCP_IDENTITY_STORE_PATH', () => {
+    it('defaults to undefined when not provided', () => {
+      const cfg = loadConfig(validBase);
+      expect(cfg.MCP_IDENTITY_STORE_PATH).toBeUndefined();
+    });
+
+    it('coerces empty string to undefined (compose ${VAR:-} pattern)', () => {
+      const cfg = loadConfig({ ...validBase, MCP_IDENTITY_STORE_PATH: '' });
+      expect(cfg.MCP_IDENTITY_STORE_PATH).toBeUndefined();
+    });
+
+    it('accepts a custom host path', () => {
+      const cfg = loadConfig({
+        ...validBase,
+        MCP_IDENTITY_STORE_PATH: '/Users/op/slonk/mcp_data/identity.sqlite',
+      });
+      expect(cfg.MCP_IDENTITY_STORE_PATH).toBe(
+        '/Users/op/slonk/mcp_data/identity.sqlite',
+      );
+    });
+  });
 });

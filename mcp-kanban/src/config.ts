@@ -76,6 +76,14 @@ const ConfigSchema = z.object({
   // директорию в нестандартное место.
   MCP_ROLES_DIR: optionalNonEmpty,
 
+  // Путь до identity SQLite (SLONK-11). По умолчанию — undefined; в контейнере
+  // bootstrap-CLI падает на `BOOTSTRAP_STORE_DEFAULT_PATH` (`/mcp_data/identity.sqlite`),
+  // а с хоста (`make smoke-roles`, ручной `pnpm tsx`) Makefile проставляет
+  // путь до bind/cp-копии (например, `$(CURDIR)/mcp_data/identity.sqlite`).
+  // Loader не выставляет дефолт сам, чтобы in-container bootstrap без ENV
+  // продолжал работать с исторической константой.
+  MCP_IDENTITY_STORE_PATH: optionalNonEmpty,
+
   // Memory bounds (SLONK-5). Дефолты подобраны под хост 2 GB RAM, чтобы
   // mcp-kanban не вытеснял Plane в swap при долгой работе агентов.
   // TtlCache: FIFO-cap, защищает от безграничного роста по уникальным
