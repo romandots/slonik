@@ -68,6 +68,7 @@ describe('IdentityStore', () => {
     });
     const rows = store.all();
     expect(rows.map((r) => r.role)).toEqual(['a-agent', 'z-agent']);
+    store.close();
   });
 
   it('bootstrap_meta key/value', () => {
@@ -100,7 +101,7 @@ describe('IdentityStore', () => {
     // её через IdentityStore. Миграция должна добавить колонки и сохранить
     // существующие данные; чтение должно вернуть default_state = null и
     // state_aliases = [] (дефолт для legacy-строк).
-    const dbPath = ':memory:';
+    //
     // better-sqlite3 не создаёт два разных :memory:-файла как один и тот же,
     // поэтому используем общий handle: создаём БД, эмулируем legacy схему,
     // затем оборачиваем тем же путём — но IdentityStore::Database() создаст

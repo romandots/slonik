@@ -378,15 +378,15 @@ describe('resolveStateWithAliases', () => {
     ).toBe('st-1');
   });
 
-  it('resolves via alias when canonical default_state is not in project', () => {
-    // ref='Development', но колонка называется «Разработка»; alias-список
-    // содержит «Разработка» — должен найти.
+  it('prefers exact name match over alias when both are present', () => {
+    // ref='Development' и колонка `Development` есть в `states` — exact-match
+    // должен победить alias-резолв независимо от переданных aliases.
     expect(
       resolveStateWithAliases('Development', ['Разработка'], states, {
         identity: 'r',
         projectIdentifier: 'P',
       }),
-    ).toBe('st-1'); // первый матч (exact) выигрывает; уберём Development и проверим
+    ).toBe('st-1');
   });
 
   it('resolves via alias when state column is renamed', () => {
