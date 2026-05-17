@@ -212,10 +212,20 @@ async function fromMcpArtifact(deps: DiscoveryDeps): Promise<Attachment[]> {
  * Если формат не совпадает (legacy/чужие объекты) — все поля undefined,
  * вызывающий fallback'нётся на lastSegment+lastModified.
  */
+/**
+ * Object-key из `attach-file/handler.ts::makeObjectKey` имеет форму
+ * `issues/<issueId>/<ts>-<identity>-<filename>`. Идентичности агентов —
+ * `analyst-agent`, `developer-agent`, и т.п. — содержат дефис, и filename
+ * тоже может содержать дефисы. Однозначно разобрать ключ нельзя, поэтому
+ * ищем известные agent-suffix'ы: первый `<ts>-<role>-agent-` совпадает.
+ *
+ * Если паттерн не нашёлся — пустой результат, fallback на lastSegment+
+ * lastModified в вызывающем коде.
+ */
 function parseMcaObjectKey(
   key: string,
 ): { uploadedAt?: string; uploadedBy?: string; filename?: string } {
-  const m = /^issues\/[^/]+\/(\d+)-([^-]+)-(.+)$/.exec(key);
+  const m = /^issues\/[^/]+\/(\d+)-([a-z][a-z0-9_-]*-agent)-(.+)$/i.exec(key);
   if (m === null) return {};
   const ts = Number.parseInt(m[1]!, 10);
   const identity = m[2]!;

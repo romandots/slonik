@@ -251,7 +251,9 @@ async function resolveMcpArtifact(
 function parseMcaObjectKey(
   key: string,
 ): { uploadedAt?: string; uploadedBy?: string; filename?: string } {
-  const m = /^issues\/[^/]+\/(\d+)-([^-]+)-(.+)$/.exec(key);
+  // См. discovery.ts::parseMcaObjectKey — agent-identity содержит дефис, и
+  // filename тоже. Используем тот же подход: matching `<ts>-<*-agent>-<rest>`.
+  const m = /^issues\/[^/]+\/(\d+)-([a-z][a-z0-9_-]*-agent)-(.+)$/i.exec(key);
   if (m === null) return {};
   const ts = Number.parseInt(m[1]!, 10);
   const identity = m[2]!;
