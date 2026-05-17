@@ -559,11 +559,18 @@ async function main(): Promise<void> {
 // CLI-диспетчер: первая позиционная команда (если есть) определяет режим.
 //   (нет)         — запуск HTTP-сервера (см. main()).
 //   bootstrap     — идемпотентный bootstrap Plane.
+//   add-role      — интерактивно создать новый файл `roles/<role>.md` (SLONK-12).
 async function dispatch(): Promise<void> {
   const cmd = process.argv[2];
   if (cmd === 'bootstrap') {
     const { bootstrapCli } = await import('./bootstrap/cli.js');
     await bootstrapCli();
+    return;
+  }
+  if (cmd === 'add-role') {
+    const { addRoleCli } = await import('./bootstrap/add-role.js');
+    // process.argv[2] = 'add-role'; передаём остаток как флаги команды.
+    await addRoleCli({ argv: process.argv.slice(3) });
     return;
   }
   if (cmd !== undefined && cmd !== '') {

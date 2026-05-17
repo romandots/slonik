@@ -301,7 +301,8 @@ identities:                                            # SLONK-6: legacy fallbac
 > только если `roles/` пуста (для совместимости с инсталляциями,
 > обновляющимися с версии без `roles/`). Преимущества `roles/`:
 > кастомные роли (например, `release-agent`) добавляются одним новым
-> файлом без правки манифеста; в коробку завозятся `state_aliases`
+> файлом без правки манифеста (быстрее всего — через `make add-role`,
+> интерактивную CLI из SLONK-12); в коробку завозятся `state_aliases`
 > (синонимы имени колонки для локализованных канбанов); кастомные роли
 > игнорируются git'ом. Подробнее — [USER_GUIDE §6.4](./USER_GUIDE.md#64-кастомные-роли-slonk-6).
 
@@ -425,9 +426,13 @@ identity в `X-Agent-Identity` (одна из ролей bootstrap'а: по ум
 `analyst-agent`, `developer-agent`, `security-auditor-agent`,
 `code-review-agent`, `qa-agent`, `doc-agent`, `merger-agent`). Whitelist
 собирается рантайм-овым `IdentityRegistry` из `identity.sqlite` (после
-`make bootstrap`) с fallback на `bootstrap/manifest.yaml`, поэтому добавить
-свою роль = поправить `identities:` в манифесте и пере-bootstrap'нуть —
-правки кода не нужны (см. [SPEC.md §5.5](./SPEC.md#55-agent-identity)).
+`make bootstrap`, primary-источник — `mcp-kanban/roles/*.md` с SLONK-6)
+с fallback на `roles/` напрямую и на legacy-секцию `identities:` в
+`bootstrap/manifest.yaml`. Добавить свою роль = `make add-role`
+(интерактивная CLI, SLONK-12) или скопировать `<role>.md`-файл в
+`mcp-kanban/roles/` руками, и затем пере-bootstrap'нуть — правки кода не
+нужны (см. [SPEC.md §5.5](./SPEC.md#55-agent-identity) и
+[USER_GUIDE.md §6.4](./USER_GUIDE.md#64-кастомные-роли-slonk-6)).
 URL — `http://localhost:8787/mcp` в dev, `https://mcp.slonk.example.com/mcp`
 в прод через caddy (Phase 7).
 

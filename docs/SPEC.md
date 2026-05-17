@@ -225,13 +225,20 @@ state_aliases:
 называть их как угодно.
 
 **Кастомные роли.** Чтобы добавить новую роль (например, `release-agent`
-с `default_state: Merging`), скопируй `mcp-kanban/roles/merger-agent.md`
-в `release-agent.md`, поправь `role` / `email` / `default_state` и
-прогоны `make bootstrap`. Перебилд образа не нужен — директория
-`roles/` пробрасывается bind-mount'ом из репозитория
+с `default_state: Merging`), запусти `make add-role` (SLONK-12) —
+интерактивная CLI задаст обязательные поля и сама создаст
+`mcp-kanban/roles/release-agent.md`, валидируя каждое поле тем же
+`RoleDefinitionSchema`, что и bootstrap. Альтернатива «руками» —
+`cp mcp-kanban/roles/merger-agent.md release-agent.md` + правка
+`role` / `email` / `default_state`. В обоих случаях завершает
+процесс `make bootstrap` (инвайт пользователя в Plane + запись
+identity в `mcp_data/identity.sqlite`). Перебилд образа не нужен —
+директория `roles/` пробрасывается bind-mount'ом из репозитория
 (`./mcp-kanban/roles:/app/roles:ro`). Файлы кастомных ролей
 **в git не идут** (см. `.gitignore`), они описывают конкретную
 установку; коробочные 7 ролей коммитятся как pristine-дефолт.
+Подробнее про CLI и её флаги — `mcp-kanban/roles/README.md` и
+[USER_GUIDE.md §6.4](./USER_GUIDE.md#64-кастомные-роли-slonk-6).
 
 **Whitelist для валидации `X-Agent-Identity`** собирается на старте
 `mcp-kanban` рантайм-овым `IdentityRegistry` (`src/identity.ts`):

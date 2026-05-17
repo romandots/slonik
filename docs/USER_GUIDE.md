@@ -737,13 +737,64 @@ state_aliases:
 не парсит, это документация).
 ```
 
-Как добавить:
+Как добавить (рекомендуемый путь — интерактивная CLI, SLONK-12):
+
+```bash
+make add-role
+```
+
+Команда задаст по очереди обязательные поля (`role`, `email`,
+`first_name`, `last_name`, `default_state`), затем опционально —
+повторяющиеся `state_aliases` (Enter с пустой строкой завершает ввод
+алиасов), и положит готовый `<role>.md` в `mcp-kanban/roles/`. Каждое
+поле валидируется тем же `RoleDefinitionSchema`, что и `make bootstrap`,
+поэтому файл, который CLI создала, гарантированно будет прочитан
+loader'ом — single source of truth.
+
+Если файл `<role>.md` уже существует, команда откажется его
+перезаписать и завершится non-zero exit. Передай `--force`, если
+действительно нужно перезаписать.
+
+Non-interactive режим (для CI, provisioning-скриптов, сред без TTY) —
+полный набор флагов передаётся одной строкой:
+
+```bash
+make add-role ARGS='--role release-agent \
+  --email release-agent@slonk.local \
+  --first-name Release \
+  --last-name Agent \
+  --default-state Merging \
+  --state-alias Release \
+  --state-alias Релиз \
+  --dir ./mcp-kanban/roles \
+  --force'
+```
+
+Доступные флаги:
+
+| Флаг | Значение | Пример |
+|---|---|---|
+| `--role` | snake-case-with-dash идентификатор роли (обязательно) | `release-agent` |
+| `--email` | валидный email — нужен Plane для инвайта (обязательно) | `release-agent@slonk.local` |
+| `--first-name` | имя пользователя в Plane (обязательно) | `Release` |
+| `--last-name` | фамилия пользователя в Plane (обязательно) | `Agent` |
+| `--default-state` | каноническая колонка Plane, куда `claim_issue` переводит задачу для этой роли (обязательно) | `Merging` |
+| `--state-alias` | синоним колонки (повторяемый); можно указывать несколько раз для разных языков | `--state-alias Релиз --state-alias Shipping` |
+| `--dir` | директория, куда положить `<role>.md` (по умолчанию `MCP_ROLES_DIR` или `./roles`); создаётся автоматически | `./mcp-kanban/roles` |
+| `--force` | разрешить перезапись существующего `<role>.md` | — |
+
+Альтернатива — скопировать готовый шаблон руками:
 
 ```bash
 cd mcp-kanban/roles
 cp merger-agent.md release-agent.md
 # поправь role, email, default_state, state_aliases
 cd ../..
+```
+
+В любом случае после создания файла:
+
+```bash
 make bootstrap
 ```
 
@@ -757,6 +808,9 @@ make bootstrap
 - Plane получит инвайт `release-agent@slonk.local` (в режиме
   `per_user`).
 
+`make add-role` сама **не зовёт Plane** и не требует `PLANE_API_KEY` —
+она только пишет файл; инвайт пользователя и запись identity в
+`mcp_data/identity.sqlite` происходят следующим `make bootstrap`.
 Перебилд образа **не нужен** — директория `roles/` пробрасывается
 bind-mount'ом `./mcp-kanban/roles:/app/roles:ro`. Все `*.md`, кроме
 дефолтных 7 ролей и `README.md`, **в git не идут** (см. `.gitignore`):

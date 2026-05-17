@@ -8,6 +8,18 @@
 ## [Unreleased]
 
 ### Added
+- **CLI-команда `add-role` для интерактивного создания новой роли
+  (SLONK-12).** Команда `node dist/server.js add-role` (или
+  `make add-role`) задаёт оператору поля `role` / `email` / `first_name`
+  / `last_name` / `default_state` / `state_aliases`, валидирует каждое
+  через тот же `RoleDefinitionSchema`, что и bootstrap, и кладёт
+  готовый `<role>.md` в `mcp-kanban/roles/`. Существующий файл не
+  перезаписывается без `--force`. Поддерживает non-interactive режим
+  через флаги (`--role`, `--email`, `--first-name`, `--last-name`,
+  `--default-state`, `--state-alias` — повторяемый, `--dir`, `--force`)
+  — это путь для CI / провижининга. Команда НЕ зовёт Plane сама:
+  оператор после неё запускает `make bootstrap`, чтобы заинвайтить
+  нового пользователя и записать identity в `mcp_data/identity.sqlite`.
 - **Data-driven маппинг «роль → колонка канбана» через `roles/*.md`
   (SLONK-6).** Список agent-identities и их дефолтные колонки больше не
   захардкожены в коде MCP. Каждая роль описана отдельным
