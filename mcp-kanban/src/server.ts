@@ -140,6 +140,18 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
   // Без авторизации — Prometheus scraper в internal_net'е, не на хосте.
   // SLONK-5: cache не знает про metrics, поэтому на scrape'е считаем дельту
   // эвикций и накатываем её в counter. Память на хранение пары int'ов.
+  //
+  // ВАЖНО — single-scraper assumption. Дельта (`cur.ttl - lastCacheEvict.ttl`)
+  // считается между двумя последовательными вызовами этого хэндлера. Если
+  // когда-нибудь поверх mcp-kanban встанут два независимых scraper'а
+  // (например HA-пара Prometheus или Push Gateway), они начнут
+  // «соревноваться» за дельту: первый зашедший подберёт прирост и сдвинет
+  // `lastCacheEvict`, второй увидит ноль и недосчитает evictions. Сейчас
+  // деплой строго один scraper (см. `prometheus/prometheus.yml` —
+  // singleton job `mcp-kanban`), и менять схему без переделки этого
+  // блока нельзя. Альтернатива на будущее — инкрементировать counter
+  // прямо из `cache.ts` через callback/EventEmitter; на текущей нагрузке
+  // не оправдано (TtlCache намеренно не знает про метрики).
   let lastCacheEvict = { ttl: 0, cap: 0 };
   app.get('/metrics', async (_request, reply) => {
     if (!config.MCP_METRICS_ENABLED) {
@@ -148,7 +160,7 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
     }
     // SLONK-5: на каждом scrape снимаем актуальные значения size'ов
     // (gauge'и pull-стиля); счётчики эвикции обновляются в момент эвикции
-    // (сессии) или диффом против предыдущего scrape'а (cache).
+    // (сессии) или диффом против предыдущего scrape'а (cache, см. note выше).
     metrics.cacheSize.set(cache.size());
     metrics.sessionsActive.set(sessions.size);
     const cur = cache.evictionStats();
