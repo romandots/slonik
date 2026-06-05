@@ -298,7 +298,9 @@ describe('OAuth-enabled server', () => {
 
   it('accepts an OAuth access token on a protected endpoint as operator', async () => {
     const access = 'integration-access-token';
-    oauthBuilt.oauth!.saveToken({
+    const store = oauthBuilt.oauth;
+    expect(store).toBeDefined();
+    store!.saveToken({
       token_hash: createHash('sha256').update(access).digest('hex'),
       kind: 'access', client_id: 'c', identity: 'operator', scope: 'mcp',
       resource: 'https://slonk.example.com/mcp',
@@ -310,5 +312,22 @@ describe('OAuth-enabled server', () => {
     });
     expect(r.statusCode).toBe(200);
     expect(JSON.parse(r.body).tools).toContain('who_am_i');
+  });
+
+  it('rejects an OAuth access token bound to a different resource (audience mismatch)', async () => {
+    const access = 'wrong-audience-token';
+    const store = oauthBuilt.oauth;
+    expect(store).toBeDefined();
+    store!.saveToken({
+      token_hash: createHash('sha256').update(access).digest('hex'),
+      kind: 'access', client_id: 'c', identity: 'operator', scope: 'mcp',
+      resource: 'https://attacker.example.com/mcp', // different audience
+      expires_at_ms: Date.now() + 3600_000, refresh_chain_id: 'ch2',
+    });
+    const r = await oauthBuilt.app.inject({
+      method: 'GET', url: '/mcp/tools',
+      headers: { authorization: `Bearer ${access}` },
+    });
+    expect(r.statusCode).toBe(401);
   });
 });

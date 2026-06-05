@@ -20,6 +20,8 @@ export function createLogger(config: Pick<Config, 'MCP_LOG_LEVEL' | 'MCP_LOG_FIL
         '*.PLANE_API_KEY',
         '*.POSTGRES_PASSWORD',
         '*.MINIO_ROOT_PASSWORD',
+        // OAuth secrets in request bodies / token responses. `req.body.code`
+        // is intentionally broad (redacts any body `code` field) — defensive.
         'req.body.password',
         'req.body.code',
         'req.body.code_verifier',

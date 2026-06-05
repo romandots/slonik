@@ -141,9 +141,15 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
         }
       : undefined;
 
-  const effectiveRegistry = config.MCP_OAUTH_ENABLED
+  const effectiveRegistry = oauth !== undefined
     ? createIdentityRegistry([...identityRegistry.list(), config.MCP_OAUTH_OPERATOR_IDENTITY])
     : identityRegistry;
+
+  const baseAuthOpts = {
+    expectedToken: config.MCP_AUTH_TOKEN,
+    identityRegistry: effectiveRegistry,
+    ...(oauthValidator !== undefined ? { oauthValidator } : {}),
+  };
 
   // ---------------- /health ----------------
   // Без авторизации; пингует Plane по корневому URL.
@@ -176,30 +182,30 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
   // Регистрируем только при включённом флаге. formbody нужен, чтобы
   // парсить application/x-www-form-urlencoded тела authorize/token-роутов.
   if (oauth !== undefined && config.MCP_OAUTH_ISSUER !== undefined) {
-    await app.register(formbody);
-    registerOAuthRoutes(app, {
-      store: oauth,
-      issuer: config.MCP_OAUTH_ISSUER,
-      authToken: config.MCP_AUTH_TOKEN,
-      operatorIdentity: config.MCP_OAUTH_OPERATOR_IDENTITY,
-      accessTtlSec: config.MCP_OAUTH_ACCESS_TTL_SEC,
-      refreshTtlSec: config.MCP_OAUTH_REFRESH_TTL_SEC,
-      codeTtlSec: config.MCP_OAUTH_CODE_TTL_SEC,
-      rateLimiter,
-      logger,
-    });
+    try {
+      await app.register(formbody);
+      registerOAuthRoutes(app, {
+        store: oauth,
+        issuer: config.MCP_OAUTH_ISSUER,
+        authToken: config.MCP_AUTH_TOKEN,
+        operatorIdentity: config.MCP_OAUTH_OPERATOR_IDENTITY,
+        accessTtlSec: config.MCP_OAUTH_ACCESS_TTL_SEC,
+        refreshTtlSec: config.MCP_OAUTH_REFRESH_TTL_SEC,
+        codeTtlSec: config.MCP_OAUTH_CODE_TTL_SEC,
+        rateLimiter,
+        logger,
+      });
+    } catch (err) {
+      oauth.close();
+      throw err;
+    }
   }
 
   // ---------------- /mcp/tools (debug) ----------------
   // Возвращает имена зарегистрированных tool'ов. Требует Bearer-токен;
   // identity не обязательна (это диагностический endpoint, не вызов tool'а).
   app.get('/mcp/tools', async (request, reply) => {
-    authenticate(request, reply, {
-      expectedToken: config.MCP_AUTH_TOKEN,
-      requireIdentity: false,
-      identityRegistry: effectiveRegistry,
-      ...(oauthValidator !== undefined ? { oauthValidator } : {}),
-    });
+    authenticate(request, reply, { ...baseAuthOpts, requireIdentity: false });
     return { tools: [...REGISTERED_TOOL_NAMES] };
   });
 
@@ -213,11 +219,7 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
   const sessions = new Map<string, StreamableHTTPServerTransport>();
 
   app.all('/mcp', async (request, reply) => {
-    authenticate(request, reply, {
-      expectedToken: config.MCP_AUTH_TOKEN,
-      identityRegistry: effectiveRegistry,
-      ...(oauthValidator !== undefined ? { oauthValidator } : {}),
-    });
+    authenticate(request, reply, baseAuthOpts);
     const identity = (request as unknown as AuthedRequest).identity;
 
     const sessionId = headerString(request.headers['mcp-session-id']);
