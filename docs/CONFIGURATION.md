@@ -18,9 +18,18 @@ slonk/
 │   └── Caddyfile               # обратный прокси (опц.)
 ├── mcp-kanban/
 │   ├── Dockerfile
-│   └── bootstrap/                # bind-mount'ится в /app/bootstrap:ro в mcp-kanban (правки без ребилда)
-│       ├── manifest.example.yaml # committed pristine-шаблон (workspace/projects/states/labels/identities)
-│       └── manifest.yaml         # локальный конфиг установки, gitignored (cp из *.example.yaml)
+│   ├── bootstrap/                # bind-mount'ится в /app/bootstrap:ro в mcp-kanban (правки без ребилда)
+│   │   ├── manifest.example.yaml # committed pristine-шаблон (workspace/projects/states/labels[/identities legacy])
+│   │   └── manifest.yaml         # локальный конфиг установки, gitignored (cp из *.example.yaml)
+│   └── roles/                    # SLONK-6: identity-роли по `<role>.md` (bind-mount /app/roles:ro)
+│       ├── analyst-agent.md      # коробочные 7 ролей коммитятся в git
+│       ├── developer-agent.md
+│       ├── security-auditor-agent.md
+│       ├── code-review-agent.md
+│       ├── qa-agent.md
+│       ├── doc-agent.md
+│       ├── merger-agent.md
+│       └── README.md             # формат файла + правила gitignore
 ├── prometheus/prometheus.yml
 ├── grafana/provisioning/…
 ├── loki/loki-config.yaml
@@ -114,12 +123,16 @@ Compose автоматически собирает `AMQP_URL` для Celery и�
 |---|---|---|
 | `MINIO_ROOT_USER` | `plane` | проксируется в Plane как `AWS_ACCESS_KEY_ID` |
 | `MINIO_ROOT_PASSWORD` | `change_me` | **(secret)** проксируется как `AWS_SECRET_ACCESS_KEY` |
-| `MINIO_BUCKET_PLANE` | `plane-uploads` | bucket для вложений Plane (создаётся автоматически на старте `plane-api`) |
-| `MINIO_BUCKET_MCP` | `mcp-artifacts` | bucket для агент-артефактов (используется `attach_file`) |
-| `MINIO_INTERNAL_ENDPOINT` | `http://minio:9000` | Внутренний URL MinIO/S3, используется MCP для presign'а в `attach_file`. По умолчанию hardcoded в compose; переопределяется только при внешнем S3 |
+| `MINIO_BUCKET_PLANE` | `plane-uploads` | bucket для вложений Plane (создаётся автоматически на старте `plane-api`); SSRF-фильтр inline-asset парсера комментариев (SLONK-14) принимает только URL'ы первого сегмента path = именно этого bucket |
+| `MINIO_BUCKET_MCP` | `mcp-artifacts` | bucket для агент-артефактов (используется `attach_file`, discovery `mcp_artifact`-source в `list_attachments`) |
+| `MINIO_INTERNAL_ENDPOINT` | `http://minio:9000` | Внутренний URL MinIO/S3, используется MCP для `statObject` / `listObjectsV2` и как одна из двух known-origin для SSRF-whitelist. По умолчанию hardcoded в compose; переопределяется только при внешнем S3 |
+| `MINIO_PUBLIC_ENDPOINT` | `http://localhost:9000` | Внешний URL MinIO для presigned GET URL (SLONK-14, `read_attachment` / `list_attachments`). Этот hostname:port агент будет открывать с хоста; он же — вторая разрешённая origin для SSRF-whitelist парсера inline-asset'ов комментариев. Если MinIO стоит за reverse-proxy, поставьте сюда внешний hostname proxy |
+| `MINIO_ACCESS_KEY` | `${MINIO_ROOT_USER}` | Access key для MCP-клиента MinIO (SLONK-14). В v1 — те же root-creds, что у Plane; в Phase 7 рекомендуется разделить service-account с read-only policy |
+| `MINIO_SECRET_KEY` | `${MINIO_ROOT_PASSWORD}` | **(secret)** Secret key для MCP-клиента MinIO (SLONK-14). Редактируется в логах pino |
+| `MINIO_USE_SSL` | `0` | TLS для presigned URL'ов MCP-клиента MinIO (SLONK-14, `1` = `https`, `0` = `http`). Default `0` для bundled-MinIO; в проде с TLS — `1` |
 | `MINIO_REGION` | `us-east-1` | |
 | `MINIO_USE` | `1` | `1` — bundled MinIO; `0` — внешний S3 (тогда заполнить `AWS_S3_ENDPOINT_URL`) |
-| `MINIO_ENDPOINT_SSL` | `0` | TLS у внешнего S3 endpoint'а (`0`/`1`) |
+| `MINIO_ENDPOINT_SSL` | `0` | TLS у внешнего S3 endpoint'а Plane (`0`/`1`); не путать с `MINIO_USE_SSL`, который относится к MCP-клиенту |
 
 ### 2.6 MCP Server
 
@@ -142,6 +155,36 @@ Compose автоматически собирает `AMQP_URL` для Celery и�
 | `MCP_RETRY_BACKOFF_MS` | `200` | базовый backoff (5xx — × 2^attempt; 429 — × 2^attempt, capped к 1–30s) |
 | `MCP_PLANE_TIMEOUT_MS` | `10000` | таймаут запроса к Plane |
 | `MCP_METRICS_ENABLED` | `false` | включить `/metrics` (Prometheus) |
+| `MCP_ROLES_DIR` | — | (SLONK-6) путь к директории с `*.md`-файлами agent-ролей. Если пуст — loader ищет директорию рядом с `package.json` (в Docker — `/app/roles`, через bind-mount это `./mcp-kanban/roles`). Менять стоит, только если ты смонтировал roles в нестандартное место. |
+| `MCP_IDENTITY_STORE_PATH` | — | (SLONK-11) путь до identity SQLite, используемой `bootstrapCli` и `scripts/smoke-roles-claim.ts`. Если пуст — берётся `BOOTSTRAP_STORE_DEFAULT_PATH` (`/mcp_data/identity.sqlite`, контейнерный путь). Приоритет источников: CLI-флаг `--store` → ENV → дефолт. Нужен, когда smoke-скрипт запускается **с хоста** (named-volume `slonk_mcp_data` на хосте не доступен); Makefile-таргет `smoke-roles` сам проставляет `$(CURDIR)/mcp_data/identity.sqlite`. См. [USER_GUIDE §6.4](./USER_GUIDE.md#64-кастомные-роли-slonk-6). |
+| `MCP_CACHE_MAX_ENTRIES` | `2048` | жёсткий cap на размер `TtlCache` (Plane-ответы read-tools, TTL=10s). При превышении вытесняется самый старый ключ (FIFO). См. [Resource limits for small hosts](#resource-limits-for-small-hosts). |
+| `MCP_SESSION_IDLE_MS` | `1800000` (30 мин) | idle-timeout MCP-сессии: если по `mcp-session-id` нет активности дольше этого срока, janitor закрывает сессию и освобождает McpServer + 22 tool-замыкания. |
+| `MCP_SESSION_GC_INTERVAL_MS` | `60000` (1 мин) | период фонового janitor'а. `0` отключает периодический sweep (сессии чистятся только на graceful shutdown клиента). |
+| `MCP_MAX_SESSIONS` | `256` | жёсткий cap одновременных сессий. При превышении вытесняется самая старая по `lastUsedAt` (LRU). |
+
+### 2.6.1 OAuth 2.1 Authorization Server (опц., для claude.ai remote-коннектора)
+
+Встроенный OAuth-сервер позволяет добавить слонк как remote-коннектор на claude.ai.
+Требует публичный HTTPS (через внешний Caddy, Phase 7). Гейт: `MCP_OAUTH_ENABLED` (default `false`).
+
+| Переменная | Default | Описание |
+|---|---|---|
+| `MCP_OAUTH_ENABLED` | `false` | Включить OAuth 2.1 endpoints (`/.well-known/*`, `/oauth/*`) |
+| `MCP_OAUTH_ISSUER` | — | Публичный base URL сервера (https URL без trailing slash). **Обязателен при `MCP_OAUTH_ENABLED=1`** |
+| `MCP_OAUTH_OPERATOR_IDENTITY` | `operator` | Идентичность получателя OAuth access-tokens (full access, не конвейерная роль) |
+| `MCP_OAUTH_ACCESS_TTL_SEC` | `3600` | TTL access-token'ов (сек) |
+| `MCP_OAUTH_REFRESH_TTL_SEC` | `2592000` | TTL refresh-token'ов (сек, default 30 дней) |
+| `MCP_OAUTH_CODE_TTL_SEC` | `60` | TTL authorization code (сек) |
+| `MCP_OAUTH_MAX_CLIENTS` | `50` | Cap на Dynamic Client Registration (защита от spam) |
+| `MCP_OAUTH_STORE_PATH` | `/mcp_data/oauth.sqlite` | Путь к SQLite-хранилищу tokens/codes |
+
+Оператор (владелец канбана) логинится вводом `MCP_AUTH_TOKEN` как пароля на форме
+`/oauth/authorize`. Полученный access-token разрешает полный доступ к `/mcp` с identity
+`operator`. На `/mcp` приём обоих типов Bearer (static token + OAuth token) происходит
+автоматически — выбор по содержимому токена.
+
+Токены хранятся только как SHA-256-хэши в `oauth.sqlite`. Плейнтекст не пишется
+никуда; в логах redact'ируется (расширение pino-список).
 
 ### 2.7 Caddy (опц.)
 
@@ -266,18 +309,31 @@ labels:
   - { name: security,       color: "#7f1d1d" }
   - { name: high-priority,  color: "#b91c1c" }
   - { name: low-priority,   color: "#94a3b8" }
-identities:
+identities:                                            # SLONK-6: legacy fallback
   - { role: analyst-agent,         email: analyst-agent@slonk.local,         default_state: Analysis }
   - { role: developer-agent,       email: developer-agent@slonk.local,       default_state: Development }
   - { role: security-auditor-agent,email: security-auditor-agent@slonk.local,default_state: Security Review }
   - { role: code-review-agent,     email: code-review-agent@slonk.local,     default_state: Code Review }
   - { role: qa-agent,              email: qa-agent@slonk.local,              default_state: Testing }
   - { role: doc-agent,             email: doc-agent@slonk.local,             default_state: Documenting }
+  - { role: merger-agent,          email: merger-agent@slonk.local,          default_state: Merging }
 ```
 
 > `projects[].slug` — внутренний ярлык для отчёта bootstrap; Plane его не
 > хранит. В MCP проект адресуется по `identifier` (`MCP_DEFAULT_PROJECT` /
 > `MCP_ALLOWED_PROJECTS` = `SLONK`), а не по slug.
+
+> **SLONK-6: `identities:` в манифесте — legacy fallback.** Начиная с SLONK-6
+> primary-источник agent-identities — директория
+> `mcp-kanban/roles/`, по одному `*.md`-файлу на роль (с YAML
+> front-matter). Bootstrap читает её первой; на `identities:` падает,
+> только если `roles/` пуста (для совместимости с инсталляциями,
+> обновляющимися с версии без `roles/`). Преимущества `roles/`:
+> кастомные роли (например, `release-agent`) добавляются одним новым
+> файлом без правки манифеста (быстрее всего — через `make add-role`,
+> интерактивную CLI из SLONK-12); в коробку завозятся `state_aliases`
+> (синонимы имени колонки для локализованных канбанов); кастомные роли
+> игнорируются git'ом. Подробнее — [USER_GUIDE §6.4](./USER_GUIDE.md#64-кастомные-роли-slonk-6).
 
 ## 5. Сети и порты
 
@@ -298,6 +354,100 @@ identities:
 
 В прод-конфиге публикуется **только** внешний caddy (Phase 7). До Phase 7 — `plane-proxy` на `${PLANE_HOST_PORT}`.
 
+### Resource limits for small hosts
+
+> Цель — не дать одному контейнеру выесть всю RAM маленького хоста и
+> столкнуть остальных в swap-thrashing. Лимиты выставлены `mem_limit:` в
+> `docker-compose.yml` (compose v2 syntax). На swarm-режиме — не
+> применимо, нужны `deploy.resources.limits.memory` (не используем).
+>
+> **Жёсткий минимум хоста — 4 GB RAM.** На 2 GB суммарный footprint
+> Plane backend + worker + frontend'ов + Postgres всё равно не помещается
+> (см. [USER_GUIDE §1.1](./USER_GUIDE.md#11-требования)); лимиты ниже —
+> baseline под 4 GB.
+
+| Сервис | `mem_limit` | Обоснование |
+|---|---|---|
+| `postgres` | `512m` | shared_buffers + work_mem + WAL; самый прожорливый. |
+| `redis` | `128m` | Plane хранит только сессии/queue-state, не полноценный cache. |
+| `rabbitmq` | `256m` | Erlang VM + queues; 192m нестабильно при пиках. |
+| `minio` | `192m` | Memory grows linearly with active uploads. |
+| `plane-migrator` | `384m` | one-shot Django migrations, лимит для safety. |
+| `plane-api` | `512m` | gunicorn worker (`GUNICORN_WORKERS=1`); при >1 — поднимать. |
+| `plane-worker` | `384m` | Celery worker. |
+| `plane-beat` | `128m` | scheduler-only, minimal footprint. |
+| `plane-web` / `admin` / `space` / `live` | `192m` каждый | Next.js SSR; 128m даёт OOM при build cache warmup. |
+| `plane-proxy` | `96m` | Caddy reverse-proxy. |
+| `mcp-kanban` | `256m` | TtlCache bounded (`MCP_CACHE_MAX_ENTRIES`), MCP-сессии с idle-eviction (`MCP_SESSION_IDLE_MS` + `MCP_MAX_SESSIONS`). |
+
+Итоговая сумма — ~3.3 GB лимитов. На 4 GB хосте остаётся ~700 MB для
+ОС и Docker engine — это рабочая полка. Под 8 GB можно поднять лимиты
+вдвое (см. ниже).
+
+> **Цифры — baseline под тюнинг.** Значения подобраны под пустой стек +
+> лёгкую интерактивную нагрузку (1–2 агента, единичные `make bootstrap`).
+> На реальной нагрузке отдельным сервисам нужно больше: в частности
+> **`plane-worker` (Celery) под пиками автоматизаций / mass-update'ов
+> ловит OOM-kill на `384m`** — наблюдалось в QA SLONK-5 как
+> циклические рестарты `slonk-plane-worker-1` с exit `137`. Если в
+> `docker events` видны `oom-kill` для plane-worker (или другого
+> сервиса) — поднимай его `mem_limit` в первую очередь: `plane-worker`
+> до `512m–768m`, дальше — пропорционально доступной RAM (см. тюнинг
+> ниже). Лимиты в репозитории остаются защитой от unbounded growth, а
+> не «правильным» размером под прод.
+
+#### MCP-kanban memory bounds
+
+Помимо `mem_limit:` mcp-kanban имеет приложение-уровневую защиту от
+безграничного роста:
+
+- **`TtlCache` (`MCP_CACHE_MAX_ENTRIES`, default 2048).** Read-tools
+  кешируют Plane-ответы на 10s. Если уникальных ключей в окне больше
+  cap'а — FIFO-эвикция (самый старый вставленный ключ удаляется на `set`).
+- **Sequence-id lookup.** `getIssueBySequenceId(SLONK-N)` теперь
+  пейджинирует Plane по 50 issue'ов с early-exit'ом, а не тянет
+  `?per_page=500` каждый раз. Снижает peak heap на JSON-парсинг.
+- **MCP-сессии.** `MCP_SESSION_IDLE_MS` (default 30 мин) + janitor
+  `MCP_SESSION_GC_INTERVAL_MS` (default 60s) закрывают сессии,
+  переставшие принимать запросы (типичный случай — клиент уронился
+  без graceful shutdown). `MCP_MAX_SESSIONS` (default 256) даёт LRU-cap
+  на случай шторма уникальных `mcp-session-id`.
+
+> Для базового сценария (4 GB RAM, 1–2 агента) **переопределять эти
+> четыре ENV в `.env` не нужно** — дефолты зашиты в `src/config.ts` и
+> подхватываются автоматически. Файл `.env.example` содержит их
+> значения с комментариями ровно как справочник; копировать оттуда в
+> локальный `.env` стоит только если планируешь отклоняться от
+> дефолтов (например, уменьшить cap кеша на 2 GB-хосте — что мы всё
+> равно не поддерживаем, см. [USER_GUIDE §1.1](./USER_GUIDE.md#11-требования)).
+
+Метрики (включаются `MCP_METRICS_ENABLED=1`):
+
+- `mcp_cache_size` — текущий размер `TtlCache`.
+- `mcp_cache_evictions_total{reason="ttl"|"cap"}` — счётчик эвикций.
+- `mcp_active_sessions` — текущее число MCP-сессий.
+- `mcp_sessions_evicted_total{reason="idle"|"cap"}` — счётчик эвикций
+  сессий.
+
+#### Тюнинг под другие хосты
+
+- **2 GB RAM.** Не пытайся — Plane backend сам по себе не помещается.
+- **4 GB RAM.** Baseline-цифры выше.
+- **8 GB RAM.** Можно удвоить `postgres → 1g`, `plane-api → 1g`,
+  `plane-worker → 768m`, остальные оставить. Это даёт головному
+  worker'у Plane дышать на пиках (миграции, mass-update).
+- **16+ GB RAM.** `mem_limit` всё ещё полезен (защита от unbounded
+  growth bug'ов в upstream), но цифры можно умножить на 2–4. Альтернатива
+  — `mem_reservation` (soft-лимит) + `mem_limit` ×2 от него.
+
+Проверка применения лимитов:
+
+```bash
+docker compose config | yq '.services[] | {name: .container_name // .image, mem_limit}'
+# или просто:
+docker stats --no-stream --format 'table {{.Name}}\t{{.MemUsage}}\t{{.MemPerc}}'
+```
+
 ## 6. Подключение агентов
 
 Общий контракт: `ALL /mcp` (StreamableHTTP), Bearer-токен в `Authorization`,
@@ -305,9 +455,13 @@ identity в `X-Agent-Identity` (одна из ролей bootstrap'а: по ум
 `analyst-agent`, `developer-agent`, `security-auditor-agent`,
 `code-review-agent`, `qa-agent`, `doc-agent`, `merger-agent`). Whitelist
 собирается рантайм-овым `IdentityRegistry` из `identity.sqlite` (после
-`make bootstrap`) с fallback на `bootstrap/manifest.yaml`, поэтому добавить
-свою роль = поправить `identities:` в манифесте и пере-bootstrap'нуть —
-правки кода не нужны (см. [SPEC.md §5.5](./SPEC.md#55-agent-identity)).
+`make bootstrap`, primary-источник — `mcp-kanban/roles/*.md` с SLONK-6)
+с fallback на `roles/` напрямую и на legacy-секцию `identities:` в
+`bootstrap/manifest.yaml`. Добавить свою роль = `make add-role`
+(интерактивная CLI, SLONK-12) или скопировать `<role>.md`-файл в
+`mcp-kanban/roles/` руками, и затем пере-bootstrap'нуть — правки кода не
+нужны (см. [SPEC.md §5.5](./SPEC.md#55-agent-identity) и
+[USER_GUIDE.md §6.4](./USER_GUIDE.md#64-кастомные-роли-slonk-6)).
 URL — `http://localhost:8787/mcp` в dev, `https://mcp.slonk.example.com/mcp`
 в прод через caddy (Phase 7).
 

@@ -43,4 +43,62 @@ describe('loadConfig', () => {
       loadConfig({ ...validBase, MCP_AGENT_IDENTITY_MODE: 'bot_swarm' }),
     ).toThrow(/MCP_AGENT_IDENTITY_MODE/);
   });
+
+  // SLONK-11: путь до identity SQLite — опциональный ENV, тип
+  // `optionalNonEmpty`. Пустая строка эквивалентна «не задано», непустая
+  // принимается как есть; loader не подставляет дефолт (его держит
+  // bootstrapCli / smoke-скрипт через BOOTSTRAP_STORE_DEFAULT_PATH).
+  describe('MCP_IDENTITY_STORE_PATH', () => {
+    it('defaults to undefined when not provided', () => {
+      const cfg = loadConfig(validBase);
+      expect(cfg.MCP_IDENTITY_STORE_PATH).toBeUndefined();
+    });
+
+    it('coerces empty string to undefined (compose ${VAR:-} pattern)', () => {
+      const cfg = loadConfig({ ...validBase, MCP_IDENTITY_STORE_PATH: '' });
+      expect(cfg.MCP_IDENTITY_STORE_PATH).toBeUndefined();
+    });
+
+    it('accepts a custom host path', () => {
+      const cfg = loadConfig({
+        ...validBase,
+        MCP_IDENTITY_STORE_PATH: '/Users/op/slonk/mcp_data/identity.sqlite',
+      });
+      expect(cfg.MCP_IDENTITY_STORE_PATH).toBe(
+        '/Users/op/slonk/mcp_data/identity.sqlite',
+      );
+    });
+  });
+});
+
+describe('OAuth config', () => {
+  const base = {
+    MCP_AUTH_TOKEN: 'a'.repeat(64),
+    PLANE_API_BASE_URL: 'http://plane.invalid/api/v1',
+    NODE_ENV: 'test' as const,
+  };
+
+  it('defaults MCP_OAUTH_ENABLED to false and skips issuer requirement', () => {
+    const cfg = loadConfig({ ...base });
+    expect(cfg.MCP_OAUTH_ENABLED).toBe(false);
+    expect(cfg.MCP_OAUTH_OPERATOR_IDENTITY).toBe('operator');
+    expect(cfg.MCP_OAUTH_ACCESS_TTL_SEC).toBe(3600);
+    expect(cfg.MCP_OAUTH_REFRESH_TTL_SEC).toBe(2_592_000);
+    expect(cfg.MCP_OAUTH_CODE_TTL_SEC).toBe(60);
+    expect(cfg.MCP_OAUTH_MAX_CLIENTS).toBe(50);
+  });
+
+  it('requires MCP_OAUTH_ISSUER when OAuth enabled', () => {
+    expect(() => loadConfig({ ...base, MCP_OAUTH_ENABLED: '1' })).toThrow(/MCP_OAUTH_ISSUER/);
+  });
+
+  it('accepts a valid issuer URL when enabled', () => {
+    const cfg = loadConfig({ ...base, MCP_OAUTH_ENABLED: '1', MCP_OAUTH_ISSUER: 'https://slonk.example.com' });
+    expect(cfg.MCP_OAUTH_ENABLED).toBe(true);
+    expect(cfg.MCP_OAUTH_ISSUER).toBe('https://slonk.example.com');
+  });
+
+  it('rejects MCP_OAUTH_ISSUER with a path component', () => {
+    expect(() => loadConfig({ ...base, MCP_OAUTH_ENABLED: '1', MCP_OAUTH_ISSUER: 'https://slonk.example.com/sub' })).toThrow(/path component/);
+  });
 });

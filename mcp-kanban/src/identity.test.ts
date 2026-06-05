@@ -87,6 +87,8 @@ describe('createIdentityRegistryFromStore', () => {
         email: `${role}@slonk.local`,
         plane_user_id: null,
         mode: 'per_user',
+        default_state: 'Backlog',
+        state_aliases: [],
       });
     }
     const r = createIdentityRegistryFromStore(store);

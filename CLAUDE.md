@@ -113,10 +113,11 @@ pnpm dev             # tsx watch src/server.ts (локальная разраб�
 
 ## Текущее состояние
 
-В коде на сегодня — **22 MCP tool'а**: `who_am_i` + 10 read (`list_*`,
-`get_issue`, `search_issues`, `get_issue_history`) + 8 write
-(`create_issue`, `update_issue`, `transition_issue`, `claim_issue`,
-`release_issue`, `block_issue`, `comment_issue`, `attach_file`) + 3 git
+В коде на сегодня — **24 MCP tool'а**: `who_am_i` + 11 read (`list_*`,
+`get_issue`, `search_issues`, `get_issue_history`, `list_attachments`) +
+9 write (`create_issue`, `update_issue`, `transition_issue`,
+`claim_issue`, `release_issue`, `block_issue`, `comment_issue`,
+`attach_file`, `read_attachment` — аудитится как write) + 3 git
 (`link_git_ref`, `unlink_git_ref`, `find_issues_by_git_ref`).
 
 ## Конвенции (обязательные)
@@ -145,6 +146,36 @@ pnpm dev             # tsx watch src/server.ts (локальная разраб�
 `merger-agent` сливает фичевую ветку в `develop` и закрывает worktree,
 а `release-agent` (если есть) делает PR/MR из `develop` в `main`.
 Прямой push в `main` запрещён — только через PR с зелёным CI и approve.
+
+**Worktree (обязательно).** `developer-agent` **обязан** работать в отдельной
+git-worktree под каждую задачу — не в основном working tree клона. Worktree
+создаётся единой командой в самом начале шага 5 (до первого редактирования
+файлов), путь — рядом с основным клоном, в каталоге уровнем выше (рекомендуемая
+схема: `../<repo-name>-<IDENT>-<seq>` или `../-worktrees/<IDENT>-<seq>-<slug>`):
+
+```bash
+git worktree add ../<repo-name>-<IDENT>-<seq> -b <type>/<IDENT>-<seq>-<slug> main
+# где <type> = feature | fix | chore — по типу задачи
+```
+
+Все дальнейшие действия по задаче (редактирование, прогон тестов, `git add` /
+`git commit` / `git push`, `link_git_ref`) — **только из этого worktree**. В
+основном клоне ничего не трогать. Если worktree создать невозможно (явное
+указание пользователя; репо, которое ломается на worktree, — например, из-за
+submodule-конфигурации или хуков) — `block_issue` с причиной, **не работай
+молча в основном клоне**.
+
+Закрытие worktree — обязанность `merger-agent`-а после успешного мержа
+фичевой ветки и перевода задачи в `Done`:
+
+```bash
+git worktree remove ../<repo-name>-<IDENT>-<seq>
+# + git branch -d <type>/<IDENT>-<seq>-<slug>, если ветка слита и так принято в репо
+```
+
+Если worktree-каталога нет (developer работал в нестандартном пути,
+worktree уже снят) — отметить это в комментарии к задаче и пропустить шаг,
+не падать.
 
 **Имя ветки.** `feature/<IDENT>-<seq>-<slug>`, где `<IDENT>-<seq>` —
 issue_id из канбана, `<slug>` — kebab-case из 2–5 слов. Для багфиксов —
@@ -202,7 +233,10 @@ Removed / Security`), ставит тег `vX.Y.Z` после merge в `main`.
 - `--no-verify` для pre-commit/CI хуков;
 - удалять данные пользователя (volume'ы) без явного подтверждения;
 - хардкод идентификаторов агентов или ролей вне SQLite/манифеста;
-- прямые запросы агента к Plane API в обход MCP.
+- прямые запросы агента к Plane API в обход MCP;
+- работать над задачей в основном working tree клона вместо отдельной
+  git-worktree (см. подраздел «Worktree (обязательно)» выше) — за исключением
+  случаев, когда это явно разрешено в комментариях задачи.
 
 ## Важные особенности
 

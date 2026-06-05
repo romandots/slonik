@@ -303,4 +303,35 @@ Acceptance:
 - Кэширование Plane-ответов в Redis для холодного MCP.
 - Sidecar для семантического поиска по issues (embedding + vector store).
 - HA-режим (Postgres replica, два MCP за LB).
-- Per-agent OAuth-токены вместо общего `MCP_AUTH_TOKEN`.
+- **Per-agent OAuth-токены вместо общего `MCP_AUTH_TOKEN`** — RFC 9728/8414/7591/7009 для локальных агентов (как extension к текущей `X-Agent-Identity` базе).
+
+## Phase 11 — Embedded OAuth 2.1 Authorization Server ✅ DONE
+
+**Цель:** Self-hosted слонк может быть добавлен как remote-коннектор на claude.ai.
+
+Деливериблы:
+
+- Встроенный OAuth 2.1 Authorization Server + Resource Server в `mcp-kanban`.
+- RFC 9728 Protected Resource Metadata discovery (`/.well-known/oauth-protected-resource`).
+- RFC 8414 Authorization Server Metadata (`/.well-known/oauth-authorization-server`).
+- RFC 7591 Dynamic Client Registration (`/oauth/register`, открыт, rate-limited, capped).
+- Authorization Code flow с PKCE S256 (обязателен; plain rejected) + refresh-token rotation.
+- RFC 7009 Token Revocation (`/oauth/revoke`).
+- `/oauth/authorize` HTML-форма: оператор вводит пароль = `MCP_AUTH_TOKEN`.
+- Dual-auth на `/mcp`: статичный Bearer (`MCP_AUTH_TOKEN` + `X-Agent-Identity`) OR OAuth access-token (→ `operator` identity).
+- SQLite-хранилище tokens/codes (только SHA-256-хэши, плейнтекст не пишется).
+- Refresh-token ротация с full-chain отравлением на reuse (MITM-protection).
+- Гейт: `MCP_OAUTH_ENABLED=false` по умолчанию; выключено → ничего не меняется, OAuth-эндпоинты отдают 404.
+- Audience binding по RFC 8707 — токен привязан к resource URI `/mcp`.
+
+Acceptance:
+
+- [x] `MCP_OAUTH_ENABLED=0` (default) — `/mcp` работает как раньше, OAuth-эндпоинты не зарегистрированы.
+- [x] `MCP_OAUTH_ENABLED=1` + `MCP_OAUTH_ISSUER=https://...` — все 7 OAuth-эндпоинтов работают.
+- [x] Полный flow: DCR → authorize (пароль) → code → token → access + refresh.
+- [x] Refresh-ротация: старый refresh помечается used, выдаётся новая пара в той же chain.
+- [x] Повторное использование отозванного refresh → chain poisoning (все токены в цепи невалидны).
+- [x] PKCE S256 обязателен; plain code_challenge отклоняется на `/authorize` GET.
+- [x] Rate-limit на DCR, authorize, token.
+- [x] 76+ passing unit + integration tests (crypto, store, routes, auth integration, full flow).
+- [x] Документация: SPEC.md (endpoints, dual-auth), ARCHITECTURE.md (data flow, threat model), CONFIGURATION.md (env vars), CHANGELOG.md, `.env.example`.

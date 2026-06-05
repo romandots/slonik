@@ -110,6 +110,52 @@ describe('authenticate', () => {
   });
 });
 
+describe('authenticate with OAuth validator', () => {
+  const registry = createIdentityRegistry(['operator']);
+  const STATIC = 's'.repeat(40);
+
+  function req(headers: Record<string, string>) {
+    return { headers } as unknown as Parameters<typeof authenticate>[0];
+  }
+  const reply = {} as Parameters<typeof authenticate>[1];
+
+  it('accepts a valid OAuth access token and resolves identity from it', () => {
+    const r = req({ authorization: 'Bearer oauth-abc' });
+    authenticate(r, reply, {
+      expectedToken: STATIC,
+      identityRegistry: registry,
+      oauthValidator: (tok) => (tok === 'oauth-abc' ? { identity: 'operator', scope: 'mcp' } : undefined),
+    });
+    expect((r as unknown as { identity: string }).identity).toBe('operator');
+  });
+
+  it('still accepts the static token with X-Agent-Identity', () => {
+    const r = req({ authorization: `Bearer ${STATIC}`, 'x-agent-identity': 'operator' });
+    authenticate(r, reply, { expectedToken: STATIC, identityRegistry: registry, oauthValidator: () => undefined });
+    expect((r as unknown as { identity: string }).identity).toBe('operator');
+  });
+
+  it('rejects an unknown Bearer when the validator returns undefined', () => {
+    const r = req({ authorization: 'Bearer nope' });
+    const err = expectThrows(() =>
+      authenticate(r, reply, { expectedToken: STATIC, identityRegistry: registry, oauthValidator: () => undefined }),
+    );
+    expect(err.code).toBe('UNAUTHORIZED');
+  });
+
+  it('rejects an OAuth identity that is not in the registry', () => {
+    const r = req({ authorization: 'Bearer oauth-ghost' });
+    const err = expectThrows(() =>
+      authenticate(r, reply, {
+        expectedToken: STATIC,
+        identityRegistry: registry,
+        oauthValidator: () => ({ identity: 'ghost-agent', scope: 'mcp' }),
+      }),
+    );
+    expect(err.code).toBe('IDENTITY_REQUIRED');
+  });
+});
+
 function expectThrows(fn: () => void): McpError {
   try {
     fn();

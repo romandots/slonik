@@ -25,10 +25,11 @@ RUN npm install -g corepack@latest \
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 
-# Исходники + tsconfig + bootstrap manifest
+# Исходники + tsconfig + bootstrap manifest + roles (SLONK-6)
 COPY tsconfig.json ./
 COPY src ./src
 COPY bootstrap ./bootstrap
+COPY roles ./roles
 
 # Сборка TS → dist/
 RUN pnpm run build
@@ -58,11 +59,12 @@ ENV NODE_ENV=production
 # MCP_LOG_FILE намеренно не задан — пустое значение фейлит zod-валидацию.
 # Если нужен файловый sink, переопределите MCP_LOG_FILE при docker run.
 
-# Готовый билд + production-зависимости + bootstrap-manifest
+# Готовый билд + production-зависимости + bootstrap-manifest + roles
 COPY --chown=node:node --from=builder /app/node_modules ./node_modules
 COPY --chown=node:node --from=builder /app/dist ./dist
 COPY --chown=node:node --from=builder /app/package.json ./package.json
 COPY --chown=node:node --from=builder /app/bootstrap ./bootstrap
+COPY --chown=node:node --from=builder /app/roles ./roles
 
 # Healthcheck — встроенный node-script, нет зависимости от curl/wget
 HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=5 \

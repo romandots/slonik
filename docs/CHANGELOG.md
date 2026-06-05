@@ -7,6 +7,318 @@
 
 ## [Unreleased]
 
+### Added
+- **Встроенный OAuth 2.1 Authorization Server** для добавления self-hosted slonk
+  как remote-коннектора на claude.ai (Phase 11, SLONK-oauth). Реализация следует
+  RFC 9728 (Protected Resource Metadata), RFC 8414 (Authorization Server Metadata),
+  RFC 7591 (Dynamic Client Registration), RFC 8707 (Audience binding), RFC 7009
+  (Token Revocation).
+  
+  Когда `MCP_OAUTH_ENABLED=true` (требует `MCP_OAUTH_ISSUER` и публичный HTTPS):
+  - Семь новых endpoints: `/.well-known/oauth-protected-resource` (discovery),
+    `/.well-known/oauth-authorization-server` (discovery),
+    `/oauth/register` (DCR, open with cap + rate-limit),
+    `/oauth/authorize` GET/POST (HTML login form, оператор вводит пароль = `MCP_AUTH_TOKEN`),
+    `/oauth/token` (authorization_code + refresh_token grants),
+    `/oauth/revoke` (revocation).
+  - Authorization Code flow с PKCE S256 (plain rejected). Оператор логинится один раз,
+    получает долгоживущий refresh-token; access-token'ы коротки (default 3600s).
+  - Refresh-token ротация: на каждый новый grant выдаётся новая пара tokens в том же
+    chain_id; повторное использование старого refresh отравляет весь chain (defense
+    against token theft по RFC 6819).
+  - Audience binding по RFC 8707 — все токены привязаны к resource URI `/mcp`;
+    токен для другого resource отклоняется.
+  - Dual-auth на `/mcp`: legacy Bearer (`MCP_AUTH_TOKEN` + `X-Agent-Identity`) ИЛИ
+    OAuth access-token → identity `operator` (full access, not pipeline role).
+  - SQLite-хранилище (`oauth.sqlite`): только SHA-256-хэши токенов/кодов;
+    плейнтекст никогда не пишется, редактируется в логах.
+  - Конфигурация: `MCP_OAUTH_ENABLED`, `MCP_OAUTH_ISSUER` (required when enabled),
+    `MCP_OAUTH_OPERATOR_IDENTITY` (default `operator`),
+    `MCP_OAUTH_ACCESS_TTL_SEC` (default 3600),
+    `MCP_OAUTH_REFRESH_TTL_SEC` (default 2592000),
+    `MCP_OAUTH_CODE_TTL_SEC` (default 60),
+    `MCP_OAUTH_MAX_CLIENTS` (default 50),
+    `MCP_OAUTH_STORE_PATH` (default `/mcp_data/oauth.sqlite`).
+  - Гейт: default `false` → когда выключено, OAuth-эндпоинты не регистрируются,
+    `/mcp` работает как раньше (backward-compatible).
+  - 76+ unit + integration tests: crypto (token gen, hashing, PKCE S256),
+    store (clients, codes, tokens, refresh rotation, chain poisoning),
+    metadata builders, full flow (DCR → authorize → token → /mcp),
+    negative cases (wrong password, redirect_uri mismatch, PKCE failure, code reuse).
+  - Документация: SPEC.md (§6.1 auth + endpoints table), ARCHITECTURE.md
+    (§6 OAuth data flow, §9.2 threat model), CONFIGURATION.md (§2.6.1 env vars),
+    `.env.example` (OAuth block with comments), `ROADMAP.md` (Phase 11).
+
+## [1.5.0] — 2026-05-17
+
+### Added
+- **Read-side interface for issue attachments (SLONK-14).** Three MCP
+  surface points: (1) new tool `list_attachments` — read-only, объединяет
+  три источника файлов (Plane UI uploads `pi_*`, inline-asset из
+  `comment_html` `pci_*`, mcp-artifacts из bucket `mcp-artifacts`
+  `mca_*`); поддерживает фильтры `source` / `comment_id` / `since` +
+  cursor-пагинацию; partial-failure семантика (упал один source →
+  `partial: true`, остальные продолжают работать). (2) Новый tool
+  `read_attachment` — резолвит `attachment_id` в **presigned MinIO GET
+  URL** (а не байты); делает `statObject` перед выдачей URL'а
+  (контракт «вернули URL → файл точно есть»); аудитится как write,
+  пишет в `audit_log.metadata` только `{bucket, object_key, expires_at}`
+  — не сам URL. (3) Расширение `get_issue` — обратносовместимо
+  добавлены поля `attachments_count: number` и
+  `attachments_preview: Attachment[]` (top-3 по `uploaded_at DESC`).
+  Новые ENV: `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`,
+  `MINIO_BUCKET_PLANE`, `MINIO_PUBLIC_ENDPOINT`, `MINIO_USE_SSL`.
+  Новый код ошибки `STORAGE_UNAVAILABLE` (HTTP 502). Реализация —
+  `mcp-kanban/src/{minio-client,attachments/{types,comment-assets,
+  discovery}}.ts` + `tools/{list-attachments,read-attachment}/`,
+  расширение `plane-client.ts::listIssueAttachments`.
+- **SSRF-strict парсер inline-asset'ов комментариев.** В
+  `mcp-kanban/src/attachments/comment-assets.ts`: принимаем asset URL
+  **только** если scheme = http/https, origin (host:port) совпадает с
+  одним из known MinIO endpoints (`MINIO_PUBLIC_ENDPOINT` +
+  `MINIO_INTERNAL_ENDPOINT`), pathname нормализован (без `..`/`.`),
+  и первый сегмент path равен `MINIO_BUCKET_PLANE`. Любой URL вне
+  whitelist (включая ссылки на `mcp-artifacts` через комментарий
+  человека, path-traversal формы и percent-encoded `%2e%2e`) —
+  игнорируется. Покрыто unit-тестами на SSRF-fixture'ах.
+- **Pino redact для presigned URL'ов.** В `mcp-kanban/src/logger.ts`
+  добавлены поля `*.MINIO_SECRET_KEY`, `*.download_url`, `*.upload_url`,
+  `*.presigned_url` — никогда не попадают в логи. `X-Amz-Signature`
+  не утекает, так как сам URL не сериализуется как отдельное поле в
+  audit/log.
+
+## [1.4.0] — 2026-05-17
+
+### Added
+- **ENV `MCP_IDENTITY_STORE_PATH` для переопределения пути до identity SQLite
+  (SLONK-11).** Опциональная переменная (`optionalNonEmpty`, дефолт —
+  `undefined`) добавлена в `src/config.ts`. Используется
+  `bootstrapCli` и `scripts/smoke-roles-claim.ts` в порядке
+  CLI-флаг → ENV → исторический контейнерный дефолт
+  `BOOTSTRAP_STORE_DEFAULT_PATH` (`/mcp_data/identity.sqlite`).
+  Никакой регрессии для `make bootstrap` в контейнере (без ENV) — путь
+  остаётся прежним.
+
+### Fixed
+- **`make smoke-roles` запускается с хоста без `SqliteError`
+  (SLONK-11).** Скрипт `scripts/smoke-roles-claim.ts` больше не хардкодит
+  контейнерный путь до identity SQLite — он берётся из
+  `MCP_IDENTITY_STORE_PATH`. Makefile-таргет `smoke-roles` проставляет
+  `MCP_IDENTITY_STORE_PATH=$(CURDIR)/mcp_data/identity.sqlite`. До правки
+  путь был `/mcp_data/identity.sqlite` (контейнерный mount, на хосте не
+  существует) и smoke падал на открытии БД. Раздел USER_GUIDE §6.4
+  обновлён: вместо «известного ограничения» — готовая инструкция
+  с `docker compose cp` для извлечения identity SQLite из named-volume
+  `slonk_mcp_data`.
+
+## [1.3.2] — 2026-05-17
+
+### Security
+- **Bootstrap roles loader больше не следует за symlink'ами в
+  `MCP_ROLES_DIR` (SLONK-10).** `loadRoles` теперь читает директорию через
+  `readdirSync(path, { withFileTypes: true })` и пропускает любую запись,
+  для которой `dirent.isFile()` возвращает `false` (включая symlinks,
+  directories, FIFO/сокеты). Раньше `evil.md -> /etc/passwd`, подложенный
+  в `roles/`, выгружался в `readFileSync` — и при провале zod-валидации
+  фрагмент содержимого цели мог попасть в throw-сообщение / stderr
+  bootstrap'а. Поверхность уже была ограничена write-доступом к
+  `MCP_ROLES_DIR` (compose-mount `:ro` для контейнера), но как defense
+  in depth теперь подсунутый symlink молча пропускается. Loader
+  опционально принимает pino-логгер через `LoadRolesOptions.logger` и
+  пишет одну warn-строку на пропущенный нерегулярный файл
+  (`name` + `kind`, без содержимого / цели); `bootstrapCli` уже
+  прокидывает свой логгер. README-fallback и проверка дубликатов
+  не изменились.
+
+## [1.3.1] — 2026-05-17
+
+### Changed
+- **Использование git-worktree стало обязательным шагом dev/merger-агентов
+  (SLONK-13).** Раньше правило про worktree было упомянуто одной пассивной
+  строкой в `CLAUDE.md` без процедуры и без явного запрета работать в
+  основном клоне — на практике агенты запускали `git checkout -b feature/...`
+  прямо в основном клоне и блокировали параллельную работу. Теперь:
+  `developer-agent` обязан создавать отдельный worktree
+  (`git worktree add ../<repo>-<ISSUE-KEY> -b <type>/<ISSUE-KEY>-<slug> main`)
+  первым действием шага «реализация»; `merger-agent` обязан закрывать его
+  (`git worktree remove ...`) после перевода задачи в `Done`; работа над
+  задачей в основном working tree клона явно запрещена (исключение —
+  явное разрешение в комментариях задачи). Правило закреплено сразу в
+  нескольких источниках, чтобы агенты не пропустили его: подсекция
+  «Worktree (обязательно)» в обоих `CLAUDE.md` (рабочий и
+  `docs/claude/CLAUDE.md` стартер-кит), переписанный шаг 5 в обоих
+  `slonk-developer/SKILL.md`, дополненный шаг закрытия в обоих
+  `slonk-merger/SKILL.md`, упоминание в коротких ролевых описаниях
+  `mcp-kanban/roles/{developer,merger}-agent.md` и новый подраздел
+  «8.0 Git worktree (обязательно для агентов)» в `docs/CONVENTIONS.md` —
+  источник правды для людей.
+
+## [1.3.0] — 2026-05-17
+
+### Added
+- **CLI-команда `add-role` для интерактивного создания новой роли
+  (SLONK-12).** Команда `node dist/server.js add-role` (или
+  `make add-role`) задаёт оператору поля `role` / `email` / `first_name`
+  / `last_name` / `default_state` / `state_aliases`, валидирует каждое
+  через тот же `RoleDefinitionSchema`, что и bootstrap, и кладёт
+  готовый `<role>.md` в `mcp-kanban/roles/`. Существующий файл не
+  перезаписывается без `--force`. Поддерживает non-interactive режим
+  через флаги (`--role`, `--email`, `--first-name`, `--last-name`,
+  `--default-state`, `--state-alias` — повторяемый, `--dir`, `--force`)
+  — это путь для CI / провижининга. Команда НЕ зовёт Plane сама:
+  оператор после неё запускает `make bootstrap`, чтобы заинвайтить
+  нового пользователя и записать identity в `mcp_data/identity.sqlite`.
+- **Data-driven маппинг «роль → колонка канбана» через `roles/*.md`
+  (SLONK-6).** Список agent-identities и их дефолтные колонки больше не
+  захардкожены в коде MCP. Каждая роль описана отдельным
+  `mcp-kanban/roles/<role>.md` файлом с YAML front-matter:
+  `role` / `email` / `first_name` / `last_name` / `default_state` /
+  опциональные `state_aliases[]`. Bootstrap (`make bootstrap`) читает
+  все `*.md` в директории, валидирует zod-схемой, наполняет SQLite-стор
+  (`mcp_data/identity.sqlite`, новые колонки `default_state` /
+  `state_aliases`) и инвайтит пользователей в Plane. Кастомные роли
+  (например, `release-agent`) добавляются одним новым файлом без
+  правки кода — после `make bootstrap` MCP начинает принимать
+  `X-Agent-Identity: release-agent` и `claim_issue` переводит задачу в
+  колонку из `default_state`. Директория пробрасывается
+  bind-mount'ом `./mcp-kanban/roles:/app/roles:ro` — перебилд образа
+  для добавления роли не нужен; путь переопределяется опц. ENV
+  `MCP_ROLES_DIR`. В git едут только коробочные 7 ролей и `README.md`;
+  любые кастомные `*.md` — gitignored (см. `.gitignore`).
+- **`state_aliases` для локализованных канбанов (SLONK-6).** Если в
+  Plane колонки переименованы (`Development` → `Разработка`),
+  `claim_issue` всё равно резолвит `default_state` через
+  case-insensitive совпадение с любым из `state_aliases` —
+  переименование колонки не требует правки кода или пересборки.
+  Дефолтные 7 ролей идут с предзаполненным набором русских/английских
+  синонимов (см. `roles/<role>.md`). При отсутствии совпадения tool
+  возвращает `INVALID_INPUT` с понятным сообщением: фактическим
+  списком колонок проекта и подсказкой, что переименовать / куда
+  добавить alias.
+- **Smoke-сценарий `make smoke-roles` против ЖИВОГО Plane (SLONK-6).**
+  Скрипт `mcp-kanban/scripts/smoke-roles-claim.ts` создаёт временный
+  issue в `MCP_DEFAULT_PROJECT`, для каждой identity из стора зовёт
+  `claim_issue`, проверяет, что задача оказалась в колонке
+  `default_state` (или одном из алиасов), и удаляет issue после
+  прогона. JSON-вывод: одна строка на роль + summary; exit code 0 —
+  все роли OK, 1 — хотя бы одна сломана. Запускается отдельно от
+  `pnpm test`, чтобы юнит-тесты не требовали поднятого Plane.
+
+### Changed
+- **`claim_issue.target_state` — произвольная строка вместо enum
+  (SLONK-6).** Раньше схема ограничивала `target_state` фиксированным
+  набором из 6 имён (`Analysis`/`Development`/…), и `claim_issue` падал
+  `INVALID_INPUT`, если оператор переименовал колонки в Plane UI или
+  завёл кастомную (`Triage`, `Backport`). Теперь это любая строка;
+  резолв в `state_id` — через приоритет: точное совпадение по `name`
+  → case-insensitive → case-insensitive по `state_aliases`. Маппинг
+  `role → default_state` тоже убран из `DEFAULT_STATE_BY_IDENTITY` и
+  читается из `IdentityStore` (`src/tools/claim-issue/schema.ts`,
+  `handler.ts`).
+- **`list_states` — фактический набор колонок Plane, не манифест
+  (SLONK-6).** Поведение уже было таким (`list_states.handler.ts` →
+  `plane.listStates`), но теперь оно явно зафиксировано в SPEC §5.3 и
+  покрыто тестом `claim-issue` через override `state_aliases` для
+  переименованной колонки. Кастомные ручные колонки оператора в Plane
+  UI попадают в выдачу `list_states` сразу — MCP их не фильтрует.
+- **Источник identity для bootstrap — `roles/` вместо
+  `manifest.yaml.identities` (SLONK-6).** Секция `identities:` в
+  `bootstrap/manifest.yaml` объявлена legacy: используется только как
+  fallback, если `roles/` пустая (для инсталляций, обновляющихся с
+  версии без поддержки `roles/`). Новые инсталляции должны держать
+  identity-набор в `roles/*.md`. `BootstrapReport.identities.source`
+  пишет, какой источник был использован (`'roles'` | `'manifest'`);
+  `make bootstrap` печатает это в отчёте.
+- **`IdentityStore` миграция: добавлены колонки `default_state`
+  (nullable) и `state_aliases` (JSON array, NOT NULL DEFAULT `'[]'`)
+  (SLONK-6).** Идемпотентная forward-only миграция через
+  `ALTER TABLE … ADD COLUMN` в конструкторе `IdentityStore`. Старые
+  базы (`identity.sqlite` без новых колонок) подхватываются на
+  старте; legacy-строки читаются как `default_state: null,
+  state_aliases: []` и обновляются на следующем `make bootstrap`.
+  Битый JSON в `state_aliases` лечится до `[]`, чтобы не валить
+  стартап MCP из-за одной строки.
+
+### Documentation
+- **`docs/USER_GUIDE.md` §6.4 — документировано известное ограничение
+  `make smoke-roles` (SLONK-6).** Скрипт сейчас открывает identity-стор
+  по контейнерному пути `/mcp_data/identity.sqlite` и с хоста падает
+  `SqliteError`; зафиксирован обходной путь и ссылка на follow-up по
+  переезду пути в ENV. Основное поведение «claim_issue по всем ролям»
+  покрыто юнит-/интеграционными тестами.
+
+- **Bounded memory growth для mcp-kanban на маленьких хостах (SLONK-5).**
+  Чтобы один контейнер не выедал всю RAM на 4-GB-хосте (Plane backend +
+  4 frontend'а + Postgres + worker'ы в 2 GB не помещаются), на уровне
+  инфры и приложения добавлены жёсткие верхние границы:
+  - `mem_limit:` на всех 12 длительных контейнерах `docker-compose.yml`
+    (`postgres 512m`, `redis 128m`, `rabbitmq 256m`, `minio 192m`,
+    `plane-api 512m`, `plane-worker 384m`, `plane-beat 128m`,
+    `plane-web/admin/space/live 192m` каждый, `plane-proxy 96m`,
+    `mcp-kanban 256m`, `plane-migrator 384m`). Сумма ~3.3 GB —
+    baseline под 4-GB-хост.
+  - `TtlCache` в `src/cache.ts` получил FIFO-cap по числу ключей
+    (`MCP_CACHE_MAX_ENTRIES`, default 2048) и периодический
+    `sweepExpired()` каждые 256 `set()`-ов. Раньше Map росла
+    бесконечно по уникальным ключам в окне TTL=10s.
+  - MCP-сессии в `src/server.ts` получили idle-timeout
+    (`MCP_SESSION_IDLE_MS`, default 30 мин), фоновый janitor
+    (`MCP_SESSION_GC_INTERVAL_MS`, default 60s) и жёсткий LRU-cap
+    (`MCP_MAX_SESSIONS`, default 256). До этого `sessions: Map`
+    удалял запись только через `transport.onclose` — при OOM-kill /
+    network drop / `docker restart` клиента сессия жила forever,
+    держа `McpServer` + 22 tool-замыкания.
+  - Поиск задачи по `<IDENT>-<seq>` в `plane-client.ts`
+    (`getIssueBySequenceId`) пейджинирует Plane постранично по 50
+    issue'ов с early-exit'ом на найденном `sequence_id` — раньше
+    тянулся `?per_page=500` на каждый lookup, что давало пик heap'а
+    на JSON-парсинге.
+  - Монотонный `touchSeq` в `SessionEntry` как детерминированный
+    tie-breaker для LRU-eviction'а при равных `lastUsedAt` (1ms-burst
+    одинаковых timestamp'ов больше не делает eviction «лотерейным»).
+  - Четыре новых ENV — `MCP_CACHE_MAX_ENTRIES`, `MCP_SESSION_IDLE_MS`,
+    `MCP_SESSION_GC_INTERVAL_MS`, `MCP_MAX_SESSIONS` — провалидированы
+    через zod в `src/config.ts`, дефолты зашиты в код; ручная правка
+    `.env` под базовый сценарий не требуется (закомментированные
+    значения с пояснениями есть в `.env.example`).
+  - Четыре новые Prometheus-метрики на `/metrics` (`MCP_METRICS_ENABLED=1`):
+    `mcp_cache_size` (gauge), `mcp_cache_evictions_total{reason="ttl"|"cap"}`
+    (counter), `mcp_active_sessions` (gauge),
+    `mcp_sessions_evicted_total{reason="idle"|"cap"}` (counter).
+
+### Changed
+- **`getIssueBySequenceId` теперь читает курсор пагинации Plane как
+  `next_cursor` с fallback на `next` (SLONK-5).** Поведение API
+  изменено: до SLONK-5 единственный запрос с `?per_page=500` отдавал
+  весь список без пагинации; теперь функция идёт постранично по
+  `per_page=50` и продолжает запрашивать следующую страницу пока
+  присутствует `next_cursor` (Plane v1.3.0) или `next` (pre-1.3 /
+  совместимость). Внешний контракт tool'ов `get_issue` /
+  `get_issue_history` не меняется — те же входы/выходы.
+
+### Documentation
+- **`docs/CONFIGURATION.md` — новая секция §5 «Resource limits for
+  small hosts» (SLONK-5).** Таблица `mem_limit:` по сервисам с
+  обоснованием, явная пометка «цифры — baseline под тюнинг» и
+  предупреждение про реальную OOM-нагрузку на `plane-worker` (Celery
+  под пиками автоматизаций); тюнинг под 2/4/8/16+ GB RAM; команды
+  проверки лимитов через `docker compose config | yq` и `docker
+  stats`; описание четырёх MCP-knob'ов и их метрик с явной ремаркой,
+  что для базового сценария ручная правка `.env` не нужна (дефолты
+  в `src/config.ts`, `.env.example` — справочный). Четыре новых ENV
+  добавлены в reference-таблицу §2.6.
+- **`docs/SPEC.md` §12 и новая §12.1 «Memory-bound knobs (SLONK-5)».**
+  Новые метрики добавлены в §12; в §12.1 описано **поведение**
+  механизмов — алгоритм cache-eviction (FIFO + lazy TTL + периодический
+  `sweepExpired`), session idle-timeout и LRU-cap с tie-breaker'ом
+  `touchSeq`, постраничный sequence-id lookup с `next_cursor`/`next`
+  и `MAX_PAGES=50`.
+- **`docs/USER_GUIDE.md` §1.1** теперь явно говорит, что RAM < 4 GB
+  не поддерживается (SLONK-5), со ссылкой на новые ENV и секцию
+  CONFIGURATION.md.
+- **`.env.example` — блок «Memory bounds (SLONK-5)»** с четырьмя
+  новыми ENV, дефолтами и комментариями (SLONK-5).
+
 ## [1.0.1] — 2026-05-16
 
 ### Fixed

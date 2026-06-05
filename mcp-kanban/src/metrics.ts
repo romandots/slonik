@@ -1,4 +1,4 @@
-import { Counter, Histogram, Registry, collectDefaultMetrics } from 'prom-client';
+import { Counter, Gauge, Histogram, Registry, collectDefaultMetrics } from 'prom-client';
 
 // Prometheus метрики (SPEC §12). Single registry, чтобы default-metrics
 // (process_*, nodejs_*) и наши кастомные жили вместе. Регистрация —
@@ -11,6 +11,13 @@ export class MetricsRegistry {
   readonly toolDuration: Histogram<string>;
   readonly planeErrors: Counter<string>;
   readonly rateLimited: Counter<string>;
+  // SLONK-5: memory-bound metrics. Cache size — gauge с pull-источником
+  // (collect()), эвикции — counter'ы по причине. Сессии — gauge на текущее
+  // число, counter — на причины эвикции.
+  readonly cacheSize: Gauge<string>;
+  readonly cacheEvictions: Counter<string>;
+  readonly sessionsActive: Gauge<string>;
+  readonly sessionsEvicted: Counter<string>;
 
   constructor() {
     this.registry = new Registry();
@@ -43,6 +50,32 @@ export class MetricsRegistry {
       name: 'mcp_rate_limited_total',
       help: 'Rate-limit rejections.',
       labelNames: ['scope', 'identity'] as const,
+      registers: [this.registry],
+    });
+
+    this.cacheSize = new Gauge({
+      name: 'mcp_cache_size',
+      help: 'Current number of keys in the in-memory TtlCache (SLONK-5).',
+      registers: [this.registry],
+    });
+
+    this.cacheEvictions = new Counter({
+      name: 'mcp_cache_evictions_total',
+      help: 'Cache evictions by reason (SLONK-5).',
+      labelNames: ['reason'] as const,
+      registers: [this.registry],
+    });
+
+    this.sessionsActive = new Gauge({
+      name: 'mcp_active_sessions',
+      help: 'Current number of active MCP sessions (SLONK-5).',
+      registers: [this.registry],
+    });
+
+    this.sessionsEvicted = new Counter({
+      name: 'mcp_sessions_evicted_total',
+      help: 'MCP session evictions by reason (SLONK-5).',
+      labelNames: ['reason'] as const,
       registers: [this.registry],
     });
   }

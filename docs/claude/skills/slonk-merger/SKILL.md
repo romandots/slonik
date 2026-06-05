@@ -26,6 +26,16 @@ description: Use when this terminal/session works as the slonk **merger-agent** 
 
 Всё слито и зелено → `transition_issue({ issue_id, state: "Done" })` + коммент «задача слита и закрыта». Что-то мешает мержу (конфликт, красные тесты, неясная интеграционная ветка) → `transition_issue → Development` или `block_issue` — **не** переводи в `Done`.
 
+После перевода задачи в `Done` **закрой worktree**, в котором developer-agent
+вёл задачу: `git worktree remove ../<repo-name>-<IDENT>-<seq>` (путь worktree
+ищи рядом с основным клоном по конвенции репо — `../<repo-name>-<IDENT>-<seq>`
+или `../-worktrees/<IDENT>-<seq>-<slug>`); если ветка уже слита и в репо
+принято удалять слитые ветки — `git branch -d <type>/<IDENT>-<seq>-<slug>`.
+Если worktree-каталог не найден (developer работал в нестандартном пути,
+worktree уже снят кем-то ещё) — отметь это в комментарии к задаче («worktree
+не найден, пропускаю») и переходи дальше, не падай. Это последний шаг — без
+него на хосте копятся осиротевшие worktree.
+
 ## Запрещено (сверх общего списка)
 
 - `force-push` (в любую ветку) и `--no-verify` для хуков.

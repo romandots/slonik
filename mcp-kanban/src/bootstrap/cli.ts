@@ -2,8 +2,9 @@ import { loadConfig } from '../config.js';
 import { createLogger } from '../logger.js';
 import { PlaneClient } from '../plane-client.js';
 import { loadManifest } from './manifest.js';
+import { loadRoles } from './roles.js';
 import { IdentityStore } from './store.js';
-import { runBootstrap, type BootstrapReport } from './runner.js';
+import { runBootstrap, type BootstrapReport, type IdentitiesSource } from './runner.js';
 
 // Entrypoint для `mcp-kanban bootstrap`. Вызывается из server.ts через
 // dispatch'ера CLI-аргументов. Выходит с кодом 0 при успехе, 1 при любой
@@ -14,12 +15,41 @@ export const BOOTSTRAP_STORE_DEFAULT_PATH = '/mcp_data/identity.sqlite';
 export interface BootstrapCliOptions {
   manifestPath?: string;
   storePath?: string;
+  /** Путь до директории `roles/`. По умолчанию — рядом с package.json. */
+  rolesDir?: string;
 }
 
 export async function bootstrapCli(opts: BootstrapCliOptions = {}): Promise<void> {
   const config = loadConfig();
   const logger = createLogger(config).child({ component: 'bootstrap' });
   const manifest = loadManifest({ ...(opts.manifestPath !== undefined ? { path: opts.manifestPath } : {}) });
+  // SLONK-6: primary-источник identities — `roles/`. Если директория
+  // пуста / отсутствует, бьём warn и падаем на legacy
+  // `manifest.identities` (для инсталляций, обновляющихся с версии без
+  // поддержки `roles/`).
+  const rolesDir = opts.rolesDir ?? config.MCP_ROLES_DIR;
+  // Передаём bootstrap-логгер в loadRoles, чтобы пропуски нерегулярных файлов
+  // (symlink / directory / FIFO) попадали в стандартный канал bootstrap'а
+  // как warn-строка. См. SLONK-10 — defense-in-depth против symlink-следования.
+  const rolesResult = loadRoles({
+    ...(rolesDir !== undefined ? { dir: rolesDir } : {}),
+    logger,
+  });
+  const identitiesSource: IdentitiesSource = rolesResult.found
+    ? { kind: 'roles', roles: rolesResult.roles }
+    : { kind: 'manifest' };
+  if (!rolesResult.found) {
+    logger.warn(
+      { roles_dir: rolesResult.path },
+      'roles/ directory empty or missing; falling back to manifest.identities (legacy). ' +
+        'Create role *.md files under roles/ for forward-compatible setup.',
+    );
+  } else {
+    logger.info(
+      { roles_dir: rolesResult.path, count: rolesResult.roles.length },
+      'identities loaded from roles/',
+    );
+  }
 
   if (config.PLANE_API_KEY === undefined) {
     logger.error(
@@ -30,13 +60,21 @@ export async function bootstrapCli(opts: BootstrapCliOptions = {}): Promise<void
   }
 
   const plane = new PlaneClient({ config, logger });
-  const store = new IdentityStore({ path: opts.storePath ?? BOOTSTRAP_STORE_DEFAULT_PATH });
+  // SLONK-11: путь до identity SQLite берётся в порядке CLI-флаг → ENV → дефолт.
+  // Дефолт `BOOTSTRAP_STORE_DEFAULT_PATH` = `/mcp_data/identity.sqlite` — это
+  // контейнерный путь, поэтому in-container `make bootstrap` без ENV работает
+  // как раньше. С хоста (smoke-сценарий) ENV `MCP_IDENTITY_STORE_PATH`
+  // перебивает дефолт на путь до bind/cp-копии identity-стора.
+  const storePath =
+    opts.storePath ?? config.MCP_IDENTITY_STORE_PATH ?? BOOTSTRAP_STORE_DEFAULT_PATH;
+  const store = new IdentityStore({ path: storePath });
   try {
     const report = await runBootstrap({
       plane,
       store,
       logger,
       manifest,
+      identitiesSource,
       config,
     });
     printReport(report);
@@ -79,7 +117,7 @@ function printReport(report: BootstrapReport): void {
     `labels:    ${report.labels.created} created, ${report.labels.existing} existing (of ${report.labels.total})`,
   );
   lines.push(
-    `identity:  mode=${report.identities.mode} invited=${report.identities.invited} skipped=${report.identities.skipped}` +
+    `identity:  mode=${report.identities.mode} source=${report.identities.source} invited=${report.identities.invited} skipped=${report.identities.skipped}` +
       (report.identities.fallback_reason !== undefined
         ? ` fallback_reason="${report.identities.fallback_reason}"`
         : ''),

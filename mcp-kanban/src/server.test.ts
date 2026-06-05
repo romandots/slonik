@@ -1,7 +1,8 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createHash } from 'node:crypto';
 import { buildServer, type BuiltServer } from './server.js';
 import { loadConfig } from './config.js';
 import { createLogger } from './logger.js';
@@ -39,12 +40,26 @@ function testEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
  */
 function seedIdentityStore(path: string, roles: readonly string[]): void {
   const seed = new IdentityStore({ path });
+  // SLONK-6: default_state / state_aliases — обязательная часть записи.
+  // Маппинг роль → колонка зашит в DEFAULT_STATES для теста; кастомные
+  // тесты могут не использовать этот хелпер и звать upsert напрямую.
+  const DEFAULT_STATES: Record<string, string> = {
+    'analyst-agent': 'Analysis',
+    'developer-agent': 'Development',
+    'security-auditor-agent': 'Security Review',
+    'code-review-agent': 'Code Review',
+    'qa-agent': 'Testing',
+    'doc-agent': 'Documenting',
+    'merger-agent': 'Merging',
+  };
   for (const role of roles) {
     seed.upsert({
       role,
       email: `${role}@slonk.local`,
       plane_user_id: null,
       mode: 'per_user',
+      default_state: DEFAULT_STATES[role] ?? 'Development',
+      state_aliases: [],
     });
   }
   seed.close();
@@ -132,6 +147,20 @@ describe('mcp-kanban HTTP server', () => {
       const body = JSON.parse(r.body) as { tools: string[] };
       expect(body.tools).toContain('who_am_i');
     });
+
+    it('does not expose OAuth discovery when the flag is off', async () => {
+      const r = await built.app.inject({ method: 'GET', url: '/.well-known/oauth-protected-resource' });
+      expect(r.statusCode).toBe(404);
+    });
+
+    it('rejects a non-static Bearer when OAuth is off', async () => {
+      const r = await built.app.inject({
+        method: 'GET',
+        url: '/mcp/tools',
+        headers: { authorization: 'Bearer some-oauth-looking-token' },
+      });
+      expect(r.statusCode).toBe(401);
+    });
   });
 
   describe('/metrics', () => {
@@ -214,6 +243,95 @@ describe('mcp-kanban HTTP server', () => {
   });
 });
 
+// SLONK-5: MCP-сессии раньше копились бесконечно — `transport.onclose`
+// срабатывал только на graceful shutdown клиента; при OOM-kill / network
+// drop / `docker restart` сессия оставалась forever, держа McpServer +
+// 22 tool-замыкания. На хосте 2 GB RAM это давало memory pressure.
+describe('mcp-kanban /mcp session eviction (SLONK-5)', () => {
+  // Каждый тест должен видеть изолированную карту сессий — иначе порядок
+  // тестов начинает влиять на результат (первый тест очищает сессии,
+  // второй вырастает на 3, и т.д.). Поднимаем сервер в beforeEach/afterEach,
+  // чтобы добавление новых кейсов не ломало уже существующие.
+  let built: BuiltServer;
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    // Короткий idle и cap=2 — чтобы тестам не приходилось ждать.
+    // GC_INTERVAL=0 отключает фоновый janitor; мы дёргаем sweepIdle() руками,
+    // чтобы тест был детерминирован.
+    const config = loadConfig(
+      testEnv({
+        MCP_SESSION_IDLE_MS: '50',
+        MCP_SESSION_GC_INTERVAL_MS: '0',
+        MCP_MAX_SESSIONS: '2',
+      }),
+    );
+    const logger = createLogger(config);
+    tmpDir = mkdtempSync(join(tmpdir(), 'slonk-mcp-sessions-'));
+    const identityStorePath = join(tmpDir, 'identity.sqlite');
+    seedIdentityStore(identityStorePath, ALL_ROLES);
+    built = await buildServer({
+      config,
+      logger,
+      identityStorePath,
+      auditStorePath: join(tmpDir, 'audit.sqlite'),
+      gitRefsStorePath: join(tmpDir, 'git_refs.sqlite'),
+    });
+    await built.app.ready();
+  });
+
+  afterEach(async () => {
+    await built.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  async function initOneSession(): Promise<void> {
+    await built.app.inject({
+      method: 'POST',
+      url: '/mcp',
+      headers: {
+        authorization: `Bearer ${TEST_TOKEN}`,
+        'x-agent-identity': 'developer-agent',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      payload: {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: {
+          protocolVersion: '2024-11-05',
+          capabilities: {},
+          clientInfo: { name: 'test', version: '0' },
+        },
+      },
+    });
+  }
+
+  it('evicts idle sessions on sweepIdle()', async () => {
+    // baseline: чисто
+    expect(built._sessions.size()).toBe(0);
+    await initOneSession();
+    // сессия открыта transport'ом, onsessioninitialized заносит её в Map
+    expect(built._sessions.size()).toBe(1);
+    // Ждём за idle-timeout (50ms) и дёргаем janitor вручную.
+    await new Promise((r) => setTimeout(r, 80));
+    built._sessions.sweepIdle();
+    expect(built._sessions.size()).toBe(0);
+  });
+
+  it('caps sessions at MCP_MAX_SESSIONS via LRU eviction', async () => {
+    // Открываем 3 сессии подряд при cap=2 → одна должна быть вытеснена.
+    await initOneSession();
+    await initOneSession();
+    await initOneSession();
+    // enforceMaxSessions вызывается из onsessioninitialized; даём ему
+    // тик на синхронную работу.
+    built._sessions.enforceMaxSessions();
+    expect(built._sessions.size()).toBe(2);
+  });
+});
+
 describe('mcp-kanban /metrics enabled', () => {
   let built: BuiltServer;
   let tmpDir: string;
@@ -248,5 +366,84 @@ describe('mcp-kanban /metrics enabled', () => {
     expect(r.headers['content-type']).toMatch(/text\/plain.*version=0\.0\.4/);
     expect(r.body).toContain('mcp_tool_calls_total');
     expect(r.body).toContain('tool="list_issues"');
+  });
+
+  // SLONK-5: memory-bound метрики обязаны присутствовать на /metrics
+  // (даже с нулевыми значениями), чтобы Prometheus сразу видел gauge'и
+  // и Grafana-дашборд не падал на missing series.
+  it('exposes SLONK-5 memory-bound metrics on /metrics', async () => {
+    const r = await built.app.inject({ method: 'GET', url: '/metrics' });
+    expect(r.statusCode).toBe(200);
+    // gauge'и появляются с # HELP / # TYPE даже без записанных значений
+    expect(r.body).toContain('mcp_cache_size');
+    expect(r.body).toContain('mcp_active_sessions');
+    expect(r.body).toContain('mcp_cache_evictions_total');
+    expect(r.body).toContain('mcp_sessions_evicted_total');
+  });
+});
+
+describe('OAuth-enabled server', () => {
+  let oauthBuilt: BuiltServer;
+  let oauthTmp: string;
+
+  beforeAll(async () => {
+    const config = loadConfig(testEnv({ MCP_OAUTH_ENABLED: '1', MCP_OAUTH_ISSUER: 'https://slonk.example.com' }));
+    const logger = createLogger(config);
+    oauthTmp = mkdtempSync(join(tmpdir(), 'slonk-oauth-'));
+    const idPath = join(oauthTmp, 'identity.sqlite');
+    seedIdentityStore(idPath, ALL_ROLES);
+    oauthBuilt = await buildServer({
+      config, logger,
+      identityStorePath: idPath,
+      auditStorePath: join(oauthTmp, 'audit.sqlite'),
+      gitRefsStorePath: join(oauthTmp, 'git_refs.sqlite'),
+      oauthStorePath: join(oauthTmp, 'oauth.sqlite'),
+    });
+    await oauthBuilt.app.ready();
+  });
+  afterAll(async () => {
+    await oauthBuilt.close();
+    rmSync(oauthTmp, { recursive: true, force: true });
+  });
+
+  it('exposes protected-resource discovery', async () => {
+    const r = await oauthBuilt.app.inject({ method: 'GET', url: '/.well-known/oauth-protected-resource' });
+    expect(r.statusCode).toBe(200);
+    expect(JSON.parse(r.body).resource).toBe('https://slonk.example.com/mcp');
+  });
+
+  it('accepts an OAuth access token on a protected endpoint as operator', async () => {
+    const access = 'integration-access-token';
+    const store = oauthBuilt.oauth;
+    expect(store).toBeDefined();
+    store!.saveToken({
+      token_hash: createHash('sha256').update(access).digest('hex'),
+      kind: 'access', client_id: 'c', identity: 'operator', scope: 'mcp',
+      resource: 'https://slonk.example.com/mcp',
+      expires_at_ms: Date.now() + 3600_000, refresh_chain_id: 'ch',
+    });
+    const r = await oauthBuilt.app.inject({
+      method: 'GET', url: '/mcp/tools',
+      headers: { authorization: `Bearer ${access}` },
+    });
+    expect(r.statusCode).toBe(200);
+    expect(JSON.parse(r.body).tools).toContain('who_am_i');
+  });
+
+  it('rejects an OAuth access token bound to a different resource (audience mismatch)', async () => {
+    const access = 'wrong-audience-token';
+    const store = oauthBuilt.oauth;
+    expect(store).toBeDefined();
+    store!.saveToken({
+      token_hash: createHash('sha256').update(access).digest('hex'),
+      kind: 'access', client_id: 'c', identity: 'operator', scope: 'mcp',
+      resource: 'https://attacker.example.com/mcp', // different audience
+      expires_at_ms: Date.now() + 3600_000, refresh_chain_id: 'ch2',
+    });
+    const r = await oauthBuilt.app.inject({
+      method: 'GET', url: '/mcp/tools',
+      headers: { authorization: `Bearer ${access}` },
+    });
+    expect(r.statusCode).toBe(401);
   });
 });

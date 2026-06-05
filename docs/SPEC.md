@@ -155,6 +155,13 @@ Bootstrap **реконсилирует** набор состояний с ман
 renamed: 0, deleted: 0` по states. Отчёт `make bootstrap` печатает
 счётчики `renamed` / `deleted` / `delete_failed`.
 
+**SLONK-6: `list_states` отдаёт фактический набор колонок Plane**, а не
+только те, что описаны в манифесте. Если оператор добавил колонку
+руками через UI (например, `Triage` или `Backport`), она появится в
+выдаче `list_states` сразу — MCP не фильтрует по манифесту. Маппинг
+кастомных ролей на эти колонки делается через `state_aliases` в
+`roles/*.md` (см. §5.5).
+
 ### 5.4 Labels
 
 Обязательные labels проекта `SLONK` (с фиксированной палитрой —
@@ -166,25 +173,91 @@ renamed: 0, deleted: 0` по states. Отчёт `make bootstrap` печатае�
 
 ### 5.5 Agent identity
 
-Один Plane-пользователь на роль агента. Аккаунты создаются bootstrap-скриптом:
+Один Plane-пользователь на роль агента. Аккаунты создаются bootstrap-скриптом
+из директории `mcp-kanban/roles/` (**SLONK-6**, primary source):
 
-| Identity | Email | Plane-role в workspace |
-|---|---|---|
-| `analyst-agent` | `analyst-agent@slonk.local` | Member |
-| `developer-agent` | `developer-agent@slonk.local` | Member |
-| `security-auditor-agent` | `security-auditor-agent@slonk.local` | Member |
-| `code-review-agent` | `code-review-agent@slonk.local` | Member |
-| `qa-agent` | `qa-agent@slonk.local` | Member |
-| `doc-agent` | `doc-agent@slonk.local` | Member |
-| `merger-agent` | `merger-agent@slonk.local` | Member |
+| Identity | Email | Default state | Plane-role |
+|---|---|---|---|
+| `analyst-agent` | `analyst-agent@slonk.local` | `Analysis` | Member |
+| `developer-agent` | `developer-agent@slonk.local` | `Development` | Member |
+| `security-auditor-agent` | `security-auditor-agent@slonk.local` | `Security Review` | Member |
+| `code-review-agent` | `code-review-agent@slonk.local` | `Code Review` | Member |
+| `qa-agent` | `qa-agent@slonk.local` | `Testing` | Member |
+| `doc-agent` | `doc-agent@slonk.local` | `Documenting` | Member |
+| `merger-agent` | `merger-agent@slonk.local` | `Merging` | Member |
 
-> Whitelist для валидации `X-Agent-Identity` собирается на старте `mcp-kanban`
-> рантайм-овым `IdentityRegistry` (`src/identity.ts`): primary-источник —
-> `IdentityStore` (`mcp_data/identity.sqlite`, наполняется `make bootstrap` из
-> `bootstrap/manifest.yaml`), fallback — сам манифест для свежей инсталляции
-> до первого bootstrap'а. Список ролей в коде **не хардкодится** — чтобы
-> добавить роль, поправь `identities:` в `manifest.yaml`, прогони
-> `make bootstrap` и пересоздай контейнер `mcp-kanban`.
+Каждая роль описана файлом `mcp-kanban/roles/<role>.md` с YAML
+front-matter:
+
+```yaml
+---
+role: developer-agent
+email: developer-agent@slonk.local
+first_name: Developer
+last_name: Agent
+default_state: Development
+state_aliases:
+  - Разработка
+  - Coding
+---
+```
+
+- `default_state` — каноническая колонка Plane, в которую `claim_issue`
+  переводит задачу по умолчанию для этой identity.
+- `state_aliases` — case-insensitive синонимы имени колонки, под которые
+  `claim_issue` подменяет `default_state` при резолве в `state_id`.
+  Нужны, когда оператор переименовал колонку в Plane UI (локализация,
+  смена терминологии) и не хочет пересобирать образ.
+
+**Маппинг роль → колонка** живёт в SQLite-сторе
+(`mcp_data/identity.sqlite`, колонки `default_state` + `state_aliases`),
+**не в коде MCP**. `claim_issue` без аргумента `target_state` читает
+`default_state` из стора и резолвит его в `state_id`:
+
+1. точное совпадение `state.name == default_state`;
+2. case-insensitive совпадение;
+3. case-insensitive совпадение с любым `state_aliases`;
+4. иначе — `INVALID_INPUT` с подсказкой, что переименовать / куда
+   добавить алиас.
+
+Поле `target_state` в `claim_issue` — произвольная строка (не enum):
+после SLONK-6 список колонок не зашит в схему, оператор Plane может
+называть их как угодно.
+
+**Кастомные роли.** Чтобы добавить новую роль (например, `release-agent`
+с `default_state: Merging`), запусти `make add-role` (SLONK-12) —
+интерактивная CLI задаст обязательные поля и сама создаст
+`mcp-kanban/roles/release-agent.md`, валидируя каждое поле тем же
+`RoleDefinitionSchema`, что и bootstrap. Альтернатива «руками» —
+`cp mcp-kanban/roles/merger-agent.md release-agent.md` + правка
+`role` / `email` / `default_state`. В обоих случаях завершает
+процесс `make bootstrap` (инвайт пользователя в Plane + запись
+identity в `mcp_data/identity.sqlite`). Перебилд образа не нужен —
+директория `roles/` пробрасывается bind-mount'ом из репозитория
+(`./mcp-kanban/roles:/app/roles:ro`). Файлы кастомных ролей
+**в git не идут** (см. `.gitignore`), они описывают конкретную
+установку; коробочные 7 ролей коммитятся как pristine-дефолт.
+Подробнее про CLI и её флаги — `mcp-kanban/roles/README.md` и
+[USER_GUIDE.md §6.4](./USER_GUIDE.md#64-кастомные-роли-slonk-6).
+
+**Whitelist для валидации `X-Agent-Identity`** собирается на старте
+`mcp-kanban` рантайм-овым `IdentityRegistry` (`src/identity.ts`):
+
+1. primary — `IdentityStore` (`mcp_data/identity.sqlite`, наполняется
+   `make bootstrap` из `roles/`);
+2. fallback A — `mcp-kanban/roles/` напрямую (если store пустой,
+   например после стирания volume `mcp_data` — чтобы сервер мог
+   стартовать до первого `make bootstrap`);
+3. fallback B — `bootstrap/manifest.yaml.identities` (legacy для
+   инсталляций без `roles/`).
+
+Список ролей в коде **не хардкодится**.
+
+**Legacy: `manifest.identities`.** Секция `identities:` в
+`bootstrap/manifest.yaml` объявлена legacy: она используется только
+как fallback, если директория `roles/` пуста. В новых инсталляциях
+держи источник правды в `roles/*.md`; манифест отвечает за
+workspace/projects/states/labels.
 
 Если в текущей версии Plane создание пользователей через API запрещено или
 ограничено, MCP **должен** использовать единого бота `agents-bot@slonk.local` и
@@ -236,6 +309,8 @@ TipTap'ом безвозвратно — `parseDescription` вернёт пус�
 
 ### 6.1 Транспорт и аутентификация
 
+**MCP-протокол:**
+
 - HTTP+SSE: единый endpoint `ALL /mcp` через `StreamableHTTPServerTransport`
   (MCP SDK ≥ 1.29). POST принимает JSON-RPC, GET апгрейдится в SSE-стрим.
   Сессия идентифицируется заголовком `mcp-session-id`, который сервер
@@ -243,14 +318,37 @@ TipTap'ом безвозвратно — `parseDescription` вернёт пус�
 - `GET /mcp/tools` — диагностический endpoint, возвращает список имён
   зарегистрированных tool'ов (Bearer-авторизация, identity не обязательна).
 - stdio: `mcp-kanban stdio` для локального запуска (в v1 не реализован).
-- Auth: `Authorization: Bearer <MCP_AUTH_TOKEN>` для всех HTTP-эндпоинтов
-  кроме `/health`.
-- В заголовке `X-Agent-Identity: <role>` агент сообщает свою роль. Если заголовок
-  отсутствует на `/mcp` — MCP вернёт 400 `IDENTITY_REQUIRED`. Если значение не
-  входит в whitelist `IdentityRegistry` (см. §5.5) — тот же 400
-  `IDENTITY_REQUIRED: Unknown agent identity: <role>`.
 - `GET /health` — без авторизации, возвращает
   `{status, service, version, plane_reachable, plane_status, plane_latency_ms}`.
+
+**Авторизация на `/mcp`:**
+
+`/mcp` (и `/mcp/tools`) принимают ЛИБО статичный Bearer-токен, ЛИБО OAuth access-token:
+
+- **Static Bearer** (по умолчанию): `Authorization: Bearer <MCP_AUTH_TOKEN>` +
+  `X-Agent-Identity: <role>`. Заголовок `X-Agent-Identity` обязателен при
+  использовании статичного токена; если отсутствует — 400 `IDENTITY_REQUIRED`.
+  Значение проверяется против whitelist `IdentityRegistry` (см. §5.5).
+- **OAuth Bearer** (если `MCP_OAUTH_ENABLED=1`): `Authorization: Bearer <access_token>`
+  без `X-Agent-Identity`. Access-token резолвится в identity `operator` (полный
+  доступ, не конвейерная роль). Аудитория токена привязана к ресурсу `/mcp`
+  (RFC 8707); токен, выданный для другого ресурса, отклоняется.
+
+**OAuth 2.1 Authorization Server** (если `MCP_OAUTH_ENABLED=1`):
+
+| Endpoint | Метод | Назначение | RFC |
+|---|---|---|---|
+| `/.well-known/oauth-protected-resource` | GET | Метаданные Resource Server (это `/mcp`), указывают на AS и resource URI | RFC 9728 |
+| `/.well-known/oauth-authorization-server` | GET | Метаданные AS: endpoints, поддерживаемые методы (PKCE S256 обязателен), grant'ы | RFC 8414 |
+| `/oauth/register` | POST | Dynamic Client Registration (открыт, rate-limited, capped на `MCP_OAUTH_MAX_CLIENTS`) | RFC 7591 |
+| `/oauth/authorize` | GET | Рендерит HTML-форму логина (оператор вводит пароль = `MCP_AUTH_TOKEN`) | — |
+| `/oauth/authorize` | POST | Проверка пароля (constant-time), выдача single-use authorization code (PKCE S256-bound, TTL = `MCP_OAUTH_CODE_TTL_SEC`) | — |
+| `/oauth/token` | POST | Grant: `authorization_code` (PKCE верификация) или `refresh_token` (с ротацией). Возвращает opaque `access_token` + `refresh_token` | — |
+| `/oauth/revoke` | POST | Отзыв access/refresh токена | RFC 7009 |
+
+OAuth flow для claude.ai: discovery → Dynamic Client Registration → `/authorize`
+(пользователь вводит пароль) → authorization code → `/oauth/token` → access token →
+`/mcp` с `Authorization: Bearer <access_token>`.
 
 ### 6.2 Перечень инструментов
 
@@ -268,7 +366,7 @@ TipTap'ом безвозвратно — `parseDescription` вернёт пус�
 | `create_issue` | Создать новую задачу |
 | `update_issue` | Изменить поля (title, description, priority, assignees, labels) |
 | `transition_issue` | Перевести задачу в новый state |
-| `claim_issue` | Атомарно: assign себе + state `Analysis`/`Development` + label `agent-claimed` |
+| `claim_issue` | Атомарно: assign себе + state из `roles/<role>.md.default_state` (SLONK-6) + label `agent-claimed` |
 | `release_issue` | Снять с себя + state `To Do` + remove `agent-claimed` |
 | `block_issue` | state `Blocked` + label `agent-blocked` + комментарий с причиной |
 | `comment_issue` | Добавить комментарий (с префиксом identity) |
@@ -277,7 +375,17 @@ TipTap'ом безвозвратно — `parseDescription` вернёт пус�
 | `unlink_git_ref` | Удалить связь |
 | `find_issues_by_git_ref` | Найти issues по repo/branch/pr/commit (SQLite-индекс, без обращения к Plane) |
 | `get_issue_history` | История действий по задаче (Plane activity + MCP audit) |
+| `list_attachments` | Список вложений задачи: Plane UI uploads + inline-asset из комментариев + mcp-artifacts (SLONK-14) |
+| `read_attachment` | Получить presigned MinIO GET URL для вложения; audit-логируется как write (SLONK-14) |
 | `who_am_i` | Вернуть текущую identity и её права |
+
+`get_issue` (SLONK-14): обратносовместимо расширен двумя полями:
+`attachments_count: number` (общее число вложений по всем трём
+источникам) и `attachments_preview: Attachment[]` (≤ 3 элементов,
+сортировка `uploaded_at DESC`). Поля заполняются через ту же discovery,
+что и `list_attachments`; если discovery возвращает `partial: true` или
+падает целиком — оба поля сбрасываются в `0/[]`, сам `get_issue` не
+падает (логируется warning).
 
 ### 6.3 Схемы параметров
 
@@ -292,10 +400,10 @@ TipTap'ом безвозвратно — `parseDescription` вернёт пус�
   "required": ["issue_id"],
   "properties": {
     "issue_id":   { "type": "string", "description": "Plane issue ID или sequence_id (PROJ-123)" },
+    "project":    { "type": "string", "description": "Plane project identifier; иначе берётся MCP_DEFAULT_PROJECT" },
     "target_state": {
       "type": "string",
-      "enum": ["Analysis", "Development", "Security Review", "Code Review", "Testing", "Documenting"],
-      "description": "По умолчанию выбирается по identity"
+      "description": "Имя колонки Plane (SLONK-6: произвольная строка, не enum). Если не передано — берётся default_state из roles/<role>.md (через IdentityStore). Имя резолвится через точное совпадение → case-insensitive → state_aliases."
     }
   }
 }
@@ -344,6 +452,7 @@ content). Категории:
 | `NOT_FOUND` | Plane вернул 404 |
 | `CONFLICT` | Race на claim/transition (см. §6.5) |
 | `PLANE_UNAVAILABLE` | Plane API не отвечает / 5xx |
+| `STORAGE_UNAVAILABLE` | MinIO не отвечает (для `read_attachment` — фатально; для `list_attachments` — `partial: true`). SLONK-14 |
 | `RATE_LIMITED` | Сработал внутренний rate limit |
 | `INTERNAL` | Прочие сбои; пишется в лог с trace_id |
 
@@ -377,6 +486,13 @@ MCP ограничивает:
 - Опциональный файловый sink — `MCP_LOG_FILE=/var/log/mcp/server.log` (том `mcp_logs`).
 - Аудит всех write-операций — отдельная таблица `audit_log` в `mcp_data/audit.sqlite`:
   `trace_id, ts, identity, tool, input_hash, plane_request_id, outcome, error_code`.
+- `read_attachment` (SLONK-14) формально read-only, но **аудитится как write**:
+  каждая выдача presigned URL пишет запись в `audit_log` с полем
+  `metadata = {bucket, object_key, expires_at}`. Сам URL и
+  `X-Amz-Signature` в audit **не** попадают.
+- Logger pino редактирует ключи `MCP_AUTH_TOKEN`, `PLANE_API_KEY`,
+  `*_PASSWORD`, `MINIO_SECRET_KEY`, `download_url`, `upload_url`,
+  `presigned_url` — они никогда не утекают в stdout/файловый лог.
 - В описание Plane-комментариев MCP **не** добавляет секретных значений (токены,
   пути с пользовательскими credentials).
 
@@ -449,5 +565,59 @@ MCP сам не клонирует репозитории. Все связи —
 
 - MCP экспонирует `/metrics` в Prometheus-формате: `mcp_tool_calls_total`,
   `mcp_tool_duration_seconds`, `mcp_plane_errors_total`, `mcp_rate_limited_total`.
+  Memory-bound метрики (SLONK-5): `mcp_cache_size` (gauge),
+  `mcp_cache_evictions_total{reason="ttl"|"cap"}`, `mcp_active_sessions`
+  (gauge), `mcp_sessions_evicted_total{reason="idle"|"cap"}`.
 - Plane стандартно метрик не отдаёт; парсим логи через promtail → Loki.
 - Grafana — преднастроенный дашборд `slonk-overview` (см. [CONFIGURATION.md](./CONFIGURATION.md#observability)).
+
+### 12.1 Memory-bound knobs (SLONK-5)
+
+mcp-kanban защищён от безграничного роста памяти на маленьких хостах
+четырьмя независимыми механизмами, конфигурируемыми через ENV (см.
+[CONFIGURATION.md §2.6](./CONFIGURATION.md#26-mcp-server) и
+[§5 Resource limits for small hosts](./CONFIGURATION.md#resource-limits-for-small-hosts)):
+
+- `MCP_CACHE_MAX_ENTRIES` (default 2048) — FIFO-cap на размер `TtlCache`.
+- `MCP_SESSION_IDLE_MS` (default 30 мин) — idle-timeout MCP-сессии.
+- `MCP_SESSION_GC_INTERVAL_MS` (default 60s) — период janitor'а; 0
+  отключает фоновую очистку.
+- `MCP_MAX_SESSIONS` (default 256) — LRU-cap на число одновременных сессий.
+
+Поведение механизмов (контракт для агентов и тестов):
+
+- **`TtlCache` (cache-eviction).** Ключ — `tool + inputHash`, значение
+  кладётся на TTL=10s. Истёкшие записи удаляются (а) лениво на `get()`
+  для запрошенного ключа и (б) периодическим `sweepExpired()` каждые
+  256 `set()`-ов (амортизированно O(1) на запись). При превышении
+  `MCP_CACHE_MAX_ENTRIES` `set()` вытесняет **самый старый по порядку
+  вставки** ключ (FIFO, не LRU — `Map`-iteration order). Это
+  компромисс «дёшево + предсказуемо»; сценарий «hit-once и забыли»
+  превращает кеш в FIFO-очередь, что не хуже отсутствия кеша. После
+  любого успешного write-tool'а вызывается `cache.clear()`. Метрики:
+  `mcp_cache_size`, `mcp_cache_evictions_total{reason="ttl"|"cap"}`.
+- **MCP-сессии (idle + LRU).** Каждая сессия хранит `{transport,
+  lastUsedAt, touchSeq, identity}`. `lastUsedAt` и монотонный
+  `touchSeq` обновляются на `onsessioninitialized` и при каждом
+  входящем запросе. Janitor `setInterval(...).unref()` с периодом
+  `MCP_SESSION_GC_INTERVAL_MS` (`0` отключает) обходит карту и
+  закрывает сессии с `now - lastUsedAt > MCP_SESSION_IDLE_MS`
+  (`evictSession` делает best-effort `await transport.close()`; не
+  throw'ит при двойном close). LRU-cap отрабатывает после insert'а
+  новой сессии: если `size > MCP_MAX_SESSIONS`, вытесняется сессия с
+  минимальным `(lastUsedAt, touchSeq)` — `touchSeq` нужен как
+  детерминированный tie-breaker при равном `lastUsedAt` (1ms-burst
+  создаёт несколько записей с одинаковым `Date.now()`). Метрики:
+  `mcp_active_sessions`, `mcp_sessions_evicted_total{reason="idle"|"cap"}`.
+- **`getIssueBySequenceId` (sequence-id pagination).** Поиск задачи
+  по `<IDENT>-<seq>` идёт постранично по 50 issue'ов c early-exit'ом
+  на первой найденной записи: до SLONK-5 был один `?per_page=500`
+  запрос на каждый lookup, что давало пик heap'а на сериализации
+  всего списка. Курсор читается как `next_cursor` (Plane v1.3.0) с
+  fallback на `next` (pre-1.3 / совместимость); `MAX_PAGES=50` —
+  hard-cap (2500 issue'ов) против зацикленного next-cursor'а. Если
+  sequence_id фактически лежит дальше — tool вернёт `NOT_FOUND` (см.
+  CONFIGURATION.md §5 «Тюнинг под другие хосты»).
+
+Плюс на уровне infra все контейнеры compose имеют `mem_limit:` — см.
+секцию [Resource limits for small hosts](./CONFIGURATION.md#resource-limits-for-small-hosts).

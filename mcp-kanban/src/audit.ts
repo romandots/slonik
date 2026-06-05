@@ -21,6 +21,13 @@ export interface AuditEntry {
   event: string | null;
   /** issue_id, если применимо (для дедупликации claim-race и поиска). */
   issue_id: string | null;
+  /**
+   * Опциональный JSON-payload для tool-specific атрибутов (например,
+   * `{bucket, object_key, expires_at}` для `read_attachment`). Не должен
+   * содержать сами credential'ы / presigned URL'ы — это требование
+   * SLONK-14 §7.4.
+   */
+  metadata: string | null;
 }
 
 export class AuditLog {
@@ -43,7 +50,8 @@ export class AuditLog {
         outcome           TEXT NOT NULL CHECK (outcome IN ('success','error')),
         error_code        TEXT,
         event             TEXT,
-        issue_id          TEXT
+        issue_id          TEXT,
+        metadata          TEXT
       );
       CREATE INDEX IF NOT EXISTS idx_audit_issue_event_ts
         ON audit_log (issue_id, event, ts);
@@ -58,17 +66,32 @@ export class AuditLog {
         trace_id    TEXT NOT NULL
       );
     `);
+    // Backwards-compatible миграция: для уже существующих БД, в которых
+    // колонки `metadata` нет, добавляем её ALTER'ом. Идемпотентно через
+    // try/catch — `ADD COLUMN` падает с `duplicate column name`, если
+    // колонка уже есть (после применения CREATE TABLE с новой схемой).
+    try {
+      this.db.exec(`ALTER TABLE audit_log ADD COLUMN metadata TEXT`);
+    } catch (err) {
+      if (!(err instanceof Error && /duplicate column name/i.test(err.message))) {
+        throw err;
+      }
+    }
   }
 
-  record(entry: Omit<AuditEntry, 'ts'>): void {
+  record(entry: Omit<AuditEntry, 'ts' | 'metadata'> & { metadata?: string | null }): void {
     this.db
       .prepare(
         `INSERT INTO audit_log
-           (trace_id, ts, identity, tool, input_hash, plane_request_id, outcome, error_code, event, issue_id)
+           (trace_id, ts, identity, tool, input_hash, plane_request_id, outcome, error_code, event, issue_id, metadata)
          VALUES
-           (@trace_id, @ts, @identity, @tool, @input_hash, @plane_request_id, @outcome, @error_code, @event, @issue_id)`,
+           (@trace_id, @ts, @identity, @tool, @input_hash, @plane_request_id, @outcome, @error_code, @event, @issue_id, @metadata)`,
       )
-      .run({ ...entry, ts: new Date().toISOString() });
+      .run({
+        ...entry,
+        ts: new Date().toISOString(),
+        metadata: entry.metadata ?? null,
+      });
   }
 
   list(filter: { issue_id?: string; identity?: string; limit?: number } = {}): AuditEntry[] {
