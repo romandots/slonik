@@ -23,6 +23,7 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "better-sqlite3": "^11.7.0",
     "fastify": "^5.8.5",
+    "marked": "^18.0.5",
     "minio": "^8.0.0",
     "node-html-parser": "^7.0.0",
     "pino": "^10.3.1",

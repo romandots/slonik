@@ -78,8 +78,10 @@ describe('createIssue', () => {
       defaultProjectRef: 'SLONK',
       issueRef: created.id,
     });
+    // <script> stripped entirely (not escaped) — defence-in-depth via sanitizeHtml.
     expect(fetched.description_raw).not.toContain('<script>');
-    expect(fetched.description_raw).toContain('&lt;script&gt;');
+    expect(fetched.description_raw).not.toContain('alert(1)');
+    // Surrounding text is preserved; & and " are HTML-entity-encoded.
     expect(fetched.description_raw).toContain('&amp;');
     expect(fetched.description_raw).toContain('&quot;');
   });

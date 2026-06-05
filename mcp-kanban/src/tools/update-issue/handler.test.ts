@@ -108,7 +108,9 @@ describe('updateIssue (description handling)', () => {
       defaultProjectRef: 'SLONK',
       issueRef: created.id,
     });
-    expect(fetched.description_raw).toContain('&lt;b&gt;bold&lt;/b&gt;');
+    // <b> is an allowed tag — passed through as real HTML (not escaped).
+    expect(fetched.description_raw).toContain('<b>bold</b>');
+    // & and " in the text portion are still HTML-entity-encoded.
     expect(fetched.description_raw).toContain('&amp;');
     expect(fetched.description_raw).toContain('&quot;');
   });
