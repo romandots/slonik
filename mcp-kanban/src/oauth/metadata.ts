@@ -21,7 +21,8 @@ export interface AuthorizationServerMetadata {
 export const OAUTH_SCOPE = 'mcp';
 
 function trimSlash(issuer: string): string {
-  return issuer.endsWith('/') ? issuer.slice(0, -1) : issuer;
+  // Снимаем любое число хвостовых слэшей (defensive: `https://x//` тоже).
+  return issuer.replace(/\/+$/, '');
 }
 
 /** RFC 9728 — Protected Resource Metadata. */

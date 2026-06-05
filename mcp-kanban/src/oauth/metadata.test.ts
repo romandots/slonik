@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildProtectedResourceMetadata,
   buildAuthorizationServerMetadata,
+  resourceUri,
 } from './metadata.js';
 
 const ISSUER = 'https://slonk.example.com';
@@ -24,11 +25,17 @@ describe('oauth metadata', () => {
     expect(m.grant_types_supported).toEqual(['authorization_code', 'refresh_token']);
     expect(m.response_types_supported).toEqual(['code']);
     expect(m.token_endpoint_auth_methods_supported).toContain('none');
+    expect(m.revocation_endpoint).toBe('https://slonk.example.com/oauth/revoke');
   });
 
   it('trims a trailing slash on the issuer', () => {
     const m = buildAuthorizationServerMetadata('https://slonk.example.com/');
     expect(m.issuer).toBe('https://slonk.example.com');
     expect(m.token_endpoint).toBe('https://slonk.example.com/oauth/token');
+  });
+
+  it('resourceUri returns the canonical /mcp URI and tolerates extra slashes', () => {
+    expect(resourceUri('https://slonk.example.com/')).toBe('https://slonk.example.com/mcp');
+    expect(resourceUri('https://slonk.example.com//')).toBe('https://slonk.example.com/mcp');
   });
 });
