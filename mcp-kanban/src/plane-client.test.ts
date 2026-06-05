@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import pino from 'pino';
 import { PlaneClient } from './plane-client.js';
 import { PlaneError } from './errors.js';

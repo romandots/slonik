@@ -127,6 +127,6 @@ function printReport(report: BootstrapReport): void {
 
   // Намеренно через console.log: bootstrap — CLI, отчёт идёт в stdout
   // пользователю, не в structured-логи.
-  // eslint-disable-next-line no-console
+   
   console.log(lines.join('\n'));
 }

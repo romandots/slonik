@@ -8,6 +8,15 @@
 ## [Unreleased]
 
 ### Added
+- **CI/CD на GitHub Actions** (SLONK-16). Два workflow:
+  - `.github/workflows/ci.yml` — PR pipeline: lint + typecheck + build + test (3 параллельных джобы);
+    кэш pnpm-store, Node из `.nvmrc` (22). Красный чек блокирует merge.
+  - `.github/workflows/release-deploy.yml` — Release/Deploy на `push: main`: gate (lint + build + test)
+    → build & push `mcp-kanban` + `backup` в GHCR (`ghcr.io/romandots/slonk/...`)
+    → SSH-deploy на прод с health-gate + rollback при неуспехе → `make smoke`.
+    Concurrency-guard исключает параллельные деплои. Секреты — только через GitHub Secrets.
+  - `mcp-kanban/eslint.config.js` — новый flat-config для ESLint 9 (был отсутствующим);
+    исправлены pre-existing ошибки (`prefer-const`, `no-require-imports`, неиспользуемые импорты).
 - **Multitenant архитектура** (SLONK-15). Workspace = тенант; доступ к проектам workspace
   определяется OAuth-токеном, а не allow-list. Ключевые изменения:
   - Новая таблица `tenants` в `oauth.sqlite`: `workspace → plane_api_key + auth_token_hash`.

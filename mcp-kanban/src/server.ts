@@ -718,7 +718,7 @@ async function dispatch(): Promise<void> {
     return;
   }
   if (cmd !== undefined && cmd !== '') {
-    // eslint-disable-next-line no-console
+     
     console.error(`Unknown command: ${cmd}`);
     process.exit(2);
   }
@@ -730,7 +730,7 @@ const isEntrypoint = process.argv[1] !== undefined
   && import.meta.url === `file://${process.argv[1]}`;
 if (isEntrypoint) {
   dispatch().catch((err) => {
-    // eslint-disable-next-line no-console
+     
     console.error('Fatal startup error:', err);
     process.exit(1);
   });
