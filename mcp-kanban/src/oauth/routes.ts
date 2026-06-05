@@ -126,6 +126,10 @@ export function registerOAuthRoutes(app: FastifyInstance, deps: OAuthRouteDeps):
       reply.status(400);
       return { error: 'invalid_request', error_description: 'redirect_uri mismatch' };
     }
+    if (q.resource !== undefined && q.resource !== expectedResource) {
+      reply.status(400);
+      return { error: 'invalid_request', error_description: 'resource mismatch' };
+    }
     if (!constantTimeEqual(q.password, deps.authToken)) {
       reply.status(401).type('text/html');
       return renderLoginForm(q, 'Invalid password');
@@ -150,7 +154,12 @@ export function registerOAuthRoutes(app: FastifyInstance, deps: OAuthRouteDeps):
 
   // ---- token ----
   app.post('/oauth/token', async (request, reply) => {
-    deps.rateLimiter.consume('oauth-token');
+    try {
+      deps.rateLimiter.consume('oauth-token');
+    } catch {
+      reply.status(429);
+      return { error: 'temporarily_unavailable' };
+    }
     const body = (request.body ?? {}) as Record<string, unknown>;
     const grant = body['grant_type'];
     if (grant === 'authorization_code') return handleAuthCodeGrant(body, reply);
@@ -186,7 +195,7 @@ export function registerOAuthRoutes(app: FastifyInstance, deps: OAuthRouteDeps):
       reply.status(400);
       return { error: 'invalid_grant', error_description: 'PKCE verification failed' };
     }
-    return issueTokenPair(row.client_id, row.identity, row.scope, row.resource, generateChainId(), reply);
+    return issueTokenPair(row.client_id, row.identity, row.scope, row.resource, generateOpaqueToken(), reply);
   }
 
   function handleRefreshGrant(body: Record<string, unknown>, reply: FastifyReply) {
@@ -235,7 +244,7 @@ export function registerOAuthRoutes(app: FastifyInstance, deps: OAuthRouteDeps):
       expires_at_ms: t + deps.refreshTtlSec * 1000,
       refresh_chain_id: chainId,
     });
-    reply.status(200).header('cache-control', 'no-store');
+    reply.status(200).header('cache-control', 'no-store').header('pragma', 'no-cache');
     return {
       access_token: access,
       refresh_token: refresh,
@@ -243,10 +252,6 @@ export function registerOAuthRoutes(app: FastifyInstance, deps: OAuthRouteDeps):
       expires_in: deps.accessTtlSec,
       scope,
     };
-  }
-
-  function generateChainId(): string {
-    return generateOpaqueToken();
   }
 }
 
@@ -275,7 +280,7 @@ function renderLoginForm(q: z.infer<typeof AuthorizeQuery>, errorMsg?: string): 
     ${hidden('code_challenge', q.code_challenge)}
     ${hidden('code_challenge_method', q.code_challenge_method)}
     ${hidden('state', q.state)}
-    ${hidden('resource', q.resource ?? '')}
+    ${q.resource !== undefined ? hidden('resource', q.resource) : ''}
     ${q.scope !== undefined ? hidden('scope', q.scope) : ''}
     <label>Operator password<br><input type="password" name="password" autofocus
       style="width:100%;padding:.5rem;margin:.5rem 0;"></label>

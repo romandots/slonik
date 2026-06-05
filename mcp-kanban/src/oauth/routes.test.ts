@@ -160,4 +160,81 @@ describe('oauth routes (full flow)', () => {
     const second = await app.inject({ method: 'POST', url: '/oauth/token', payload: { grant_type: 'authorization_code', code, redirect_uri: REDIRECT, client_id: clientId, code_verifier: verifier } });
     expect(second.statusCode).toBe(400);
   });
+
+  async function registerClient(): Promise<string> {
+    const reg = await app.inject({ method: 'POST', url: '/oauth/register', payload: { client_name: 'c', redirect_uris: [REDIRECT] } });
+    return JSON.parse(reg.body).client_id as string;
+  }
+
+  async function getTokenPair(): Promise<{ clientId: string; access_token: string; refresh_token: string }> {
+    const clientId = await registerClient();
+    const { verifier, challenge } = pkce();
+    const post = await app.inject({
+      method: 'POST', url: '/oauth/authorize',
+      payload: { password: STATIC_TOKEN, client_id: clientId, redirect_uri: REDIRECT, code_challenge: challenge, code_challenge_method: 'S256', state: 's', resource: `${ISSUER}/mcp` },
+    });
+    const code = new URL(post.headers.location as string).searchParams.get('code') as string;
+    const tok = await app.inject({
+      method: 'POST', url: '/oauth/token',
+      payload: { grant_type: 'authorization_code', code, redirect_uri: REDIRECT, client_id: clientId, code_verifier: verifier },
+    });
+    const body = JSON.parse(tok.body);
+    return { clientId, access_token: body.access_token as string, refresh_token: body.refresh_token as string };
+  }
+
+  it('rejects an expired authorization code at the token endpoint', async () => {
+    let clock = 1_000_000;
+    const s = new OAuthStore({ path: ':memory:', maxClients: 10 });
+    const a = Fastify();
+    await a.register(formbody);
+    registerOAuthRoutes(a, {
+      store: s, issuer: ISSUER, authToken: STATIC_TOKEN, operatorIdentity: 'operator',
+      accessTtlSec: 3600, refreshTtlSec: 2_592_000, codeTtlSec: 60,
+      rateLimiter: new RateLimiter({ globalRps: 1000, identityRps: 1000 }),
+      logger: createLogger({ MCP_LOG_LEVEL: 'fatal', NODE_ENV: 'test' }),
+      now: () => clock,
+    });
+    await a.ready();
+    const reg = await a.inject({ method: 'POST', url: '/oauth/register', payload: { client_name: 'c', redirect_uris: [REDIRECT] } });
+    const clientId = JSON.parse(reg.body).client_id as string;
+    const { verifier, challenge } = pkce();
+    const post = await a.inject({ method: 'POST', url: '/oauth/authorize', payload: { password: STATIC_TOKEN, client_id: clientId, redirect_uri: REDIRECT, code_challenge: challenge, code_challenge_method: 'S256', state: 's', resource: `${ISSUER}/mcp` } });
+    const code = new URL(post.headers.location as string).searchParams.get('code') as string;
+    clock += 61_000; // code TTL is 60s
+    const tok = await a.inject({ method: 'POST', url: '/oauth/token', payload: { grant_type: 'authorization_code', code, redirect_uri: REDIRECT, client_id: clientId, code_verifier: verifier } });
+    expect(tok.statusCode).toBe(400);
+    await a.close(); s.close();
+  });
+
+  it('rejects an unsupported grant_type', async () => {
+    const r = await app.inject({ method: 'POST', url: '/oauth/token', payload: { grant_type: 'client_credentials' } });
+    expect(r.statusCode).toBe(400);
+    expect(JSON.parse(r.body).error).toBe('unsupported_grant_type');
+  });
+
+  it('revokes a refresh token and is idempotent for unknown tokens', async () => {
+    const { clientId, refresh_token } = await getTokenPair();
+    const revoke = await app.inject({ method: 'POST', url: '/oauth/revoke', payload: { token: refresh_token } });
+    expect(revoke.statusCode).toBe(200);
+    const refreshed = await app.inject({ method: 'POST', url: '/oauth/token', payload: { grant_type: 'refresh_token', refresh_token, client_id: clientId } });
+    expect(refreshed.statusCode).toBe(400);
+    const unknown = await app.inject({ method: 'POST', url: '/oauth/revoke', payload: { token: 'unknown' } });
+    expect(unknown.statusCode).toBe(200);
+  });
+
+  it('refresh rotation invalidates the old refresh token (chain poison) at HTTP layer', async () => {
+    const { clientId, refresh_token } = await getTokenPair();
+    const first = await app.inject({ method: 'POST', url: '/oauth/token', payload: { grant_type: 'refresh_token', refresh_token, client_id: clientId } });
+    expect(first.statusCode).toBe(200);
+    const rotated = JSON.parse(first.body).refresh_token as string;
+    const reuse = await app.inject({ method: 'POST', url: '/oauth/token', payload: { grant_type: 'refresh_token', refresh_token, client_id: clientId } });
+    expect(reuse.statusCode).toBe(400);
+    const rotatedUse = await app.inject({ method: 'POST', url: '/oauth/token', payload: { grant_type: 'refresh_token', refresh_token: rotated, client_id: clientId } });
+    expect(rotatedUse.statusCode).toBe(400);
+  });
+
+  it('discovery sets cache-control: no-store', async () => {
+    const r = await app.inject({ method: 'GET', url: '/.well-known/oauth-protected-resource' });
+    expect(r.headers['cache-control']).toContain('no-store');
+  });
 });
