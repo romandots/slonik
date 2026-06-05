@@ -44,3 +44,28 @@ describe('loadConfig', () => {
     ).toThrow(/MCP_AGENT_IDENTITY_MODE/);
   });
 });
+
+describe('OAuth config', () => {
+  const base = {
+    MCP_AUTH_TOKEN: 'a'.repeat(64),
+    PLANE_API_BASE_URL: 'http://plane.invalid/api/v1',
+    NODE_ENV: 'test' as const,
+  };
+
+  it('defaults MCP_OAUTH_ENABLED to false and skips issuer requirement', () => {
+    const cfg = loadConfig({ ...base });
+    expect(cfg.MCP_OAUTH_ENABLED).toBe(false);
+    expect(cfg.MCP_OAUTH_OPERATOR_IDENTITY).toBe('operator');
+    expect(cfg.MCP_OAUTH_ACCESS_TTL_SEC).toBe(3600);
+  });
+
+  it('requires MCP_OAUTH_ISSUER when OAuth enabled', () => {
+    expect(() => loadConfig({ ...base, MCP_OAUTH_ENABLED: '1' })).toThrow(/MCP_OAUTH_ISSUER/);
+  });
+
+  it('accepts a valid issuer URL when enabled', () => {
+    const cfg = loadConfig({ ...base, MCP_OAUTH_ENABLED: '1', MCP_OAUTH_ISSUER: 'https://slonk.example.com' });
+    expect(cfg.MCP_OAUTH_ENABLED).toBe(true);
+    expect(cfg.MCP_OAUTH_ISSUER).toBe('https://slonk.example.com');
+  });
+});
