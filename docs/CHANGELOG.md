@@ -16,6 +16,11 @@
   (`plane-worker → 1g`).
 
 ### Added
+- **Markdown → HTML в описаниях задач** (SLONK-17). `toPlaneDescriptionHtml` теперь
+  парсит полный CommonMark через `marked`: заголовки, жирный/курсив, списки, блоки кода,
+  цитаты, ссылки. `sanitizeHtml` вынесен в `src/sanitize-html.ts` и используется
+  совместно описаниями и комментариями. `javascript:`-ссылки и `<script>`/`<style>`/
+  `<iframe>` вырезаются. Добавлен passthrough `class="language-*"` для fenced code blocks.
 - **CI/CD на GitHub Actions** (SLONK-16). Два workflow:
   - `.github/workflows/ci.yml` — PR pipeline: lint + typecheck + build + test (3 параллельных джобы);
     кэш pnpm-store, Node из `.nvmrc` (22). Красный чек блокирует merge.
