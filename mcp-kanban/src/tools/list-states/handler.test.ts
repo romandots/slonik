@@ -13,7 +13,6 @@ describe('listStates / listLabels / listProjects (smoke)', () => {
       cache: new TtlCache(),
       workspace: 'agents',
       defaultProjectRef: 'SLONK',
-      allowedProjects: ['SLONK'],
     });
     expect(r.states.map((s) => s.name)).toEqual(['Backlog', 'To Do', 'Development', 'Done']);
     expect(r.project.identifier).toBe('SLONK');

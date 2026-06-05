@@ -17,7 +17,6 @@ export async function blockIssue(deps: {
   cache: TtlCache;
   workspace: string;
   defaultProjectRef: string;
-  allowedProjects: string[];
   identity: AgentIdentity;
   input: BlockIssueInput;
 }): Promise<IssueSummary> {
@@ -31,7 +30,6 @@ export async function blockIssue(deps: {
         ? { projectRef: parsed.identifier }
         : {}),
     defaultProjectRef: deps.defaultProjectRef,
-    allowedProjects: deps.allowedProjects,
   });
   const issueId = await resolveIssueId(deps.plane, deps.workspace, project, parsed);
 

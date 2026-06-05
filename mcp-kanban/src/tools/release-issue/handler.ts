@@ -17,7 +17,6 @@ export async function releaseIssue(deps: {
   audit: AuditLog;
   workspace: string;
   defaultProjectRef: string;
-  allowedProjects: string[];
   identity: AgentIdentity;
   planeUserId: string | null;
   input: ReleaseIssueInput;
@@ -32,7 +31,6 @@ export async function releaseIssue(deps: {
         ? { projectRef: parsed.identifier }
         : {}),
     defaultProjectRef: deps.defaultProjectRef,
-    allowedProjects: deps.allowedProjects,
   });
 
   const issueId = await resolveIssueId(deps.plane, deps.workspace, project, parsed);

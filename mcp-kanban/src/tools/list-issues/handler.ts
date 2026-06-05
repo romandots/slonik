@@ -30,7 +30,6 @@ export async function listIssues(deps: {
   cache: TtlCache;
   workspace: string;
   defaultProjectRef: string;
-  allowedProjects: string[];
   input: ListIssuesInput;
 }): Promise<ListIssuesResult> {
   const project = await resolveProject({
@@ -38,7 +37,6 @@ export async function listIssues(deps: {
     workspaceSlug: deps.workspace,
     ...(deps.input.project !== undefined ? { projectRef: deps.input.project } : {}),
     defaultProjectRef: deps.defaultProjectRef,
-    allowedProjects: deps.allowedProjects,
   });
 
   // Резолвим state-name → state-id (Plane фильтрует по uuid'у state'а).

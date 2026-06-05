@@ -14,7 +14,6 @@ export async function listCycles(deps: {
   cache: TtlCache;
   workspace: string;
   defaultProjectRef: string;
-  allowedProjects: string[];
   projectRef?: string;
 }): Promise<ListCyclesResult> {
   const project = await resolveProject({
@@ -22,7 +21,6 @@ export async function listCycles(deps: {
     workspaceSlug: deps.workspace,
     ...(deps.projectRef !== undefined ? { projectRef: deps.projectRef } : {}),
     defaultProjectRef: deps.defaultProjectRef,
-    allowedProjects: deps.allowedProjects,
   });
   const key = `list_cycles:${inputHash({ ws: deps.workspace, pr: project.id })}`;
   const cycles = (await deps.cache.memoize(

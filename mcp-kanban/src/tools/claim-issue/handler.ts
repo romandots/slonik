@@ -30,7 +30,6 @@ export async function claimIssue(deps: {
   identityStore: IdentityStore;
   workspace: string;
   defaultProjectRef: string;
-  allowedProjects: string[];
   identity: AgentIdentity;
   traceId: string;
   /** plane_user_id текущей identity, если known (per_user mode). */
@@ -47,7 +46,6 @@ export async function claimIssue(deps: {
         ? { projectRef: parsed.identifier }
         : {}),
     defaultProjectRef: deps.defaultProjectRef,
-    allowedProjects: deps.allowedProjects,
   });
 
   const issueId = await resolveIssueId(deps.plane, deps.workspace, project, parsed);

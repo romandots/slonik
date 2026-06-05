@@ -30,7 +30,6 @@ export async function linkGitRef(deps: {
   gitRefs: GitRefsIndex;
   workspace: string;
   defaultProjectRef: string;
-  allowedProjects: string[];
   input: LinkGitRefInput;
 }): Promise<LinkGitRefResult> {
   const parsed = parseIssueRef(deps.input.issue_id);
@@ -43,7 +42,6 @@ export async function linkGitRef(deps: {
         ? { projectRef: parsed.identifier }
         : {}),
     defaultProjectRef: deps.defaultProjectRef,
-    allowedProjects: deps.allowedProjects,
   });
   const issueId = await resolveIssueId(deps.plane, deps.workspace, project, parsed);
 

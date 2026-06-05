@@ -33,7 +33,6 @@ export async function getIssue(deps: {
   cache: TtlCache;
   workspace: string;
   defaultProjectRef: string;
-  allowedProjects: string[];
   issueRef: string;
   projectRef?: string;
   /** SLONK-14: для discovery вложений. Опционально — если не передан,
@@ -55,7 +54,6 @@ export async function getIssue(deps: {
         ? { projectRef: parsed.identifier }
         : {}),
     defaultProjectRef: deps.defaultProjectRef,
-    allowedProjects: deps.allowedProjects,
   });
 
   const cacheKey = `get_issue:${inputHash({ ws: deps.workspace, pr: project.id, ref: deps.issueRef })}`;
