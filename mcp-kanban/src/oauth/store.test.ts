@@ -68,16 +68,40 @@ describe('OAuthStore', () => {
       scope: 'mcp', resource: 'https://slonk/mcp',
       expires_at_ms: now + 9_000_000, refresh_chain_id: 'chainA',
     });
+    // First use rotates successfully.
     const used = store.consumeRefreshToken('r1', now);
     expect(used?.refresh_chain_id).toBe('chainA');
-    expect(store.consumeRefreshToken('r1', now)).toBeUndefined();
+    // A sibling refresh issued into the same chain (as rotation would do).
     store.saveToken({
       token_hash: 'r2', kind: 'refresh', client_id: 'c1', identity: 'operator',
       scope: 'mcp', resource: 'https://slonk/mcp',
       expires_at_ms: now + 9_000_000, refresh_chain_id: 'chainA',
     });
-    store.poisonChain('chainA');
+    // Reusing the already-consumed r1 must auto-poison the whole chain (theft signal),
+    // WITHOUT any manual poisonChain call.
+    expect(store.consumeRefreshToken('r1', now)).toBeUndefined();
+    // r2 is now invalid because the chain was auto-poisoned by the reuse above.
     expect(store.consumeRefreshToken('r2', now)).toBeUndefined();
+  });
+
+  it('rejects an expired refresh token', () => {
+    store.saveToken({
+      token_hash: 'r-exp', kind: 'refresh', client_id: 'c1', identity: 'operator',
+      scope: 'mcp', resource: 'https://slonk/mcp',
+      expires_at_ms: now - 1, refresh_chain_id: 'chainExp',
+    });
+    expect(store.consumeRefreshToken('r-exp', now)).toBeUndefined();
+  });
+
+  it('validateAccessToken rejects a token whose chain was poisoned', () => {
+    store.saveToken({
+      token_hash: 'a1', kind: 'access', client_id: 'c1', identity: 'operator',
+      scope: 'mcp', resource: 'https://slonk/mcp',
+      expires_at_ms: now + 3600_000, refresh_chain_id: 'chainA',
+    });
+    expect(store.validateAccessToken('a1', now)).toBeDefined();
+    store.poisonChain('chainA');
+    expect(store.validateAccessToken('a1', now)).toBeUndefined();
   });
 
   it('revokes an access token', () => {
@@ -88,5 +112,15 @@ describe('OAuthStore', () => {
     });
     store.revokeToken('t9');
     expect(store.validateAccessToken('t9', now)).toBeUndefined();
+  });
+
+  it('revokes a refresh token', () => {
+    store.saveToken({
+      token_hash: 'rr', kind: 'refresh', client_id: 'c1', identity: 'operator',
+      scope: 'mcp', resource: 'https://slonk/mcp',
+      expires_at_ms: now + 9_000_000, refresh_chain_id: 'cr',
+    });
+    store.revokeToken('rr');
+    expect(store.consumeRefreshToken('rr', now)).toBeUndefined();
   });
 });

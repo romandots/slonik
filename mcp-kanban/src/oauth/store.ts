@@ -111,29 +111,32 @@ export class OAuthStore {
   }
 
   registerClient(args: { client_name: string; redirect_uris: string[]; created_at_ms: number }): OAuthClientRow {
-    const count = (this.db.prepare('SELECT COUNT(*) AS n FROM oauth_clients').get() as { n: number }).n;
-    if (count >= this.maxClients) {
-      throw new Error(`OAuth client cap reached (${this.maxClients})`);
-    }
-    const client_id = generateOpaqueToken();
-    this.db
-      .prepare(
-        `INSERT INTO oauth_clients (client_id, client_name, redirect_uris, token_endpoint_auth_method, created_at_ms)
-         VALUES (@client_id, @client_name, @redirect_uris, 'none', @created_at_ms)`,
-      )
-      .run({
+    const tx = this.db.transaction((): OAuthClientRow => {
+      const count = (this.db.prepare('SELECT COUNT(*) AS n FROM oauth_clients').get() as { n: number }).n;
+      if (count >= this.maxClients) {
+        throw new Error(`OAuth client cap reached (${this.maxClients})`);
+      }
+      const client_id = generateOpaqueToken();
+      this.db
+        .prepare(
+          `INSERT INTO oauth_clients (client_id, client_name, redirect_uris, token_endpoint_auth_method, created_at_ms)
+           VALUES (@client_id, @client_name, @redirect_uris, 'none', @created_at_ms)`,
+        )
+        .run({
+          client_id,
+          client_name: args.client_name,
+          redirect_uris: JSON.stringify(args.redirect_uris),
+          created_at_ms: args.created_at_ms,
+        });
+      return {
         client_id,
         client_name: args.client_name,
-        redirect_uris: JSON.stringify(args.redirect_uris),
+        redirect_uris: args.redirect_uris,
+        token_endpoint_auth_method: 'none',
         created_at_ms: args.created_at_ms,
-      });
-    return {
-      client_id,
-      client_name: args.client_name,
-      redirect_uris: args.redirect_uris,
-      token_endpoint_auth_method: 'none',
-      created_at_ms: args.created_at_ms,
-    };
+      };
+    });
+    return tx();
   }
 
   getClient(client_id: string): OAuthClientRow | undefined {
@@ -177,7 +180,7 @@ export class OAuthStore {
 
   validateAccessToken(token_hash: string, now_ms: number): TokenRow | undefined {
     const row = this.db
-      .prepare(`SELECT * FROM oauth_tokens WHERE token_hash = @token_hash AND kind = 'access' AND used = 0`)
+      .prepare(`SELECT * FROM oauth_tokens WHERE token_hash = @token_hash AND kind = 'access' AND used = 0 AND chain_poisoned = 0`)
       .get({ token_hash }) as TokenRow | undefined;
     if (row === undefined || row.expires_at_ms <= now_ms) return undefined;
     return row;
