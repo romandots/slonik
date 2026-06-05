@@ -3,6 +3,7 @@
 // unknown), чтобы тесты получали тот же контракт, что и production-код.
 
 import type {
+  PlaneAttachment,
   PlaneClient,
   PlaneComment,
   PlaneCycle,
@@ -15,6 +16,8 @@ import type {
   PlaneUser,
   PlaneWorkspace,
 } from '../plane-client.js';
+import type { MinioClient, MinioObject, MinioStat } from '../minio-client.js';
+import { McpError } from '../errors.js';
 
 export interface FakeWorld {
   workspaces: PlaneWorkspace[];
@@ -29,6 +32,14 @@ export interface FakeWorld {
   members: Map<string, PlaneUser[]>;
   /** Очерёдность инвайт-ответов: при .pop() возвращает следующий. */
   inviteResponses: Map<string, { id: string; email: string } | Error>;
+  /** SLONK-14: UI-attachments Plane по ключу `<projectId>:<issueId>`. */
+  planeAttachments: Map<string, PlaneAttachment[]>;
+  /** SLONK-14: объекты MinIO по ключу `<bucket>:<objectKey>`. */
+  minioObjects: Map<string, { size: number; contentType?: string; lastModified?: Date; content?: Buffer }>;
+  /** SLONK-14: симулируемые ошибки источников (для partial-failure тестов). */
+  failPlaneAttachments: boolean;
+  failMinioList: boolean;
+  failPlaneComments: boolean;
   /** Счётчик инкрементальных id для seed данных. */
   nextId: number;
 }
@@ -46,6 +57,11 @@ export function newWorld(): FakeWorld {
     comments: new Map(),
     members: new Map(),
     inviteResponses: new Map(),
+    planeAttachments: new Map(),
+    minioObjects: new Map(),
+    failPlaneAttachments: false,
+    failMinioList: false,
+    failPlaneComments: false,
     nextId: 1,
   };
 }
@@ -366,7 +382,24 @@ export function fakePlane(world: FakeWorld): PlaneClient {
       return [...(world.activities.get(`${projectId}:${issueId}`) ?? [])];
     },
     async listIssueComments(_ws: string, projectId: string, issueId: string) {
+      if (world.failPlaneComments) {
+        const { PlaneError } = await import('../errors.js');
+        throw new PlaneError({
+          message: 'fake: listIssueComments failure',
+          planeStatus: 500,
+        });
+      }
       return [...(world.comments.get(`${projectId}:${issueId}`) ?? [])];
+    },
+    async listIssueAttachments(_ws: string, projectId: string, issueId: string) {
+      if (world.failPlaneAttachments) {
+        const { PlaneError } = await import('../errors.js');
+        throw new PlaneError({
+          message: 'fake: listIssueAttachments failure',
+          planeStatus: 500,
+        });
+      }
+      return [...(world.planeAttachments.get(`${projectId}:${issueId}`) ?? [])];
     },
     async createIssueComment(_ws: string, projectId: string, issueId: string, input: { comment_html: string }) {
       const key = `${projectId}:${issueId}`;
@@ -415,6 +448,106 @@ function stripTags(s: string): string {
  * атрибутов, drop unknown tags), но для регрессий вокруг meta-блока
  * этого достаточно — добавляй по мере необходимости.
  */
+/**
+ * FakeMinioClient — in-memory MinIO для тестов SLONK-14.
+ *
+ * Объекты живут в `world.minioObjects` (ключ = `<bucket>:<objectKey>`).
+ * `presignedGetObject` отдаёт детерминированный fake-URL
+ * (`fake://${bucket}/${key}?expires=N`), `statObject` достаёт entry или
+ * бросает `NOT_FOUND`, `listObjectsV2` фильтрует по `<bucket>:<prefix>`.
+ *
+ * Поле `world.failMinioList` (boolean) выключает все list-операции —
+ * нужно для partial-failure тестов.
+ */
+export function fakeMinio(world: FakeWorld): MinioClient {
+  return {
+    async statObject(bucket: string, objectKey: string): Promise<MinioStat> {
+      const obj = world.minioObjects.get(`${bucket}:${objectKey}`);
+      if (obj === undefined) {
+        throw new McpError({
+          code: 'NOT_FOUND',
+          message: `fake MinIO: object not found ${bucket}/${objectKey}`,
+        });
+      }
+      return {
+        size: obj.size,
+        ...(obj.lastModified !== undefined ? { lastModified: obj.lastModified } : {}),
+        ...(obj.contentType !== undefined ? { contentType: obj.contentType } : {}),
+      };
+    },
+    async presignedGetObject(bucket: string, objectKey: string, expirySec: number): Promise<string> {
+      // Включаем X-Amz-Signature-like подпись, чтобы тесты могли проверить
+      // редакцию presigned URL'ов в логах.
+      return `https://fake-minio.local/${bucket}/${objectKey}?X-Amz-Signature=fake-signature&X-Amz-Expires=${expirySec}`;
+    },
+    async listObjectsV2(bucket: string, prefix: string): Promise<MinioObject[]> {
+      if (world.failMinioList) {
+        throw new McpError({
+          code: 'STORAGE_UNAVAILABLE',
+          message: 'fake MinIO: listObjectsV2 failure',
+        });
+      }
+      const out: MinioObject[] = [];
+      for (const [composite, obj] of world.minioObjects) {
+        const [b, ...rest] = composite.split(':');
+        const key = rest.join(':');
+        if (b !== bucket) continue;
+        if (!key.startsWith(prefix)) continue;
+        out.push({
+          key,
+          size: obj.size,
+          ...(obj.lastModified !== undefined ? { lastModified: obj.lastModified } : {}),
+        });
+      }
+      return out;
+    },
+    async checkHealth(): Promise<boolean> {
+      return true;
+    },
+  };
+}
+
+/** Удобный seed-хелпер: кладёт объект в FakeMinio. */
+export function addMinioObject(
+  world: FakeWorld,
+  bucket: string,
+  objectKey: string,
+  opts: { size?: number; contentType?: string; lastModified?: Date; content?: Buffer } = {},
+): void {
+  world.minioObjects.set(`${bucket}:${objectKey}`, {
+    size: opts.size ?? 0,
+    ...(opts.contentType !== undefined ? { contentType: opts.contentType } : {}),
+    ...(opts.lastModified !== undefined ? { lastModified: opts.lastModified } : {}),
+    ...(opts.content !== undefined ? { content: opts.content } : {}),
+  });
+}
+
+/** Seed-хелпер: кладёт Plane UI-attachment на задачу. */
+export function addPlaneAttachment(
+  world: FakeWorld,
+  projectId: string,
+  issueId: string,
+  attachment: PlaneAttachment,
+): void {
+  const key = `${projectId}:${issueId}`;
+  const arr = world.planeAttachments.get(key) ?? [];
+  arr.push(attachment);
+  world.planeAttachments.set(key, arr);
+}
+
+/** Seed-хелпер: добавляет комментарий с заданным html (для inline-asset парсера). */
+export function addComment(
+  world: FakeWorld,
+  projectId: string,
+  issueId: string,
+  comment: PlaneComment,
+): void {
+  const key = `${projectId}:${issueId}`;
+  const arr = world.comments.get(key) ?? [];
+  arr.push(comment);
+  world.comments.set(key, arr);
+}
+
 export function simulateTipTap(html: string): string {
   if (html.length === 0) return '';
   // 1. Strip HTML comments.

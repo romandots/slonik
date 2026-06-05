@@ -3,8 +3,22 @@ import { claimIssue } from '../claim-issue/handler.js';
 import { releaseIssue } from './handler.js';
 import { TtlCache } from '../../cache.js';
 import { AuditLog, newTraceId } from '../../audit.js';
+import { IdentityStore } from '../../bootstrap/store.js';
 import { addIssue, fakePlane, newWorld, seedAgentsWorkspace } from '../test-fakes.js';
 import { McpError } from '../../errors.js';
+
+function seedIdentityStore(): IdentityStore {
+  const store = new IdentityStore({ path: ':memory:' });
+  store.upsert({
+    role: 'developer-agent',
+    email: 'developer-agent@slonk.local',
+    plane_user_id: null,
+    mode: 'per_user',
+    default_state: 'Development',
+    state_aliases: [],
+  });
+  return store;
+}
 
 describe('releaseIssue', () => {
   it('releases own claim and resets state to To Do', async () => {
@@ -13,11 +27,13 @@ describe('releaseIssue', () => {
     const issue = addIssue(world, project.id, { name: 'A', state: 'st-To Do' });
     const plane = fakePlane(world);
     const audit = new AuditLog({ path: ':memory:' });
+    const identityStore = seedIdentityStore();
 
     await claimIssue({
       plane,
       cache: new TtlCache(),
       audit,
+      identityStore,
       workspace: 'agents',
       defaultProjectRef: 'SLONK',
       allowedProjects: ['SLONK'],
@@ -42,6 +58,7 @@ describe('releaseIssue', () => {
     expect(r.labels).not.toContain('agent-claimed');
     expect(audit.currentClaim(issue.id)).toBeUndefined();
     audit.close();
+    identityStore.close();
   });
 
   it('rejects release by foreign identity', async () => {
@@ -50,10 +67,12 @@ describe('releaseIssue', () => {
     const issue = addIssue(world, project.id, { name: 'A', state: 'st-To Do' });
     const plane = fakePlane(world);
     const audit = new AuditLog({ path: ':memory:' });
+    const identityStore = seedIdentityStore();
     await claimIssue({
       plane,
       cache: new TtlCache(),
       audit,
+      identityStore,
       workspace: 'agents',
       defaultProjectRef: 'SLONK',
       allowedProjects: ['SLONK'],
@@ -77,5 +96,6 @@ describe('releaseIssue', () => {
       }),
     ).rejects.toThrowError(McpError);
     audit.close();
+    identityStore.close();
   });
 });

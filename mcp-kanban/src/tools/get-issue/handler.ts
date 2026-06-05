@@ -7,7 +7,11 @@ import type {
 import type { TtlCache } from '../../cache.js';
 import { inputHash } from '../../cache.js';
 import { McpError } from '../../errors.js';
+import type { Logger } from '../../logger.js';
+import type { MinioClient } from '../../minio-client.js';
 import { parseDescription, type MetaBlock } from '../../meta-block.js';
+import { discoverAttachments } from '../../attachments/discovery.js';
+import { toPublic, type PublicAttachment } from '../../attachments/types.js';
 import { resolveProject } from '../project-resolver.js';
 import { parseIssueRef } from './schema.js';
 import { summarise, type IssueSummary } from '../list-issues/handler.js';
@@ -18,6 +22,10 @@ export interface GetIssueResult extends IssueSummary {
   meta: MetaBlock;
   meta_corrupt: boolean;
   meta_error?: string;
+  /** SLONK-14: общее число вложений по всем трём источникам. */
+  attachments_count: number;
+  /** SLONK-14: top-3 вложений (uploaded_at DESC). */
+  attachments_preview: PublicAttachment[];
 }
 
 export async function getIssue(deps: {
@@ -28,6 +36,14 @@ export async function getIssue(deps: {
   allowedProjects: string[];
   issueRef: string;
   projectRef?: string;
+  /** SLONK-14: для discovery вложений. Опционально — если не передан,
+   *  поля `attachments_count`/`attachments_preview` отдаются как
+   *  0/[] (backwards-compat для старых call-сайтов в тестах). */
+  minio?: MinioClient;
+  planeBucket?: string;
+  mcpBucket?: string;
+  minioEndpoints?: string[];
+  logger?: Logger;
 }): Promise<GetIssueResult> {
   const parsed = parseIssueRef(deps.issueRef);
   const project = await resolveProject({
@@ -83,6 +99,57 @@ export async function getIssue(deps: {
   // фейков; оставляем как fallback, но `description_html` приоритетнее.
   const description = realIssue.description_html ?? realIssue.description ?? '';
   const meta = parseDescription(description);
+
+  // SLONK-14: вложения. Discovery параллельно — отдельный bucket вызовов,
+  // не блокирует основной ответ при ошибке. Любая failure (включая
+  // partial:true) → preview пустой + warn, get_issue не падает.
+  let attachmentsCount = 0;
+  let attachmentsPreview: PublicAttachment[] = [];
+  if (
+    deps.minio !== undefined &&
+    deps.planeBucket !== undefined &&
+    deps.mcpBucket !== undefined &&
+    deps.minioEndpoints !== undefined &&
+    deps.logger !== undefined
+  ) {
+    try {
+      const discovery = await discoverAttachments({
+        plane: deps.plane,
+        minio: deps.minio,
+        logger: deps.logger,
+        workspace: deps.workspace,
+        projectId: project.id,
+        issueId: realIssue.id,
+        planeBucket: deps.planeBucket,
+        mcpBucket: deps.mcpBucket,
+        minioEndpoints: deps.minioEndpoints,
+        filters: { limit: 3 },
+      });
+      if (!discovery.partial) {
+        attachmentsCount = discovery.total;
+        attachmentsPreview = discovery.items.map(toPublic);
+      } else {
+        // Частичная неудача — не доверяем total/preview, отдаём пустое, а в
+        // логе фиксируем, какой source отвалился.
+        deps.logger.warn(
+          {
+            issue_id: realIssue.id,
+            failed_sources: discovery.failed_sources,
+          },
+          'get_issue: attachments discovery partial, preview suppressed',
+        );
+      }
+    } catch (err) {
+      deps.logger.warn(
+        {
+          issue_id: realIssue.id,
+          err: err instanceof Error ? err.message : String(err),
+        },
+        'get_issue: attachments discovery failed',
+      );
+    }
+  }
+
   return {
     ...summary,
     description_body: meta.body,
@@ -90,5 +157,7 @@ export async function getIssue(deps: {
     meta: meta.meta,
     meta_corrupt: meta.corrupt,
     ...(meta.error !== undefined ? { meta_error: meta.error } : {}),
+    attachments_count: attachmentsCount,
+    attachments_preview: attachmentsPreview,
   };
 }

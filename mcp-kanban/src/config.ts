@@ -34,9 +34,18 @@ const ConfigSchema = z.object({
   PLANE_API_BASE_URL: z.string().url(),
   PLANE_API_KEY: optionalNonEmpty,
 
-  // MinIO (для attach_file presign — Phase 5)
+  // MinIO (для attach_file presign и read_attachment, SLONK-14)
   MINIO_BUCKET_MCP: z.string().min(1).default('mcp-artifacts'),
+  MINIO_BUCKET_PLANE: z.string().min(1).default('plane-uploads'),
   MINIO_INTERNAL_ENDPOINT: z.string().url().default('http://minio:9000'),
+  // Опциональный public endpoint для presigned URL'ов, видимых снаружи
+  // docker-сети. Если не задан — используется INTERNAL.
+  MINIO_PUBLIC_ENDPOINT: optionalNonEmpty.pipe(z.string().url().optional()),
+  // Service-account creds для MinIO. В v1 — те же root-creds, что у Plane;
+  // в Phase 7 (TLS) разделим на read-only policy + separate keys.
+  MINIO_ACCESS_KEY: optionalNonEmpty,
+  MINIO_SECRET_KEY: optionalNonEmpty,
+  MINIO_USE_SSL: Bool01.default(false),
   PLANE_SIGNED_URL_EXPIRATION: PositiveInt.default(3600),
 
   // Бизнес-логика
@@ -82,6 +91,32 @@ const ConfigSchema = z.object({
   MCP_OAUTH_CODE_TTL_SEC: PositiveInt.default(60),
   MCP_OAUTH_MAX_CLIENTS: PositiveInt.default(50),
   MCP_OAUTH_STORE_PATH: optionalNonEmpty,
+
+  // Roles directory (SLONK-6). По умолчанию — undefined: loader сам ищет
+  // `roles/` рядом с package.json. Переопределяется, если оператор смонтировал
+  // директорию в нестандартное место.
+  MCP_ROLES_DIR: optionalNonEmpty,
+
+  // Путь до identity SQLite (SLONK-11). По умолчанию — undefined; в контейнере
+  // bootstrap-CLI падает на `BOOTSTRAP_STORE_DEFAULT_PATH` (`/mcp_data/identity.sqlite`),
+  // а с хоста (`make smoke-roles`, ручной `pnpm tsx`) Makefile проставляет
+  // путь до bind/cp-копии (например, `$(CURDIR)/mcp_data/identity.sqlite`).
+  // Loader не выставляет дефолт сам, чтобы in-container bootstrap без ENV
+  // продолжал работать с исторической константой.
+  MCP_IDENTITY_STORE_PATH: optionalNonEmpty,
+
+  // Memory bounds (SLONK-5). Дефолты подобраны под хост 2 GB RAM, чтобы
+  // mcp-kanban не вытеснял Plane в swap при долгой работе агентов.
+  // TtlCache: FIFO-cap, защищает от безграничного роста по уникальным
+  // ключам (типичный сценарий — `get_issue` с разными issue-ref'ами).
+  MCP_CACHE_MAX_ENTRIES: PositiveInt.default(2048),
+  // MCP-сессии: idle-timeout + жёсткий cap. Если клиент уронился без
+  // graceful shutdown — сессия живёт здесь до janitor'а. 30 минут —
+  // запас, чтобы интерактивная работа агента в `/loop` не отвалилась.
+  MCP_SESSION_IDLE_MS: PositiveInt.default(30 * 60 * 1000),
+  // 0 отключает периодический janitor (для тестов и одноразовых CLI).
+  MCP_SESSION_GC_INTERVAL_MS: NonNegativeInt.default(60 * 1000),
+  MCP_MAX_SESSIONS: PositiveInt.default(256),
 
   // Метаданные процесса
   NODE_ENV: z.enum(['development', 'test', 'production']).default('production'),
