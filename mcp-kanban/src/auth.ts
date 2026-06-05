@@ -57,10 +57,20 @@ export function authenticate(
     return;
   }
 
-  // Path B — OAuth access-токен (если включён валидатор).
+  // Path B — OAuth access-токен (если включён валидатор). Identity из токена
+  // дополнительно сверяется с реестром — auth.ts не полагается на внешний
+  // инвариант, что operator заинжектен в whitelist (defense-in-depth).
+  // scope резолвится валидатором; его enforcement — ответственность валидатора
+  // (на текущей модели единый scope 'mcp'), здесь он не проверяется.
   if (options.oauthValidator !== undefined) {
     const resolved = options.oauthValidator(presented);
     if (resolved !== undefined) {
+      if (options.identityRegistry !== undefined && !options.identityRegistry.has(resolved.identity)) {
+        throw new McpError({
+          code: 'IDENTITY_REQUIRED',
+          message: `Unknown agent identity: ${resolved.identity}`,
+        });
+      }
       (request as AuthedRequest).identity = resolved.identity;
       return;
     }

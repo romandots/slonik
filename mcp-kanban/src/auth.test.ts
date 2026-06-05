@@ -111,7 +111,7 @@ describe('authenticate', () => {
 });
 
 describe('authenticate with OAuth validator', () => {
-  const registry = { has: (id: string) => id === 'operator', list: () => ['operator'], size: 1 };
+  const registry = createIdentityRegistry(['operator']);
   const STATIC = 's'.repeat(40);
 
   function req(headers: Record<string, string>) {
@@ -137,9 +137,22 @@ describe('authenticate with OAuth validator', () => {
 
   it('rejects an unknown Bearer when the validator returns undefined', () => {
     const r = req({ authorization: 'Bearer nope' });
-    expect(() =>
+    const err = expectThrows(() =>
       authenticate(r, reply, { expectedToken: STATIC, identityRegistry: registry, oauthValidator: () => undefined }),
-    ).toThrow(McpError);
+    );
+    expect(err.code).toBe('UNAUTHORIZED');
+  });
+
+  it('rejects an OAuth identity that is not in the registry', () => {
+    const r = req({ authorization: 'Bearer oauth-ghost' });
+    const err = expectThrows(() =>
+      authenticate(r, reply, {
+        expectedToken: STATIC,
+        identityRegistry: registry,
+        oauthValidator: () => ({ identity: 'ghost-agent', scope: 'mcp' }),
+      }),
+    );
+    expect(err.code).toBe('IDENTITY_REQUIRED');
   });
 });
 
