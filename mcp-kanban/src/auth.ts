@@ -19,6 +19,13 @@ export interface AuthOptions {
    * bootstrap manifest.
    */
   identityRegistry?: IdentityRegistry;
+  /**
+   * Опциональный валидатор OAuth access-токена. Если presented Bearer не
+   * равен статичному expectedToken — пробуем его как OAuth-токен. Успех →
+   * identity берётся из токена, X-Agent-Identity не требуется. Sync, потому
+   * что lookup идёт в better-sqlite3 (синхронный).
+   */
+  oauthValidator?: (token: string) => { identity: AgentIdentity; scope: string } | undefined;
 }
 
 /**
@@ -40,32 +47,42 @@ export function authenticate(
     throw new McpError({ code: 'UNAUTHORIZED', message: 'Authorization must be a Bearer token' });
   }
   const presented = match[1];
-  if (presented === undefined || !constantTimeEqual(presented, options.expectedToken)) {
+  if (presented === undefined) {
     throw new McpError({ code: 'UNAUTHORIZED', message: 'Invalid bearer token' });
   }
 
-  if (options.requireIdentity !== false) {
-    if (options.identityRegistry === undefined) {
-      // Программная ошибка: server.ts обязан передать реестр. Лучше упасть
-      // на INTERNAL, чем тихо пропускать любые роли.
-      throw new McpError({
-        code: 'INTERNAL',
-        message: 'identity registry not configured',
-      });
-    }
-    const idHeader = request.headers['x-agent-identity'];
-    const id = Array.isArray(idHeader) ? idHeader[0] : idHeader;
-    if (typeof id !== 'string' || id.length === 0) {
-      throw new McpError({ code: 'IDENTITY_REQUIRED', message: 'X-Agent-Identity header required' });
-    }
-    if (!options.identityRegistry.has(id)) {
-      throw new McpError({
-        code: 'IDENTITY_REQUIRED',
-        message: `Unknown agent identity: ${id}`,
-      });
-    }
-    (request as AuthedRequest).identity = id;
+  // Path A — статичный shared-token: identity из X-Agent-Identity (как было).
+  if (constantTimeEqual(presented, options.expectedToken)) {
+    applyStaticIdentity(request, options);
+    return;
   }
+
+  // Path B — OAuth access-токен (если включён валидатор).
+  if (options.oauthValidator !== undefined) {
+    const resolved = options.oauthValidator(presented);
+    if (resolved !== undefined) {
+      (request as AuthedRequest).identity = resolved.identity;
+      return;
+    }
+  }
+
+  throw new McpError({ code: 'UNAUTHORIZED', message: 'Invalid bearer token' });
+}
+
+function applyStaticIdentity(request: FastifyRequest, options: AuthOptions): void {
+  if (options.requireIdentity === false) return;
+  if (options.identityRegistry === undefined) {
+    throw new McpError({ code: 'INTERNAL', message: 'identity registry not configured' });
+  }
+  const idHeader = request.headers['x-agent-identity'];
+  const id = Array.isArray(idHeader) ? idHeader[0] : idHeader;
+  if (typeof id !== 'string' || id.length === 0) {
+    throw new McpError({ code: 'IDENTITY_REQUIRED', message: 'X-Agent-Identity header required' });
+  }
+  if (!options.identityRegistry.has(id)) {
+    throw new McpError({ code: 'IDENTITY_REQUIRED', message: `Unknown agent identity: ${id}` });
+  }
+  (request as AuthedRequest).identity = id;
 }
 
 /**
