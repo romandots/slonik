@@ -5,6 +5,7 @@ import {
   hashToken,
   verifyPkceS256,
   base64UrlSha256,
+  constantTimeEqual,
 } from './crypto.js';
 
 describe('oauth crypto', () => {
@@ -17,6 +18,16 @@ describe('oauth crypto', () => {
 
   it('hashToken is deterministic sha256 hex', () => {
     expect(hashToken('hello')).toBe(createHash('sha256').update('hello').digest('hex'));
+    // Pinned vector: catches accidental algorithm/encoding drift.
+    expect(hashToken('hello')).toBe(
+      '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
+    );
+  });
+
+  it('constantTimeEqual is false for different lengths (no throw) and true for identical', () => {
+    expect(constantTimeEqual('short', 'different-length')).toBe(false);
+    expect(constantTimeEqual('', 'nonempty')).toBe(false);
+    expect(constantTimeEqual('same', 'same')).toBe(true);
   });
 
   it('base64UrlSha256 matches the PKCE reference encoding', () => {
