@@ -25,7 +25,6 @@ describe('unlinkGitRef', () => {
         gitRefs,
         workspace: 'agents',
         defaultProjectRef: 'SLONK',
-        allowedProjects: ['SLONK'],
         input: { issue_id: issue.id, repo_url: REPO, branch: 'feature/x', commit: c },
       });
     }
@@ -36,7 +35,6 @@ describe('unlinkGitRef', () => {
       gitRefs,
       workspace: 'agents',
       defaultProjectRef: 'SLONK',
-      allowedProjects: ['SLONK'],
       input: { issue_id: issue.id, repo_url: REPO, commit: 'aaaaaaa' },
     });
 
@@ -60,7 +58,6 @@ describe('unlinkGitRef', () => {
       gitRefs,
       workspace: 'agents',
       defaultProjectRef: 'SLONK',
-      allowedProjects: ['SLONK'],
       input: { issue_id: issue.id, repo_url: REPO, branch: 'feature/x', commit: 'abcdef1' },
     });
 
@@ -70,7 +67,6 @@ describe('unlinkGitRef', () => {
       gitRefs,
       workspace: 'agents',
       defaultProjectRef: 'SLONK',
-      allowedProjects: ['SLONK'],
       input: { issue_id: issue.id, repo_url: REPO },
     });
 
@@ -108,7 +104,6 @@ repos:
         gitRefs,
         workspace: 'agents',
         defaultProjectRef: 'SLONK',
-        allowedProjects: ['SLONK'],
         input: { issue_id: issue.id, repo_url: REPO },
       }),
     ).rejects.toBeInstanceOf(McpError);

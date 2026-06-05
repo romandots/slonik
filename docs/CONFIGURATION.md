@@ -140,9 +140,9 @@ Compose автоматически собирает `AMQP_URL` для Celery и�
 |---|---|---|
 | `MCP_SERVER_PORT` | `8787` | HTTP/SSE порт |
 | `MCP_AUTH_TOKEN` | `change_me` | Bearer для агентов **(secret)** |
-| `MCP_DEFAULT_WORKSPACE` | `agents` | slug рабочего workspace |
+| `MCP_DEFAULT_WORKSPACE` | `agents` | slug рабочего workspace (= тенант по умолчанию). При старте сервера этот workspace автоматически регистрируется в `oauth.sqlite` с `PLANE_API_KEY` и `MCP_AUTH_TOKEN` как credentials — backward compat для single-tenant деплоев. |
 | `MCP_DEFAULT_PROJECT` | `SLONK` | Plane-идентификатор проекта по умолчанию, если агент не передал `project` в MCP-вызов |
-| `MCP_ALLOWED_PROJECTS` | `SLONK` | comma-separated whitelist проектов, к которым MCP даёт доступ (identifier / имя / нормализованный slug / UUID). Multi-project: `CODE_AGENTS,BACKEND,WEB` — см. [USER_GUIDE §2.2](./USER_GUIDE.md#22-несколько-проектов-в-одном-workspace) |
+| `MCP_ALLOWED_PROJECTS` | `SLONK` | **DEPRECATED** (SLONK-15). Поле сохранено для совместимости, но больше не ограничивает доступ. Граница доступа к проектам определяется workspace тенанта (из OAuth-токена). Будет удалено в следующей MAJOR-версии. |
 | `MCP_AGENT_IDENTITY_MODE` | `per_user` | `per_user` или `single_bot` |
 | `MCP_OPTIONAL_WORKSPACES` | `false` | создавать ли `backend`, `frontend`, … |
 | `MCP_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
@@ -178,10 +178,22 @@ Compose автоматически собирает `AMQP_URL` для Celery и�
 | `MCP_OAUTH_MAX_CLIENTS` | `50` | Cap на Dynamic Client Registration (защита от spam) |
 | `MCP_OAUTH_STORE_PATH` | `/mcp_data/oauth.sqlite` | Путь к SQLite-хранилищу tokens/codes |
 
-Оператор (владелец канбана) логинится вводом `MCP_AUTH_TOKEN` как пароля на форме
-`/oauth/authorize`. Полученный access-token разрешает полный доступ к `/mcp` с identity
-`operator`. На `/mcp` приём обоих типов Bearer (static token + OAuth token) происходит
-автоматически — выбор по содержимому токена.
+**Multitenant (SLONK-15).** Начиная с v1.7 OAuth-стор поддерживает несколько тенантов:
+
+- `oauth.sqlite` содержит таблицу `tenants`: `workspace → plane_api_key + auth_token_hash`.
+- При старте дефолтный тенант (`MCP_DEFAULT_WORKSPACE` + `PLANE_API_KEY` + `MCP_AUTH_TOKEN`)
+  регистрируется автоматически — backward compat.
+- Новый тенант регистрируется через `store.registerTenant(...)` (CLI/bootstrap расширение).
+- На `/oauth/authorize` можно передать `?workspace=<slug>` — форма покажет workspace;
+  пароль проверяется по `auth_token_hash` тенанта, fallback — `MCP_AUTH_TOKEN`.
+- Access-token несёт привязку к workspace (`workspace` claim); сервер выбирает
+  `PlaneClient` с ключом этого workspace.
+- **Security invariant:** workspace берётся только из токена, никогда из параметра запроса.
+  Креды тенанта А не дают доступа к данным тенанта Б.
+
+Оператор каждого тенанта логинится своим `auth_token` (или общим `MCP_AUTH_TOKEN` для
+дефолтного workspace). Полученный access-token даёт полный доступ к `/mcp` для своего
+workspace с identity `operator`.
 
 Токены хранятся только как SHA-256-хэши в `oauth.sqlite`. Плейнтекст не пишется
 никуда; в логах redact'ируется (расширение pino-список).

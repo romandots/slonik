@@ -419,7 +419,7 @@ describe('OAuth-enabled server', () => {
     store!.saveToken({
       token_hash: createHash('sha256').update(access).digest('hex'),
       kind: 'access', client_id: 'c', identity: 'operator', scope: 'mcp',
-      resource: 'https://slonk.example.com/mcp',
+      resource: 'https://slonk.example.com/mcp', workspace: 'agents',
       expires_at_ms: Date.now() + 3600_000, refresh_chain_id: 'ch',
     });
     const r = await oauthBuilt.app.inject({
@@ -437,7 +437,7 @@ describe('OAuth-enabled server', () => {
     store!.saveToken({
       token_hash: createHash('sha256').update(access).digest('hex'),
       kind: 'access', client_id: 'c', identity: 'operator', scope: 'mcp',
-      resource: 'https://attacker.example.com/mcp', // different audience
+      resource: 'https://attacker.example.com/mcp', workspace: 'agents', // different audience
       expires_at_ms: Date.now() + 3600_000, refresh_chain_id: 'ch2',
     });
     const r = await oauthBuilt.app.inject({

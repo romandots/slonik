@@ -14,7 +14,6 @@ export async function listLabels(deps: {
   cache: TtlCache;
   workspace: string;
   defaultProjectRef: string;
-  allowedProjects: string[];
   projectRef?: string;
 }): Promise<ListLabelsResult> {
   const project = await resolveProject({
@@ -22,7 +21,6 @@ export async function listLabels(deps: {
     workspaceSlug: deps.workspace,
     ...(deps.projectRef !== undefined ? { projectRef: deps.projectRef } : {}),
     defaultProjectRef: deps.defaultProjectRef,
-    allowedProjects: deps.allowedProjects,
   });
   const key = `list_labels:${inputHash({ ws: deps.workspace, pr: project.id })}`;
   const labels = (await deps.cache.memoize(

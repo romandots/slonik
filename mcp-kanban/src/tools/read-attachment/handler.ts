@@ -35,7 +35,6 @@ export async function readAttachment(deps: {
   logger: Logger;
   workspace: string;
   defaultProjectRef: string;
-  allowedProjects: string[];
   planeBucket: string;
   mcpBucket: string;
   minioEndpoints: string[];
@@ -57,7 +56,6 @@ export async function readAttachment(deps: {
         ? { projectRef: parsedIssue.identifier }
         : {}),
     defaultProjectRef: deps.defaultProjectRef,
-    allowedProjects: deps.allowedProjects,
   });
   const issueId = await resolveIssueId(deps.plane, deps.workspace, project, parsedIssue);
 

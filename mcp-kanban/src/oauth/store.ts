@@ -3,7 +3,8 @@ import { dirname } from 'node:path';
 import { mkdirSync } from 'node:fs';
 import { generateOpaqueToken } from './crypto.js';
 
-// SQLite-стор для встроенного OAuth 2.1 AS. Один файл хранит три коллекции:
+// SQLite-стор для встроенного OAuth 2.1 AS. Один файл хранит четыре коллекции:
+//   - tenants:       тенанты (workspace → plane_api_key + auth credentials);
 //   - oauth_clients: динамически зарегистрированные клиенты (DCR);
 //   - oauth_codes:   authorization codes (single-use, короткий TTL);
 //   - oauth_tokens:  access/refresh токены (refresh с ротацией и цепочкой).
@@ -11,6 +12,17 @@ import { generateOpaqueToken } from './crypto.js';
 // (см. `crypto.ts`). Security-критичные инварианты: code потребляется
 // ровно один раз (атомарная транзакция), reuse refresh-токена «отравляет»
 // всю цепочку (защита от кражи токена), revoke и expiry соблюдаются.
+// Изоляция тенантов: каждый access-token привязан к workspace; PlaneClient
+// выбирается per-workspace при обработке запроса.
+
+export interface TenantRow {
+  workspace: string;
+  plane_api_key: string;
+  /** SHA-256 hex-хэш статичного auth-токена для этого workspace (Bearer + X-Agent-Identity). */
+  auth_token_hash: string;
+  max_clients: number;
+  created_at_ms: number;
+}
 
 export interface OAuthClientRow {
   client_id: string;
@@ -28,6 +40,7 @@ export interface SaveCodeArgs {
   identity: string;
   scope: string;
   resource: string;
+  workspace: string;
   expires_at_ms: number;
 }
 
@@ -39,6 +52,7 @@ export interface CodeRow {
   identity: string;
   scope: string;
   resource: string;
+  workspace: string;
   expires_at_ms: number;
 }
 
@@ -49,6 +63,7 @@ export interface SaveTokenArgs {
   identity: string;
   scope: string;
   resource: string;
+  workspace: string;
   expires_at_ms: number;
   refresh_chain_id: string;
 }
@@ -60,6 +75,7 @@ export interface TokenRow {
   identity: string;
   scope: string;
   resource: string;
+  workspace: string;
   expires_at_ms: number;
   refresh_chain_id: string;
 }
@@ -76,6 +92,13 @@ export class OAuthStore {
     this.db = new Database(opts.path);
     this.db.pragma('journal_mode = WAL');
     this.db.exec(`
+      CREATE TABLE IF NOT EXISTS tenants (
+        workspace        TEXT PRIMARY KEY,
+        plane_api_key    TEXT NOT NULL,
+        auth_token_hash  TEXT NOT NULL,
+        max_clients      INTEGER NOT NULL DEFAULT 50,
+        created_at_ms    INTEGER NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS oauth_clients (
         client_id                  TEXT PRIMARY KEY,
         client_name                TEXT NOT NULL,
@@ -91,6 +114,7 @@ export class OAuthStore {
         identity       TEXT NOT NULL,
         scope          TEXT NOT NULL,
         resource       TEXT NOT NULL,
+        workspace      TEXT NOT NULL DEFAULT '',
         expires_at_ms  INTEGER NOT NULL,
         used           INTEGER NOT NULL DEFAULT 0
       );
@@ -101,14 +125,71 @@ export class OAuthStore {
         identity         TEXT NOT NULL,
         scope            TEXT NOT NULL,
         resource         TEXT NOT NULL,
+        workspace        TEXT NOT NULL DEFAULT '',
         expires_at_ms    INTEGER NOT NULL,
         refresh_chain_id TEXT NOT NULL,
         used             INTEGER NOT NULL DEFAULT 0,
         chain_poisoned   INTEGER NOT NULL DEFAULT 0
       );
       CREATE INDEX IF NOT EXISTS idx_oauth_tokens_chain ON oauth_tokens (refresh_chain_id);
+      CREATE INDEX IF NOT EXISTS idx_tenants_auth_hash ON tenants (auth_token_hash);
     `);
+    this.migrateSchema();
   }
+
+  /** Применяет миграции к существующим БД (добавляет колонки workspace). */
+  private migrateSchema(): void {
+    for (const table of ['oauth_codes', 'oauth_tokens'] as const) {
+      const hasCol = (this.db.prepare(
+        `SELECT COUNT(*) AS n FROM pragma_table_info('${table}') WHERE name = 'workspace'`,
+      ).get() as { n: number }).n > 0;
+      if (!hasCol) {
+        this.db.exec(`ALTER TABLE ${table} ADD COLUMN workspace TEXT NOT NULL DEFAULT ''`);
+      }
+    }
+  }
+
+  // ---- Tenant management ----
+
+  registerTenant(args: {
+    workspace: string;
+    plane_api_key: string;
+    auth_token_hash: string;
+    max_clients?: number;
+    created_at_ms: number;
+  }): TenantRow {
+    const max_clients = args.max_clients ?? this.maxClients;
+    this.db
+      .prepare(
+        `INSERT INTO tenants (workspace, plane_api_key, auth_token_hash, max_clients, created_at_ms)
+         VALUES (@workspace, @plane_api_key, @auth_token_hash, @max_clients, @created_at_ms)
+         ON CONFLICT(workspace) DO UPDATE SET
+           plane_api_key   = excluded.plane_api_key,
+           auth_token_hash = excluded.auth_token_hash,
+           max_clients     = excluded.max_clients`,
+      )
+      .run({ workspace: args.workspace, plane_api_key: args.plane_api_key, auth_token_hash: args.auth_token_hash, max_clients, created_at_ms: args.created_at_ms });
+    return { workspace: args.workspace, plane_api_key: args.plane_api_key, auth_token_hash: args.auth_token_hash, max_clients, created_at_ms: args.created_at_ms };
+  }
+
+  getTenantByWorkspace(workspace: string): TenantRow | undefined {
+    return this.db
+      .prepare('SELECT * FROM tenants WHERE workspace = @workspace')
+      .get({ workspace }) as TenantRow | undefined;
+  }
+
+  /** Ищет тенанта по хэшу auth-токена (для static-token path). */
+  getTenantByAuthTokenHash(auth_token_hash: string): TenantRow | undefined {
+    return this.db
+      .prepare('SELECT * FROM tenants WHERE auth_token_hash = @auth_token_hash')
+      .get({ auth_token_hash }) as TenantRow | undefined;
+  }
+
+  listTenants(): TenantRow[] {
+    return this.db.prepare('SELECT * FROM tenants ORDER BY created_at_ms').all() as TenantRow[];
+  }
+
+  // ---- OAuth clients ----
 
   registerClient(args: { client_name: string; redirect_uris: string[]; created_at_ms: number }): OAuthClientRow {
     const tx = this.db.transaction((): OAuthClientRow => {
@@ -150,8 +231,8 @@ export class OAuthStore {
   saveCode(args: SaveCodeArgs): void {
     this.db
       .prepare(
-        `INSERT INTO oauth_codes (code_hash, client_id, redirect_uri, code_challenge, identity, scope, resource, expires_at_ms, used)
-         VALUES (@code_hash, @client_id, @redirect_uri, @code_challenge, @identity, @scope, @resource, @expires_at_ms, 0)`,
+        `INSERT INTO oauth_codes (code_hash, client_id, redirect_uri, code_challenge, identity, scope, resource, workspace, expires_at_ms, used)
+         VALUES (@code_hash, @client_id, @redirect_uri, @code_challenge, @identity, @scope, @resource, @workspace, @expires_at_ms, 0)`,
       )
       .run(args);
   }
@@ -172,8 +253,8 @@ export class OAuthStore {
   saveToken(args: SaveTokenArgs): void {
     this.db
       .prepare(
-        `INSERT INTO oauth_tokens (token_hash, kind, client_id, identity, scope, resource, expires_at_ms, refresh_chain_id, used, chain_poisoned)
-         VALUES (@token_hash, @kind, @client_id, @identity, @scope, @resource, @expires_at_ms, @refresh_chain_id, 0, 0)`,
+        `INSERT INTO oauth_tokens (token_hash, kind, client_id, identity, scope, resource, workspace, expires_at_ms, refresh_chain_id, used, chain_poisoned)
+         VALUES (@token_hash, @kind, @client_id, @identity, @scope, @resource, @workspace, @expires_at_ms, @refresh_chain_id, 0, 0)`,
       )
       .run(args);
   }

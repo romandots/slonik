@@ -16,7 +16,6 @@ export async function commentIssue(deps: {
   cache: TtlCache;
   workspace: string;
   defaultProjectRef: string;
-  allowedProjects: string[];
   identity: AgentIdentity;
   input: CommentIssueInput;
 }): Promise<CommentIssueResult> {
@@ -30,7 +29,6 @@ export async function commentIssue(deps: {
         ? { projectRef: parsed.identifier }
         : {}),
     defaultProjectRef: deps.defaultProjectRef,
-    allowedProjects: deps.allowedProjects,
   });
 
   const issueId = await resolveIssueId(deps.plane, deps.workspace, project, parsed);

@@ -25,7 +25,6 @@ describe('linkGitRef', () => {
       gitRefs,
       workspace: 'agents',
       defaultProjectRef: 'SLONK',
-      allowedProjects: ['SLONK'],
       input: {
         issue_id: issue.id,
         repo_url: REPO,
@@ -73,7 +72,6 @@ describe('linkGitRef', () => {
       gitRefs,
       workspace: 'agents',
       defaultProjectRef: 'SLONK',
-      allowedProjects: ['SLONK'],
       input,
     });
     const r2 = await linkGitRef({
@@ -82,7 +80,6 @@ describe('linkGitRef', () => {
       gitRefs,
       workspace: 'agents',
       defaultProjectRef: 'SLONK',
-      allowedProjects: ['SLONK'],
       input,
     });
 
@@ -106,7 +103,6 @@ describe('linkGitRef', () => {
       gitRefs,
       workspace: 'agents',
       defaultProjectRef: 'SLONK',
-      allowedProjects: ['SLONK'],
       input: { issue_id: issue.id, repo_url: REPO, branch: 'feature/x', commit: 'aaaaaaa' },
     });
     const r = await linkGitRef({
@@ -115,7 +111,6 @@ describe('linkGitRef', () => {
       gitRefs,
       workspace: 'agents',
       defaultProjectRef: 'SLONK',
-      allowedProjects: ['SLONK'],
       input: {
         issue_id: issue.id,
         repo_url: REPO,
@@ -156,7 +151,6 @@ repos:
       gitRefs,
       workspace: 'agents',
       defaultProjectRef: 'SLONK',
-      allowedProjects: ['SLONK'],
       input: {
         issue_id: issue.id,
         repo_url: REPO,

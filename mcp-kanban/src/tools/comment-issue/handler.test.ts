@@ -46,7 +46,6 @@ describe('commentIssue', () => {
       cache: new TtlCache(),
       workspace: 'agents',
       defaultProjectRef: 'SLONK',
-      allowedProjects: ['SLONK'],
       identity: 'qa-agent',
       input: { issue_id: issue.id, comment: 'tests are green' },
     });

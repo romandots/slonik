@@ -29,6 +29,7 @@ describe('oauth routes (full flow)', () => {
       store,
       issuer: ISSUER,
       authToken: STATIC_TOKEN,
+      defaultWorkspace: 'agents',
       operatorIdentity: 'operator',
       accessTtlSec: 3600,
       refreshTtlSec: 2_592_000,

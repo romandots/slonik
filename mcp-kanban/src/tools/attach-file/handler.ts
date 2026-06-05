@@ -41,7 +41,6 @@ export async function attachFile(deps: {
   cache: TtlCache;
   workspace: string;
   defaultProjectRef: string;
-  allowedProjects: string[];
   identity: AgentIdentity;
   /** MinIO bucket для агент-артефактов (MCP_*). */
   bucket: string;
@@ -61,7 +60,6 @@ export async function attachFile(deps: {
         ? { projectRef: parsed.identifier }
         : {}),
     defaultProjectRef: deps.defaultProjectRef,
-    allowedProjects: deps.allowedProjects,
   });
   const issueId = await resolveIssueId(deps.plane, deps.workspace, project, parsed);
 

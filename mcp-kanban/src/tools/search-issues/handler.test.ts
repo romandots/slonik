@@ -15,7 +15,6 @@ describe('searchIssues', () => {
       cache: new TtlCache(),
       workspace: 'agents',
       defaultProjectRef: 'SLONK',
-      allowedProjects: ['SLONK'],
       query: 'auth',
     });
     expect(r.query).toBe('auth');

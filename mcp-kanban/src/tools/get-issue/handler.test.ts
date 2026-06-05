@@ -50,7 +50,6 @@ describe('getIssue', () => {
       cache: new TtlCache(),
       workspace: 'agents',
       defaultProjectRef: 'SLONK',
-      allowedProjects: ['SLONK'],
       issueRef: 'SLONK-1',
     });
 
@@ -72,7 +71,6 @@ describe('getIssue', () => {
       cache: new TtlCache(),
       workspace: 'agents',
       defaultProjectRef: 'SLONK',
-      allowedProjects: ['SLONK'],
       issueRef: 'SLONK-1',
     });
     expect(r.meta_corrupt).toBe(true);
@@ -89,7 +87,6 @@ describe('getIssue', () => {
         cache: new TtlCache(),
         workspace: 'agents',
         defaultProjectRef: 'SLONK',
-        allowedProjects: ['SLONK'],
         issueRef: 'SLONK-42',
       }),
     ).rejects.toThrowError(/not found/);
@@ -119,7 +116,6 @@ describe('getIssue', () => {
       cache: new TtlCache(),
       workspace: 'agents',
       defaultProjectRef: 'SLONK',
-      allowedProjects: ['SLONK'],
       issueRef: 'SLONK-1',
       minio,
       planeBucket: 'plane-uploads',
@@ -143,7 +139,6 @@ describe('getIssue', () => {
       cache: new TtlCache(),
       workspace: 'agents',
       defaultProjectRef: 'SLONK',
-      allowedProjects: ['SLONK'],
       issueRef: 'SLONK-1',
     });
     expect(r.attachments_count).toBe(0);
@@ -165,7 +160,6 @@ describe('getIssue', () => {
       cache: new TtlCache(),
       workspace: 'agents',
       defaultProjectRef: 'SLONK',
-      allowedProjects: ['SLONK'],
       issueRef: 'SLONK-1',
       minio,
       planeBucket: 'plane-uploads',

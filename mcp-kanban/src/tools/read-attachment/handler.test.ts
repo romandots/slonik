@@ -36,7 +36,6 @@ const baseDeps = (ctx: ReturnType<typeof setup>) => ({
   logger: SILENT,
   workspace: 'agents',
   defaultProjectRef: 'SLONK',
-  allowedProjects: ['SLONK'],
   planeBucket: PLANE_BUCKET,
   mcpBucket: MCP_BUCKET,
   minioEndpoints: ENDPOINTS,
