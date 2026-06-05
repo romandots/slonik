@@ -80,6 +80,18 @@ const ConfigSchema = z.object({
   MCP_PLANE_TIMEOUT_MS: PositiveInt.default(10_000),
   MCP_METRICS_ENABLED: Bool01.default(false),
 
+  // OAuth 2.1 Authorization Server (claude.ai remote connector). Off by default.
+  MCP_OAUTH_ENABLED: Bool01.default(false),
+  // Публичный base URL сервера; нужен для metadata и redirect. Обязателен
+  // при MCP_OAUTH_ENABLED=1 (см. superRefine ниже). Без trailing slash.
+  MCP_OAUTH_ISSUER: optionalNonEmpty.pipe(z.string().url().optional()),
+  MCP_OAUTH_OPERATOR_IDENTITY: z.string().min(1).default('operator'),
+  MCP_OAUTH_ACCESS_TTL_SEC: PositiveInt.default(3600),
+  MCP_OAUTH_REFRESH_TTL_SEC: PositiveInt.default(2_592_000),
+  MCP_OAUTH_CODE_TTL_SEC: PositiveInt.default(60),
+  MCP_OAUTH_MAX_CLIENTS: PositiveInt.default(50),
+  MCP_OAUTH_STORE_PATH: optionalNonEmpty,
+
   // Roles directory (SLONK-6). По умолчанию — undefined: loader сам ищет
   // `roles/` рядом с package.json. Переопределяется, если оператор смонтировал
   // директорию в нестандартное место.
@@ -108,6 +120,28 @@ const ConfigSchema = z.object({
 
   // Метаданные процесса
   NODE_ENV: z.enum(['development', 'test', 'production']).default('production'),
+}).superRefine((cfg, ctx) => {
+  if (cfg.MCP_OAUTH_ENABLED && cfg.MCP_OAUTH_ISSUER === undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['MCP_OAUTH_ISSUER'],
+      message: 'MCP_OAUTH_ISSUER is required when MCP_OAUTH_ENABLED=1',
+    });
+  }
+  if (cfg.MCP_OAUTH_ISSUER !== undefined) {
+    try {
+      const u = new URL(cfg.MCP_OAUTH_ISSUER);
+      if (u.pathname !== '/' && u.pathname !== '') {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['MCP_OAUTH_ISSUER'],
+          message: 'MCP_OAUTH_ISSUER must not include a path component (use https://host[:port], not https://host/path)',
+        });
+      }
+    } catch {
+      // invalid URL is already caught by the field-level .url() validation
+    }
+  }
 });
 
 export type Config = z.infer<typeof ConfigSchema>;

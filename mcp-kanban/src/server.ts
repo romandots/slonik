@@ -28,6 +28,11 @@ import { AuditLog } from './audit.js';
 import { RateLimiter } from './rate-limit.js';
 import { GitRefsIndex } from './git-refs.js';
 import { MetricsRegistry } from './metrics.js';
+import formbody from '@fastify/formbody';
+import { OAuthStore } from './oauth/store.js';
+import { registerOAuthRoutes } from './oauth/routes.js';
+import { resourceUri } from './oauth/metadata.js';
+import { hashToken as hashTokenForAuth } from './oauth/crypto.js';
 
 const SERVER_VERSION = readPackageVersion();
 
@@ -44,6 +49,8 @@ export interface BuildServerOptions {
   auditStorePath?: string;
   /** Путь к git-refs индексу (`git_refs.sqlite`). По умолчанию — в томе. */
   gitRefsStorePath?: string;
+  /** Путь к oauth.sqlite. По умолчанию — общий стор в томе `mcp_data`. */
+  oauthStorePath?: string;
   /**
    * Опциональный MinIO-клиент (для тестов: `FakeMinioClient`). По умолчанию —
    * `RealMinioClient` поверх `minio` SDK. SLONK-14.
@@ -53,6 +60,7 @@ export interface BuildServerOptions {
 
 export const AUDIT_STORE_DEFAULT_PATH = '/mcp_data/audit.sqlite';
 export const GIT_REFS_STORE_DEFAULT_PATH = '/mcp_data/git_refs.sqlite';
+export const OAUTH_STORE_DEFAULT_PATH = '/mcp_data/oauth.sqlite';
 
 export interface BuiltServer {
   app: FastifyInstance;
@@ -66,6 +74,7 @@ export interface BuiltServer {
   rateLimiter: RateLimiter;
   gitRefs: GitRefsIndex;
   metrics: MetricsRegistry;
+  oauth: OAuthStore | undefined;
   /** Closes Fastify, MCP transports, and SQLite stores. */
   close: () => Promise<void>;
   /**
@@ -138,6 +147,47 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
   // nodejs_*) подключаются конструктором MetricsRegistry.
   const metrics = new MetricsRegistry();
 
+  // ---------------- OAuth (optional) ----------------
+  // При MCP_OAUTH_ENABLED поднимаем встроенный OAuth 2.1 AS: открываем
+  // SQLite-стор, регистрируем discovery/authorize/token-роуты, инжектим
+  // identity оператора в whitelist и собираем синхронный валидатор
+  // access-токена (audience binds к /mcp этого resource).
+  const oauth = config.MCP_OAUTH_ENABLED
+    ? new OAuthStore({
+        path: opts.oauthStorePath ?? config.MCP_OAUTH_STORE_PATH ?? OAUTH_STORE_DEFAULT_PATH,
+        maxClients: config.MCP_OAUTH_MAX_CLIENTS,
+      })
+    : undefined;
+
+  if (oauth !== undefined && config.MCP_OAUTH_ISSUER !== undefined && config.MCP_OAUTH_ISSUER.startsWith('http://')) {
+    logger.warn(
+      { issuer: config.MCP_OAUTH_ISSUER },
+      'OAuth enabled with a non-HTTPS issuer — tokens travel in plaintext; use HTTPS (external Caddy) in production',
+    );
+  }
+
+  const expectedResource =
+    config.MCP_OAUTH_ISSUER !== undefined ? resourceUri(config.MCP_OAUTH_ISSUER) : undefined;
+  const oauthValidator =
+    oauth !== undefined
+      ? (token: string): { identity: AgentIdentity; scope: string } | undefined => {
+          const row = oauth.validateAccessToken(hashTokenForAuth(token), Date.now());
+          if (row === undefined) return undefined;
+          if (expectedResource !== undefined && row.resource !== expectedResource) return undefined;
+          return { identity: row.identity, scope: row.scope };
+        }
+      : undefined;
+
+  const effectiveRegistry = oauth !== undefined
+    ? createIdentityRegistry([...identityRegistry.list(), config.MCP_OAUTH_OPERATOR_IDENTITY])
+    : identityRegistry;
+
+  const baseAuthOpts = {
+    expectedToken: config.MCP_AUTH_TOKEN,
+    identityRegistry: effectiveRegistry,
+    ...(oauthValidator !== undefined ? { oauthValidator } : {}),
+  };
+
   // ---------------- /health ----------------
   // Без авторизации; пингует Plane по корневому URL.
   app.get('/health', async () => {
@@ -193,15 +243,34 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
     return await metrics.metricsText();
   });
 
+  // ---------------- OAuth routes (optional) ----------------
+  // Регистрируем только при включённом флаге. formbody нужен, чтобы
+  // парсить application/x-www-form-urlencoded тела authorize/token-роутов.
+  if (oauth !== undefined && config.MCP_OAUTH_ISSUER !== undefined) {
+    try {
+      await app.register(formbody);
+      registerOAuthRoutes(app, {
+        store: oauth,
+        issuer: config.MCP_OAUTH_ISSUER,
+        authToken: config.MCP_AUTH_TOKEN,
+        operatorIdentity: config.MCP_OAUTH_OPERATOR_IDENTITY,
+        accessTtlSec: config.MCP_OAUTH_ACCESS_TTL_SEC,
+        refreshTtlSec: config.MCP_OAUTH_REFRESH_TTL_SEC,
+        codeTtlSec: config.MCP_OAUTH_CODE_TTL_SEC,
+        rateLimiter,
+        logger,
+      });
+    } catch (err) {
+      oauth.close();
+      throw err;
+    }
+  }
+
   // ---------------- /mcp/tools (debug) ----------------
   // Возвращает имена зарегистрированных tool'ов. Требует Bearer-токен;
   // identity не обязательна (это диагностический endpoint, не вызов tool'а).
   app.get('/mcp/tools', async (request, reply) => {
-    authenticate(request, reply, {
-      expectedToken: config.MCP_AUTH_TOKEN,
-      requireIdentity: false,
-      identityRegistry,
-    });
+    authenticate(request, reply, { ...baseAuthOpts, requireIdentity: false });
     return { tools: [...REGISTERED_TOOL_NAMES] };
   });
 
@@ -298,10 +367,7 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
   }
 
   app.all('/mcp', async (request, reply) => {
-    authenticate(request, reply, {
-      expectedToken: config.MCP_AUTH_TOKEN,
-      identityRegistry,
-    });
+    authenticate(request, reply, baseAuthOpts);
     const identity = (request as unknown as AuthedRequest).identity;
 
     const sessionId = headerString(request.headers['mcp-session-id']);
@@ -444,6 +510,11 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
     } catch {
       // best-effort
     }
+    try {
+      oauth?.close();
+    } catch {
+      // best-effort
+    }
   };
 
   return {
@@ -458,6 +529,7 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
     rateLimiter,
     gitRefs,
     metrics,
+    oauth,
     close,
     _sessions: {
       size: () => sessions.size,

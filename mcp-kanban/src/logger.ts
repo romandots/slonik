@@ -21,6 +21,15 @@ export function createLogger(config: Pick<Config, 'MCP_LOG_LEVEL' | 'MCP_LOG_FIL
         '*.POSTGRES_PASSWORD',
         '*.MINIO_ROOT_PASSWORD',
         '*.MINIO_SECRET_KEY',
+        // OAuth secrets in request bodies / token responses. `req.body.code`
+        // is intentionally broad (redacts any body `code` field) — defensive.
+        'req.body.password',
+        'req.body.code',
+        'req.body.code_verifier',
+        'req.body.refresh_token',
+        'req.body.access_token',
+        '*.access_token',
+        '*.refresh_token',
         // Presigned URL'ы содержат `X-Amz-Signature` — короткоживущий, но
         // всё равно секретный credential. Никогда не логируем ни как
         // отдельное поле, ни в составе chained-объектов: вместо URL пишем

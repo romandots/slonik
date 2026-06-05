@@ -263,16 +263,32 @@ Backlog
 
 ## 9. Модель угроз
 
+### 9.1 Общие угрозы
+
 | Угроза | Митигация |
 |---|---|
 | Утечка `MCP_AUTH_TOKEN` | Rotation через `.env` + `docker compose up -d mcp-kanban`; токены не логируются |
 | Скомпрометированный агент пишет в чужие задачи | Один проект `SLONK` — scope ограничен; для расширения нужны явные `MCP_ALLOWED_PROJECTS` |
 | Внешний доступ к Postgres | `internal_net` без публикации портов |
-| MITM на API | Caddy + ACME-сертификат для прод |
+| MITM на API | Caddy + ACME-сертификат для прод (обязателен для OAuth) |
 | Prompt injection через комментарий | MCP не исполняет инструкции из контента issue, только из MCP-вызовов |
 | DoS на MCP | Rate limit per-identity + глобальный |
 | Удаление данных через UI | Plane сам по себе не имеет иммутабельного режима; защита — бэкапы |
 | Перезапись `meta`-блока | Идемпотентный writer + лейбл `needs-human` при коррупции |
+
+### 9.2 OAuth-специфичные угрозы (если `MCP_OAUTH_ENABLED=1`)
+
+| Угроза | Митигация |
+|---|---|
+| Dynamic Client Registration spam | Cap на `MCP_OAUTH_MAX_CLIENTS` (default 50) + rate-limit на `/oauth/register` |
+| Утечка оператор-пароля на `/authorize` | PKCE S256 обязателен (plain rejected); точный match redirect_uri; TLS обязателен (Caddy) |
+| Перехват authorization code | Single-use код (atomically marked used на первое обращение), TTL `MCP_OAUTH_CODE_TTL_SEC` (default 60s) |
+| Ошибка PKCE: принять plain challenge | Валидатор `verifyPkceS256` требует S256-трансформ; plain отклоняется на `/authorize` GET |
+| Token theft (скомпромет access-token) | Короткий TTL (default 3600s); refresh-ротация: при повторном использовании старого refresh весь chain отравляется, все токены в цепи становятся невалидными |
+| Confusion между ресурсами | Audience binding по RFC 8707 — токен привязан к resource URI `/mcp`; токен для другого resource отклоняется |
+| Реиспользование отозванного токена | Revoke помечает токен `used=1` в SQLite; validateAccessToken проверяет `used=0` |
+| Логирование token/password значений | Redact-список в pino-логгере закрывает всё, что выглядит как токен/пароль |
+| TLS не настроен | Этап проверки на deployment: claude.ai требует public HTTPS, без TLS OAuth невозможен. TLS — внешний Caddy (Phase 7, обязателен для проды) |
 
 ## 10. Расширяемость
 
