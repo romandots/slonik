@@ -57,6 +57,9 @@ describe('OAuth config', () => {
     expect(cfg.MCP_OAUTH_ENABLED).toBe(false);
     expect(cfg.MCP_OAUTH_OPERATOR_IDENTITY).toBe('operator');
     expect(cfg.MCP_OAUTH_ACCESS_TTL_SEC).toBe(3600);
+    expect(cfg.MCP_OAUTH_REFRESH_TTL_SEC).toBe(2_592_000);
+    expect(cfg.MCP_OAUTH_CODE_TTL_SEC).toBe(60);
+    expect(cfg.MCP_OAUTH_MAX_CLIENTS).toBe(50);
   });
 
   it('requires MCP_OAUTH_ISSUER when OAuth enabled', () => {
