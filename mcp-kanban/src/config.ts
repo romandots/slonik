@@ -93,6 +93,20 @@ const ConfigSchema = z.object({
       message: 'MCP_OAUTH_ISSUER is required when MCP_OAUTH_ENABLED=1',
     });
   }
+  if (cfg.MCP_OAUTH_ISSUER !== undefined) {
+    try {
+      const u = new URL(cfg.MCP_OAUTH_ISSUER);
+      if (u.pathname !== '/' && u.pathname !== '') {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['MCP_OAUTH_ISSUER'],
+          message: 'MCP_OAUTH_ISSUER must not include a path component (use https://host[:port], not https://host/path)',
+        });
+      }
+    } catch {
+      // invalid URL is already caught by the field-level .url() validation
+    }
+  }
 });
 
 export type Config = z.infer<typeof ConfigSchema>;

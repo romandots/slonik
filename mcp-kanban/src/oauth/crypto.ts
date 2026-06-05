@@ -25,10 +25,9 @@ export function verifyPkceS256(codeVerifier: string, codeChallenge: string): boo
   return constantTimeEqual(computed, codeChallenge);
 }
 
-/** Сравнение строк за константное время. */
+/** Сравнение строк за константное время без утечки длины (хэшируем обе стороны до фикс-длины). */
 export function constantTimeEqual(a: string, b: string): boolean {
-  const ab = Buffer.from(a, 'utf8');
-  const bb = Buffer.from(b, 'utf8');
-  if (ab.length !== bb.length) return false;
-  return timingSafeEqual(ab, bb);
+  const ha = createHash('sha256').update(a, 'utf8').digest();
+  const hb = createHash('sha256').update(b, 'utf8').digest();
+  return timingSafeEqual(ha, hb);
 }

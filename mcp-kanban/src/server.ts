@@ -129,6 +129,13 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
       })
     : undefined;
 
+  if (oauth !== undefined && config.MCP_OAUTH_ISSUER !== undefined && config.MCP_OAUTH_ISSUER.startsWith('http://')) {
+    logger.warn(
+      { issuer: config.MCP_OAUTH_ISSUER },
+      'OAuth enabled with a non-HTTPS issuer — tokens travel in plaintext; use HTTPS (external Caddy) in production',
+    );
+  }
+
   const expectedResource =
     config.MCP_OAUTH_ISSUER !== undefined ? resourceUri(config.MCP_OAUTH_ISSUER) : undefined;
   const oauthValidator =

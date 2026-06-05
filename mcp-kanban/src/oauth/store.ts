@@ -213,6 +213,25 @@ export class OAuthStore {
     this.db.prepare('UPDATE oauth_tokens SET used = 1 WHERE token_hash = @token_hash').run({ token_hash });
   }
 
+  /**
+   * Отзыв по любому токену из цепочки: помечает сам токен used=1 И отравляет
+   * весь refresh_chain_id (все access+refresh в цепочке становятся невалидны).
+   * Используется endpoint'ом /oauth/revoke — отзыв должен завершать всю сессию
+   * (RFC 7009 §2: отзыв refresh ДОЛЖЕН отзывать связанные access-токены).
+   */
+  revokeChainByToken(token_hash: string): void {
+    const tx = this.db.transaction(() => {
+      const row = this.db
+        .prepare('SELECT refresh_chain_id FROM oauth_tokens WHERE token_hash = @token_hash')
+        .get({ token_hash }) as { refresh_chain_id: string } | undefined;
+      this.db.prepare('UPDATE oauth_tokens SET used = 1 WHERE token_hash = @token_hash').run({ token_hash });
+      if (row !== undefined) {
+        this.poisonChain(row.refresh_chain_id);
+      }
+    });
+    tx();
+  }
+
   close(): void {
     this.db.close();
   }

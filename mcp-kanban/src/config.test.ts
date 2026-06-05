@@ -71,4 +71,8 @@ describe('OAuth config', () => {
     expect(cfg.MCP_OAUTH_ENABLED).toBe(true);
     expect(cfg.MCP_OAUTH_ISSUER).toBe('https://slonk.example.com');
   });
+
+  it('rejects MCP_OAUTH_ISSUER with a path component', () => {
+    expect(() => loadConfig({ ...base, MCP_OAUTH_ENABLED: '1', MCP_OAUTH_ISSUER: 'https://slonk.example.com/sub' })).toThrow(/path component/);
+  });
 });

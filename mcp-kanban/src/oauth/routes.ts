@@ -27,7 +27,7 @@ export interface OAuthRouteDeps {
 
 const RegisterBody = z.object({
   client_name: z.string().min(1).max(256).optional().default('mcp-client'),
-  redirect_uris: z.array(z.string().url()).min(1),
+  redirect_uris: z.array(z.string().url().max(512)).min(1).max(10),
 });
 
 const AuthorizeQuery = z.object({
@@ -47,6 +47,12 @@ export function registerOAuthRoutes(app: FastifyInstance, deps: OAuthRouteDeps):
   const now = deps.now ?? Date.now;
   const expectedResource = resourceUri(deps.issuer);
 
+  // Anti-clickjacking заголовки для всех HTML-ответов authorize-flow.
+  const htmlSecurityHeaders = (reply: FastifyReply): void => {
+    reply.header('x-frame-options', 'DENY');
+    reply.header('content-security-policy', "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'");
+  };
+
   // ---- discovery ----
   app.get('/.well-known/oauth-protected-resource', async (_req, reply) => {
     reply.header('cache-control', 'no-store');
@@ -59,7 +65,12 @@ export function registerOAuthRoutes(app: FastifyInstance, deps: OAuthRouteDeps):
 
   // ---- DCR (RFC 7591), open with cap+rate-limit ----
   app.post('/oauth/register', async (request, reply) => {
-    deps.rateLimiter.consume('oauth-register');
+    try {
+      deps.rateLimiter.consume('oauth-register');
+    } catch {
+      reply.status(429);
+      return { error: 'temporarily_unavailable', error_description: 'rate limit exceeded' };
+    }
     const parsed = RegisterBody.safeParse(request.body);
     if (!parsed.success) {
       reply.status(400);
@@ -96,25 +107,40 @@ export function registerOAuthRoutes(app: FastifyInstance, deps: OAuthRouteDeps):
     const parsed = AuthorizeQuery.safeParse(request.query);
     if (!parsed.success) {
       reply.status(400).type('text/html');
+      htmlSecurityHeaders(reply);
       return renderError('Invalid authorization request');
     }
     const q = parsed.data;
     const client = deps.store.getClient(q.client_id);
     if (client === undefined || !client.redirect_uris.includes(q.redirect_uri)) {
       reply.status(400).type('text/html');
+      htmlSecurityHeaders(reply);
       return renderError('Unknown client or redirect_uri mismatch');
     }
     if (q.resource !== undefined && q.resource !== expectedResource) {
       reply.status(400).type('text/html');
+      htmlSecurityHeaders(reply);
       return renderError('resource mismatch');
     }
+    if (q.scope !== undefined && q.scope !== OAUTH_SCOPE) {
+      reply.status(400).type('text/html');
+      htmlSecurityHeaders(reply);
+      return renderError('invalid scope');
+    }
     reply.status(200).type('text/html');
+    htmlSecurityHeaders(reply);
     return renderLoginForm(q);
   });
 
   // ---- authorize (POST -> issue code) ----
   app.post('/oauth/authorize', async (request, reply) => {
-    deps.rateLimiter.consume('oauth-authorize');
+    try {
+      deps.rateLimiter.consume('oauth-authorize');
+    } catch {
+      reply.status(429).type('text/html');
+      htmlSecurityHeaders(reply);
+      return renderError('Too many requests. Try again shortly.');
+    }
     const parsed = AuthorizePost.safeParse(request.body);
     if (!parsed.success) {
       reply.status(400);
@@ -130,8 +156,13 @@ export function registerOAuthRoutes(app: FastifyInstance, deps: OAuthRouteDeps):
       reply.status(400);
       return { error: 'invalid_request', error_description: 'resource mismatch' };
     }
+    if (q.scope !== undefined && q.scope !== OAUTH_SCOPE) {
+      reply.status(400);
+      return { error: 'invalid_scope' };
+    }
     if (!constantTimeEqual(q.password, deps.authToken)) {
       reply.status(401).type('text/html');
+      htmlSecurityHeaders(reply);
       return renderLoginForm(q, 'Invalid password');
     }
     const code = generateOpaqueToken();
@@ -172,7 +203,7 @@ export function registerOAuthRoutes(app: FastifyInstance, deps: OAuthRouteDeps):
   app.post('/oauth/revoke', async (request, reply) => {
     const body = (request.body ?? {}) as Record<string, unknown>;
     const token = typeof body['token'] === 'string' ? body['token'] : undefined;
-    if (token !== undefined) deps.store.revokeToken(hashToken(token));
+    if (token !== undefined) deps.store.revokeChainByToken(hashToken(token));
     reply.status(200);
     return {};
   });

@@ -123,4 +123,12 @@ describe('OAuthStore', () => {
     store.revokeToken('rr');
     expect(store.consumeRefreshToken('rr', now)).toBeUndefined();
   });
+
+  it('revokeChainByToken poisons the whole chain', () => {
+    store.saveToken({ token_hash: 'acc', kind: 'access', client_id: 'c1', identity: 'operator', scope: 'mcp', resource: 'https://slonk/mcp', expires_at_ms: now + 3600_000, refresh_chain_id: 'chainZ' });
+    store.saveToken({ token_hash: 'ref', kind: 'refresh', client_id: 'c1', identity: 'operator', scope: 'mcp', resource: 'https://slonk/mcp', expires_at_ms: now + 9_000_000, refresh_chain_id: 'chainZ' });
+    store.revokeChainByToken('ref');
+    expect(store.validateAccessToken('acc', now)).toBeUndefined();      // access killed too
+    expect(store.consumeRefreshToken('ref', now)).toBeUndefined();      // refresh killed
+  });
 });

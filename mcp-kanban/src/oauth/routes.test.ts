@@ -233,6 +233,16 @@ describe('oauth routes (full flow)', () => {
     expect(rotatedUse.statusCode).toBe(400);
   });
 
+  it('sets anti-clickjacking headers on the authorize form', async () => {
+    const reg = await app.inject({ method: 'POST', url: '/oauth/register', payload: { client_name: 'c', redirect_uris: [REDIRECT] } });
+    const clientId = JSON.parse(reg.body).client_id as string;
+    const { challenge } = pkce();
+    const r = await app.inject({ method: 'GET', url: `/oauth/authorize?response_type=code&client_id=${clientId}&redirect_uri=${encodeURIComponent(REDIRECT)}&code_challenge=${challenge}&code_challenge_method=S256&state=s&resource=${encodeURIComponent(ISSUER + '/mcp')}` });
+    expect(r.statusCode).toBe(200);
+    expect(r.headers['x-frame-options']).toBe('DENY');
+    expect(String(r.headers['content-security-policy'])).toContain("frame-ancestors 'none'");
+  });
+
   it('discovery sets cache-control: no-store', async () => {
     const r = await app.inject({ method: 'GET', url: '/.well-known/oauth-protected-resource' });
     expect(r.headers['cache-control']).toContain('no-store');
