@@ -226,7 +226,9 @@ services:
   plane-worker:
     image: makeplane/plane-backend:${PLANE_IMAGE_TAG}
     <<: [*restart-policy, *logging]
-    mem_limit: 384m
+    # SLONK-9: 384m давало OOM-kill (exit 137) под Celery-нагрузкой
+    # (notifications, webhooks, mass-update'ы); 768m = +50% запаса.
+    mem_limit: 768m
     command: ./bin/docker-entrypoint-worker.sh
     environment:
       <<: *plane-backend-env
