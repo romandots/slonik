@@ -7,6 +7,48 @@
 
 ## [Unreleased]
 
+### Added
+- **Встроенный OAuth 2.1 Authorization Server** для добавления self-hosted slonk
+  как remote-коннектора на claude.ai (Phase 11, SLONK-oauth). Реализация следует
+  RFC 9728 (Protected Resource Metadata), RFC 8414 (Authorization Server Metadata),
+  RFC 7591 (Dynamic Client Registration), RFC 8707 (Audience binding), RFC 7009
+  (Token Revocation).
+  
+  Когда `MCP_OAUTH_ENABLED=true` (требует `MCP_OAUTH_ISSUER` и публичный HTTPS):
+  - Семь новых endpoints: `/.well-known/oauth-protected-resource` (discovery),
+    `/.well-known/oauth-authorization-server` (discovery),
+    `/oauth/register` (DCR, open with cap + rate-limit),
+    `/oauth/authorize` GET/POST (HTML login form, оператор вводит пароль = `MCP_AUTH_TOKEN`),
+    `/oauth/token` (authorization_code + refresh_token grants),
+    `/oauth/revoke` (revocation).
+  - Authorization Code flow с PKCE S256 (plain rejected). Оператор логинится один раз,
+    получает долгоживущий refresh-token; access-token'ы коротки (default 3600s).
+  - Refresh-token ротация: на каждый новый grant выдаётся новая пара tokens в том же
+    chain_id; повторное использование старого refresh отравляет весь chain (defense
+    against token theft по RFC 6819).
+  - Audience binding по RFC 8707 — все токены привязаны к resource URI `/mcp`;
+    токен для другого resource отклоняется.
+  - Dual-auth на `/mcp`: legacy Bearer (`MCP_AUTH_TOKEN` + `X-Agent-Identity`) ИЛИ
+    OAuth access-token → identity `operator` (full access, not pipeline role).
+  - SQLite-хранилище (`oauth.sqlite`): только SHA-256-хэши токенов/кодов;
+    плейнтекст никогда не пишется, редактируется в логах.
+  - Конфигурация: `MCP_OAUTH_ENABLED`, `MCP_OAUTH_ISSUER` (required when enabled),
+    `MCP_OAUTH_OPERATOR_IDENTITY` (default `operator`),
+    `MCP_OAUTH_ACCESS_TTL_SEC` (default 3600),
+    `MCP_OAUTH_REFRESH_TTL_SEC` (default 2592000),
+    `MCP_OAUTH_CODE_TTL_SEC` (default 60),
+    `MCP_OAUTH_MAX_CLIENTS` (default 50),
+    `MCP_OAUTH_STORE_PATH` (default `/mcp_data/oauth.sqlite`).
+  - Гейт: default `false` → когда выключено, OAuth-эндпоинты не регистрируются,
+    `/mcp` работает как раньше (backward-compatible).
+  - 76+ unit + integration tests: crypto (token gen, hashing, PKCE S256),
+    store (clients, codes, tokens, refresh rotation, chain poisoning),
+    metadata builders, full flow (DCR → authorize → token → /mcp),
+    negative cases (wrong password, redirect_uri mismatch, PKCE failure, code reuse).
+  - Документация: SPEC.md (§6.1 auth + endpoints table), ARCHITECTURE.md
+    (§6 OAuth data flow, §9.2 threat model), CONFIGURATION.md (§2.6.1 env vars),
+    `.env.example` (OAuth block with comments), `ROADMAP.md` (Phase 11).
+
 ## [1.0.1] — 2026-05-16
 
 ### Fixed

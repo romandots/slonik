@@ -236,6 +236,8 @@ TipTap'ом безвозвратно — `parseDescription` вернёт пус�
 
 ### 6.1 Транспорт и аутентификация
 
+**MCP-протокол:**
+
 - HTTP+SSE: единый endpoint `ALL /mcp` через `StreamableHTTPServerTransport`
   (MCP SDK ≥ 1.29). POST принимает JSON-RPC, GET апгрейдится в SSE-стрим.
   Сессия идентифицируется заголовком `mcp-session-id`, который сервер
@@ -243,14 +245,37 @@ TipTap'ом безвозвратно — `parseDescription` вернёт пус�
 - `GET /mcp/tools` — диагностический endpoint, возвращает список имён
   зарегистрированных tool'ов (Bearer-авторизация, identity не обязательна).
 - stdio: `mcp-kanban stdio` для локального запуска (в v1 не реализован).
-- Auth: `Authorization: Bearer <MCP_AUTH_TOKEN>` для всех HTTP-эндпоинтов
-  кроме `/health`.
-- В заголовке `X-Agent-Identity: <role>` агент сообщает свою роль. Если заголовок
-  отсутствует на `/mcp` — MCP вернёт 400 `IDENTITY_REQUIRED`. Если значение не
-  входит в whitelist `IdentityRegistry` (см. §5.5) — тот же 400
-  `IDENTITY_REQUIRED: Unknown agent identity: <role>`.
 - `GET /health` — без авторизации, возвращает
   `{status, service, version, plane_reachable, plane_status, plane_latency_ms}`.
+
+**Авторизация на `/mcp`:**
+
+`/mcp` (и `/mcp/tools`) принимают ЛИБО статичный Bearer-токен, ЛИБО OAuth access-token:
+
+- **Static Bearer** (по умолчанию): `Authorization: Bearer <MCP_AUTH_TOKEN>` +
+  `X-Agent-Identity: <role>`. Заголовок `X-Agent-Identity` обязателен при
+  использовании статичного токена; если отсутствует — 400 `IDENTITY_REQUIRED`.
+  Значение проверяется против whitelist `IdentityRegistry` (см. §5.5).
+- **OAuth Bearer** (если `MCP_OAUTH_ENABLED=1`): `Authorization: Bearer <access_token>`
+  без `X-Agent-Identity`. Access-token резолвится в identity `operator` (полный
+  доступ, не конвейерная роль). Аудитория токена привязана к ресурсу `/mcp`
+  (RFC 8707); токен, выданный для другого ресурса, отклоняется.
+
+**OAuth 2.1 Authorization Server** (если `MCP_OAUTH_ENABLED=1`):
+
+| Endpoint | Метод | Назначение | RFC |
+|---|---|---|---|
+| `/.well-known/oauth-protected-resource` | GET | Метаданные Resource Server (это `/mcp`), указывают на AS и resource URI | RFC 9728 |
+| `/.well-known/oauth-authorization-server` | GET | Метаданные AS: endpoints, поддерживаемые методы (PKCE S256 обязателен), grant'ы | RFC 8414 |
+| `/oauth/register` | POST | Dynamic Client Registration (открыт, rate-limited, capped на `MCP_OAUTH_MAX_CLIENTS`) | RFC 7591 |
+| `/oauth/authorize` | GET | Рендерит HTML-форму логина (оператор вводит пароль = `MCP_AUTH_TOKEN`) | — |
+| `/oauth/authorize` | POST | Проверка пароля (constant-time), выдача single-use authorization code (PKCE S256-bound, TTL = `MCP_OAUTH_CODE_TTL_SEC`) | — |
+| `/oauth/token` | POST | Grant: `authorization_code` (PKCE верификация) или `refresh_token` (с ротацией). Возвращает opaque `access_token` + `refresh_token` | — |
+| `/oauth/revoke` | POST | Отзыв access/refresh токена | RFC 7009 |
+
+OAuth flow для claude.ai: discovery → Dynamic Client Registration → `/authorize`
+(пользователь вводит пароль) → authorization code → `/oauth/token` → access token →
+`/mcp` с `Authorization: Bearer <access_token>`.
 
 ### 6.2 Перечень инструментов
 

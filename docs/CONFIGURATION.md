@@ -143,6 +143,30 @@ Compose автоматически собирает `AMQP_URL` для Celery и�
 | `MCP_PLANE_TIMEOUT_MS` | `10000` | таймаут запроса к Plane |
 | `MCP_METRICS_ENABLED` | `false` | включить `/metrics` (Prometheus) |
 
+### 2.6.1 OAuth 2.1 Authorization Server (опц., для claude.ai remote-коннектора)
+
+Встроенный OAuth-сервер позволяет добавить слонк как remote-коннектор на claude.ai.
+Требует публичный HTTPS (через внешний Caddy, Phase 7). Гейт: `MCP_OAUTH_ENABLED` (default `false`).
+
+| Переменная | Default | Описание |
+|---|---|---|
+| `MCP_OAUTH_ENABLED` | `false` | Включить OAuth 2.1 endpoints (`/.well-known/*`, `/oauth/*`) |
+| `MCP_OAUTH_ISSUER` | — | Публичный base URL сервера (https URL без trailing slash). **Обязателен при `MCP_OAUTH_ENABLED=1`** |
+| `MCP_OAUTH_OPERATOR_IDENTITY` | `operator` | Идентичность получателя OAuth access-tokens (full access, не конвейерная роль) |
+| `MCP_OAUTH_ACCESS_TTL_SEC` | `3600` | TTL access-token'ов (сек) |
+| `MCP_OAUTH_REFRESH_TTL_SEC` | `2592000` | TTL refresh-token'ов (сек, default 30 дней) |
+| `MCP_OAUTH_CODE_TTL_SEC` | `60` | TTL authorization code (сек) |
+| `MCP_OAUTH_MAX_CLIENTS` | `50` | Cap на Dynamic Client Registration (защита от spam) |
+| `MCP_OAUTH_STORE_PATH` | `/mcp_data/oauth.sqlite` | Путь к SQLite-хранилищу tokens/codes |
+
+Оператор (владелец канбана) логинится вводом `MCP_AUTH_TOKEN` как пароля на форме
+`/oauth/authorize`. Полученный access-token разрешает полный доступ к `/mcp` с identity
+`operator`. На `/mcp` приём обоих типов Bearer (static token + OAuth token) происходит
+автоматически — выбор по содержимому токена.
+
+Токены хранятся только как SHA-256-хэши в `oauth.sqlite`. Плейнтекст не пишется
+никуда; в логах redact'ируется (расширение pino-список).
+
 ### 2.7 Caddy (опц.)
 
 | Переменная | Default | Описание |
