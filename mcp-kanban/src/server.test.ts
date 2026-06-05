@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createHash } from 'node:crypto';
 import { buildServer, type BuiltServer } from './server.js';
 import { loadConfig } from './config.js';
 import { createLogger } from './logger.js';
@@ -132,6 +133,20 @@ describe('mcp-kanban HTTP server', () => {
       const body = JSON.parse(r.body) as { tools: string[] };
       expect(body.tools).toContain('who_am_i');
     });
+
+    it('does not expose OAuth discovery when the flag is off', async () => {
+      const r = await built.app.inject({ method: 'GET', url: '/.well-known/oauth-protected-resource' });
+      expect(r.statusCode).toBe(404);
+    });
+
+    it('rejects a non-static Bearer when OAuth is off', async () => {
+      const r = await built.app.inject({
+        method: 'GET',
+        url: '/mcp/tools',
+        headers: { authorization: 'Bearer some-oauth-looking-token' },
+      });
+      expect(r.statusCode).toBe(401);
+    });
   });
 
   describe('/metrics', () => {
@@ -248,5 +263,52 @@ describe('mcp-kanban /metrics enabled', () => {
     expect(r.headers['content-type']).toMatch(/text\/plain.*version=0\.0\.4/);
     expect(r.body).toContain('mcp_tool_calls_total');
     expect(r.body).toContain('tool="list_issues"');
+  });
+});
+
+describe('OAuth-enabled server', () => {
+  let oauthBuilt: BuiltServer;
+  let oauthTmp: string;
+
+  beforeAll(async () => {
+    const config = loadConfig(testEnv({ MCP_OAUTH_ENABLED: '1', MCP_OAUTH_ISSUER: 'https://slonk.example.com' }));
+    const logger = createLogger(config);
+    oauthTmp = mkdtempSync(join(tmpdir(), 'slonk-oauth-'));
+    const idPath = join(oauthTmp, 'identity.sqlite');
+    seedIdentityStore(idPath, ALL_ROLES);
+    oauthBuilt = await buildServer({
+      config, logger,
+      identityStorePath: idPath,
+      auditStorePath: join(oauthTmp, 'audit.sqlite'),
+      gitRefsStorePath: join(oauthTmp, 'git_refs.sqlite'),
+      oauthStorePath: join(oauthTmp, 'oauth.sqlite'),
+    });
+    await oauthBuilt.app.ready();
+  });
+  afterAll(async () => {
+    await oauthBuilt.close();
+    rmSync(oauthTmp, { recursive: true, force: true });
+  });
+
+  it('exposes protected-resource discovery', async () => {
+    const r = await oauthBuilt.app.inject({ method: 'GET', url: '/.well-known/oauth-protected-resource' });
+    expect(r.statusCode).toBe(200);
+    expect(JSON.parse(r.body).resource).toBe('https://slonk.example.com/mcp');
+  });
+
+  it('accepts an OAuth access token on a protected endpoint as operator', async () => {
+    const access = 'integration-access-token';
+    oauthBuilt.oauth!.saveToken({
+      token_hash: createHash('sha256').update(access).digest('hex'),
+      kind: 'access', client_id: 'c', identity: 'operator', scope: 'mcp',
+      resource: 'https://slonk.example.com/mcp',
+      expires_at_ms: Date.now() + 3600_000, refresh_chain_id: 'ch',
+    });
+    const r = await oauthBuilt.app.inject({
+      method: 'GET', url: '/mcp/tools',
+      headers: { authorization: `Bearer ${access}` },
+    });
+    expect(r.statusCode).toBe(200);
+    expect(JSON.parse(r.body).tools).toContain('who_am_i');
   });
 });
