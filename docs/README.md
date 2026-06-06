@@ -10,6 +10,7 @@
 | [SPEC.md](./SPEC.md) | Технический контракт: компоненты, MCP API, workflow, ошибки, безопасность |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | Архитектура, сети, контейнеры, потоки данных, модель угроз |
 | [CONFIGURATION.md](./CONFIGURATION.md) | Полный референс `.env`, compose-overlay'ев, bootstrap'а, версий образов |
+| [DEPLOY.md](./DEPLOY.md) | Деплой и автодеплой: CI/CD на GitHub Actions, подготовка прод-хоста, секреты, rollback |
 | [ROADMAP.md](./ROADMAP.md) | Поэтапный план реализации с критериями приёмки |
 | [CONVENTIONS.md](./CONVENTIONS.md) | Конвенции кода, инфраструктуры, конфигов, git |
 | [CHANGELOG.md](./CHANGELOG.md) | История изменений в формате Keep a Changelog |
