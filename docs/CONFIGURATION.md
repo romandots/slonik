@@ -676,55 +676,24 @@ docker compose up -d
 - [ ] Claude Code видит инструменты MCP (`/mcp` в CLI).
 - [ ] Тестовый `claim_issue` отрабатывает.
 
-## 12. CI/CD (GitHub Actions)
+## 12. CI/CD и деплой
+
+Источник правды по выкладке и автодеплою — **[DEPLOY.md](./DEPLOY.md)**: CI/CD-пайплайн
+на GitHub Actions, ручной деплой, подготовка прод-хоста, секреты, rollback,
+troubleshooting. Здесь — только краткая сводка.
 
 Два workflow в `.github/workflows/`:
 
-### 12.1 PR pipeline — `ci.yml`
+- **[`ci.yml`](../.github/workflows/ci.yml)** — PR pipeline на PR в `main`/`develop`:
+  три параллельных джобы `lint` (lint + typecheck), `build` (tsc + docker build smoke),
+  `test` (vitest). Красный чек блокирует merge. Node 22 из `.nvmrc`, кэш pnpm через
+  `actions/setup-node` (`cache: pnpm`).
+- **[`release-deploy.yml`](../.github/workflows/release-deploy.yml)** — Release/Deploy
+  на `push` в `main`: `gate` (lint + typecheck + build + test) → `release` (build & push
+  `mcp-kanban` + `backup` в GHCR, тег из `mcp-kanban/package.json`) → `deploy` (SSH на
+  прод, `docker compose up --wait` с health-gate и авто-rollback, environment `production`)
+  → `smoke`. `concurrency: deploy-prod`, `cancel-in-progress: false`.
 
-Запускается на каждый PR в `main` или `develop`. Три параллельных джобы:
-
-| Джоба | Что делает |
-|---|---|
-| `lint` | `pnpm lint` + `pnpm typecheck` |
-| `build` | `pnpm build` (tsc) + `docker build` (smoke, без push) |
-| `test` | `pnpm test` (vitest) |
-
-Красный статус блокирует merge (настраивается в branch protection правилах репозитория).
-
-**Кэш:** pnpm store кэшируется через `actions/cache`. Node 22 LTS из `mcp-kanban/.nvmrc`.
-
-### 12.2 Release/Deploy pipeline — `release-deploy.yml`
-
-Запускается на `push` в `main` (т.е. после squash-merge PR):
-
-1. **Gate** — повторный прогон lint + build + test (gate перед публикацией).
-2. **Release** — сборка `mcp-kanban` и `backup`, push в GHCR:
-   - `ghcr.io/romandots/slonk/mcp-kanban:VERSION` + `:latest`
-   - `ghcr.io/romandots/slonk/backup:VERSION` + `:latest`
-   - Версия — из `mcp-kanban/package.json`.
-3. **Deploy** — SSH на прод-хост:
-   - `docker pull ghcr.io/.../mcp-kanban:VERSION`
-   - `SLONK_MCP_IMAGE_TAG=VERSION docker compose up -d mcp-kanban --wait`
-   - При неуспехе healthcheck — автоматический rollback на предыдущий тег.
-4. **Smoke** — `make smoke` после успешного деплоя.
-
-**Concurrency:** deploy-джоба не запускается параллельно (`cancel-in-progress: false`).
-
-### 12.3 Необходимые GitHub Secrets
-
-| Secret | Описание |
-|---|---|
-| `SSH_HOST` | IP / hostname прод-хоста |
-| `SSH_USER` | Пользователь SSH (в группе `docker`, не root) |
-| `SSH_PRIVATE_KEY` | Приватный SSH-ключ (deploy key) |
-| `GHCR_PULL_TOKEN` | PAT с `read:packages` для `docker login ghcr.io` на проде |
-
-Push в GHCR из workflow — через автоматический `GITHUB_TOKEN` (`packages: write`).
-
-### 12.4 Настройка прод-хоста
-
-- `DEPLOY_DIR` в workflow → `/opt/slonk` (можно поменять через env в workflow).
-- На хосте должен быть `docker compose` (v2), `make`, `.env` с прод-секретами.
-- Перед первым деплоем: `docker login ghcr.io -u <user> --password <GHCR_PULL_TOKEN>`.
-- Branch protection: `Require status checks to pass before merging` → выбрать `lint`, `build`, `test`.
+Нужные GitHub Secrets (`SSH_HOST`, `SSH_USER`, `SSH_PRIVATE_KEY`, `GHCR_PULL_TOKEN`),
+GitHub Environment `production`, branch protection и подготовка хоста — подробно в
+[DEPLOY.md §5–§8](./DEPLOY.md).

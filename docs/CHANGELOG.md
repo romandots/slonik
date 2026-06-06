@@ -14,8 +14,20 @@
   `docs/CONFIGURATION.md §5` обновлён: таблица, сумма лимитов (`~3.9 GiB`),
   headroom на 4 GB-хосте (`~100 MiB`, рекомендуется минимум 6 GB), секция 8 GB
   (`plane-worker → 1g`).
+- **`docs/CONFIGURATION.md §12` сжат до сводки** со ссылкой на `DEPLOY.md`
+  (источник правды по выкладке вынесен в отдельный документ). Попутно
+  исправлены неточности §12: `gate` включает `typecheck`; кэш pnpm идёт через
+  `cache: pnpm` в `actions/setup-node` (не `actions/cache`); добавлено
+  упоминание GitHub Environment `production`; `docker login` — через
+  `--password-stdin`.
 
 ### Added
+- **`docs/DEPLOY.md`** — канонический документ по деплою и автодеплою: схема
+  CI/CD-пайплайна, автодеплой на `push: main`, CI на PR, ручной деплой,
+  подготовка прод-хоста (каталог, SSH deploy key, логин в GHCR, свой
+  registry-namespace), GitHub Secrets и Environment `production`, branch
+  protection, версионирование, rollback, troubleshooting. Добавлен в индексы
+  `docs/README.md` и корневой `CLAUDE.md`.
 - **Markdown → HTML в описаниях задач** (SLONK-17). `toPlaneDescriptionHtml` теперь
   парсит полный CommonMark через `marked`: заголовки, жирный/курсив, списки, блоки кода,
   цитаты, ссылки. `sanitizeHtml` вынесен в `src/sanitize-html.ts` и используется
