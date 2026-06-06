@@ -7,10 +7,14 @@ export const AttachFileInput = z.object({
   mime_type: z.string().min(1).max(127),
   size: z.number().int().positive(),
   /**
-   * Если передан `complete: true` — фаза «attach-complete»: MCP записывает
-   * метаданные в Plane после успешного PUT. Иначе — выдаёт presigned URL.
+   * Если передан `complete: true` — фаза «attach-complete»: MCP проверяет
+   * аплоад и регистрирует вложение в Plane после успешного PUT. Иначе —
+   * выдаёт presigned PUT URL.
    */
   complete: z.boolean().optional(),
   object_key: z.string().optional(),
+  /** Необязательная заметка, добавляемая в комментарий-аннотацию на фазе
+   *  complete (например, «лог прогона тестов»). */
+  note: z.string().min(1).max(2000).optional(),
 });
 export type AttachFileInput = z.infer<typeof AttachFileInput>;

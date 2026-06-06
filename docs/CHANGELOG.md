@@ -8,6 +8,17 @@
 ## [Unreleased]
 
 ### Added
+- **Реальный MinIO presigned upload в `attach_file` (SLONK-18).** Раньше
+  presign-фаза собирала upload-URL конкатенацией строк (без подписи) — аплоад
+  против реального MinIO провалился бы; теперь `attach_file` выдаёт настоящий
+  подписанный `PUT`-URL через `minio.presignedPutObject`. На фазе `complete`
+  сервер проверяет аплоад (`statObject`), регистрирует объект как mcp-artifact
+  (живёт под `issues/<id>/`, поэтому виден через `list_attachments` и
+  резолвится `read_attachment` по стабильному `mca_`-id) и постит
+  комментарий-аннотацию с artifact-id (без presigned URL — чтобы подпись не
+  оседала в истории задачи). `complete` принимает только `object_key` под
+  префиксом своей задачи. Добавлен метод `presignedPutObject` в `MinioClient`
+  (real + fake). Закрывает прикрепление файлов и к задаче, и к комментариям.
 - **Выбор тенанта в форме OAuth-логина (SLONK-19).** Форма `/oauth/authorize`
   теперь содержит редактируемое поле **Workspace** (по умолчанию
   `MCP_DEFAULT_WORKSPACE`): оператор вводит slug тенанта + его пароль. Раньше
