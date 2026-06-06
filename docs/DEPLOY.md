@@ -17,7 +17,7 @@ CI/CD-пайплайн на GitHub Actions, подготовка сервера,
 
 slonk — self-hosted, single-node. Прод — один хост с Docker, на котором лежит
 рабочая копия репозитория (compose-файлы, `Makefile`, `.env` с прод-секретами) в
-`DEPLOY_DIR` (по умолчанию `/opt/slonk`). Деплоится **только** образ
+`DEPLOY_DIR` (в этом инстансе — `/home/romandots/slonik`). Деплоится **только** образ
 `mcp-kanban` (и при включённом overlay — `backup`); образы Plane тянутся с
 upstream по pinned-тегам и не пересобираются.
 
@@ -78,7 +78,7 @@ push в main ──► release-deploy.yml:
 Джоба привязана к GitHub Environment **`production`** (`environment: production`)
 — здесь можно повесить required reviewers и environment-scoped секреты (§5).
 
-По SSH (`appleboy/ssh-action`) на `DEPLOY_DIR` (`/opt/slonk`):
+По SSH (`appleboy/ssh-action`) на `DEPLOY_DIR` (`/home/romandots/slonik`):
 
 1. `docker login ghcr.io` через `GHCR_PULL_TOKEN` (`--password-stdin`).
 2. Запоминает текущий `SLONK_MCP_IMAGE_TAG` из `.env` — для rollback.
@@ -150,7 +150,7 @@ Settings → Environments → New environment → `production`. Что поле�
 На случай первичной установки или hotfix без CI — из `DEPLOY_DIR` на проде:
 
 ```bash
-cd /opt/slonk
+cd /home/romandots/slonik
 
 # залогиниться в GHCR (один раз, см. §7.3)
 echo "$GHCR_PULL_TOKEN" | docker login ghcr.io -u <github-user> --password-stdin
@@ -178,12 +178,18 @@ make smoke
 ### 7.1 Каталог и рабочая копия
 
 ```bash
-sudo mkdir -p /opt/slonk && sudo chown "$USER":"$USER" /opt/slonk
-cd /opt/slonk
-# выложить: docker-compose.yml (+ нужные overlay), Makefile, .env (прод-секреты, все change_me заменены)
+# каталог деплоя = рабочая копия репозитория на проде
+cd /home/romandots/slonik
+# должны присутствовать: docker-compose.yml (+ нужные overlay), Makefile,
+# .env (прод-секреты, все change_me заменены)
 docker compose version   # требуется compose v2
 make --version
 ```
+
+> Для каталога в `$HOME` `sudo`/`mkdir`/`chown` не нужны — он уже принадлежит
+> `SSH_USER`. Если разворачиваешь в системный путь (например `/opt/slonk`),
+> создай каталог и отдай его пользователю деплоя: `sudo mkdir -p <dir> &&
+> sudo chown "$USER":"$USER" <dir>`.
 
 `.env` должен быть писабельным для `SSH_USER`: deploy-скрипт делает по нему
 `sed -i` для фиксации `SLONK_MCP_IMAGE_TAG`.
@@ -214,7 +220,8 @@ env:
   IMAGE_BACKUP: ghcr.io/<твой-аккаунт>/slonk/backup
 ```
 
-`DEPLOY_DIR` тоже задаётся в env deploy-джобы — поменяй, если каталог не `/opt/slonk`.
+`DEPLOY_DIR` задаётся в env deploy-джобы (`/home/romandots/slonik`) и
+дублируется в шаге `Post-deploy smoke` — при смене каталога поправь оба места.
 
 ---
 
@@ -246,7 +253,7 @@ squash-merge PR) запускает автодеплой.
 скрипт поднимает предыдущий `SLONK_MCP_IMAGE_TAG`. Ручной откат:
 
 ```bash
-cd /opt/slonk
+cd /home/romandots/slonik
 SLONK_MCP_IMAGE_TAG=<предыдущая-версия> docker compose up -d mcp-kanban --wait
 sed -i "s/^SLONK_MCP_IMAGE_TAG=.*/SLONK_MCP_IMAGE_TAG=<предыдущая-версия>/" .env
 make smoke
