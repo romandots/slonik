@@ -57,3 +57,13 @@ export function buildAuthorizationServerMetadata(issuer: string): AuthorizationS
 export function resourceUri(issuer: string): string {
   return `${trimSlash(issuer)}/mcp`;
 }
+
+/**
+ * URL документа Protected Resource Metadata (RFC 9728). На него ссылается
+ * заголовок `WWW-Authenticate: Bearer resource_metadata="…"`, который сервер
+ * отдаёт на 401 — по нему remote-коннектор находит authorization server и
+ * запускает refresh/повторную авторизацию.
+ */
+export function protectedResourceMetadataUrl(issuer: string): string {
+  return `${trimSlash(issuer)}/.well-known/oauth-protected-resource`;
+}
