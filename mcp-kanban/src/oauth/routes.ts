@@ -14,7 +14,11 @@ import { generateOpaqueToken, hashToken, verifyPkceS256, constantTimeEqual } fro
 export interface OAuthRouteDeps {
   store: OAuthStore;
   issuer: string;
-  authToken: string; // operator password == MCP_AUTH_TOKEN
+  /** Глобальный fallback auth-токен (MCP_AUTH_TOKEN). Используется если
+   *  workspace не найден в стор тенантов или OAuth выключен. */
+  authToken: string;
+  /** Workspace по умолчанию (MCP_DEFAULT_WORKSPACE). */
+  defaultWorkspace: string;
   operatorIdentity: string;
   accessTtlSec: number;
   refreshTtlSec: number;
@@ -39,6 +43,8 @@ const AuthorizeQuery = z.object({
   state: z.string().optional().default(''),
   resource: z.string().url().optional(),
   scope: z.string().optional(),
+  /** Workspace slug тенанта. Если не передан — используется workspace по умолчанию. */
+  workspace: z.string().min(1).optional(),
 });
 
 const AuthorizePost = AuthorizeQuery.extend({ password: z.string().min(1) });
@@ -160,7 +166,22 @@ export function registerOAuthRoutes(app: FastifyInstance, deps: OAuthRouteDeps):
       reply.status(400);
       return { error: 'invalid_scope' };
     }
-    if (!constantTimeEqual(q.password, deps.authToken)) {
+    // Резолвим workspace и проверяем пароль: сначала ищем тенанта,
+    // затем fallback на глобальный MCP_AUTH_TOKEN для default workspace.
+    const targetWorkspace = q.workspace ?? deps.defaultWorkspace ?? '';
+    const tenant = deps.store.getTenantByWorkspace(targetWorkspace);
+    const expectedPassword = tenant !== undefined
+      ? undefined // проверка через hash ниже
+      : deps.authToken;
+
+    let passwordOk: boolean;
+    if (tenant !== undefined) {
+      passwordOk = constantTimeEqual(hashToken(q.password), tenant.auth_token_hash);
+    } else {
+      passwordOk = expectedPassword !== undefined && constantTimeEqual(q.password, expectedPassword);
+    }
+
+    if (!passwordOk) {
       reply.status(401).type('text/html');
       htmlSecurityHeaders(reply);
       return renderLoginForm(q, 'Invalid password');
@@ -174,6 +195,7 @@ export function registerOAuthRoutes(app: FastifyInstance, deps: OAuthRouteDeps):
       identity: deps.operatorIdentity,
       scope: q.scope ?? OAUTH_SCOPE,
       resource: expectedResource,
+      workspace: targetWorkspace,
       expires_at_ms: now() + deps.codeTtlSec * 1000,
     });
     const loc = new URL(q.redirect_uri);
@@ -226,7 +248,7 @@ export function registerOAuthRoutes(app: FastifyInstance, deps: OAuthRouteDeps):
       reply.status(400);
       return { error: 'invalid_grant', error_description: 'PKCE verification failed' };
     }
-    return issueTokenPair(row.client_id, row.identity, row.scope, row.resource, generateOpaqueToken(), reply);
+    return issueTokenPair(row.client_id, row.identity, row.scope, row.resource, row.workspace, generateOpaqueToken(), reply);
   }
 
   function handleRefreshGrant(body: Record<string, unknown>, reply: FastifyReply) {
@@ -241,7 +263,7 @@ export function registerOAuthRoutes(app: FastifyInstance, deps: OAuthRouteDeps):
       reply.status(400);
       return { error: 'invalid_grant' };
     }
-    return issueTokenPair(row.client_id, row.identity, row.scope, row.resource, row.refresh_chain_id, reply);
+    return issueTokenPair(row.client_id, row.identity, row.scope, row.resource, row.workspace, row.refresh_chain_id, reply);
   }
 
   function issueTokenPair(
@@ -249,6 +271,7 @@ export function registerOAuthRoutes(app: FastifyInstance, deps: OAuthRouteDeps):
     identity: string,
     scope: string,
     resource: string,
+    workspace: string,
     chainId: string,
     reply: FastifyReply,
   ) {
@@ -262,6 +285,7 @@ export function registerOAuthRoutes(app: FastifyInstance, deps: OAuthRouteDeps):
       identity,
       scope,
       resource,
+      workspace,
       expires_at_ms: t + deps.accessTtlSec * 1000,
       refresh_chain_id: chainId,
     });
@@ -272,6 +296,7 @@ export function registerOAuthRoutes(app: FastifyInstance, deps: OAuthRouteDeps):
       identity,
       scope,
       resource,
+      workspace,
       expires_at_ms: t + deps.refreshTtlSec * 1000,
       refresh_chain_id: chainId,
     });
@@ -303,6 +328,7 @@ function renderLoginForm(q: z.infer<typeof AuthorizeQuery>, errorMsg?: string): 
   return `<!doctype html><html><head><meta charset="utf-8"><title>slonk · authorize</title></head>
 <body style="font-family:system-ui;max-width:28rem;margin:4rem auto;">
   <h1>Authorize slonk MCP</h1>
+  ${q.workspace !== undefined ? `<p style="color:#555;font-size:.9rem">Workspace: <strong>${escapeHtml(q.workspace)}</strong></p>` : ''}
   ${errorMsg ? `<p style="color:#b00">${escapeHtml(errorMsg)}</p>` : ''}
   <form method="POST" action="/oauth/authorize">
     ${hidden('response_type', q.response_type)}
@@ -313,6 +339,7 @@ function renderLoginForm(q: z.infer<typeof AuthorizeQuery>, errorMsg?: string): 
     ${hidden('state', q.state)}
     ${q.resource !== undefined ? hidden('resource', q.resource) : ''}
     ${q.scope !== undefined ? hidden('scope', q.scope) : ''}
+    ${q.workspace !== undefined ? hidden('workspace', q.workspace) : ''}
     <label>Operator password<br><input type="password" name="password" autofocus
       style="width:100%;padding:.5rem;margin:.5rem 0;"></label>
     <button type="submit" style="padding:.5rem 1rem;">Authorize</button>

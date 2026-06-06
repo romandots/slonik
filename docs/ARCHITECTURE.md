@@ -268,7 +268,7 @@ Backlog
 | Угроза | Митигация |
 |---|---|
 | Утечка `MCP_AUTH_TOKEN` | Rotation через `.env` + `docker compose up -d mcp-kanban`; токены не логируются |
-| Скомпрометированный агент пишет в чужие задачи | Один проект `SLONK` — scope ограничен; для расширения нужны явные `MCP_ALLOWED_PROJECTS` |
+| Скомпрометированный агент пишет в чужой workspace | В OAuth-режиме workspace привязан к access-token выданному при авторизации; агент физически не может обратиться к другому workspace. В режиме static Bearer — одна зона доступа (`MCP_DEFAULT_WORKSPACE`). |
 | Внешний доступ к Postgres | `internal_net` без публикации портов |
 | MITM на API | Caddy + ACME-сертификат для прод (обязателен для OAuth) |
 | Prompt injection через комментарий | MCP не исполняет инструкции из контента issue, только из MCP-вызовов |
@@ -294,8 +294,7 @@ Backlog
 
 Точки расширения, заложенные архитектурой:
 
-- **Multi-project**: добавить проект в bootstrap-manifest, MCP читает список из
-  `MCP_ALLOWED_PROJECTS`.
+- **Multi-project**: добавить проект в bootstrap-manifest; в OAuth-режиме агент видит все проекты своего workspace автоматически. `MCP_ALLOWED_PROJECTS` — deprecated (SLONK-15), игнорируется сервером.
 - **Per-repo агенты**: дополнительные роли = новые agent-identities + bootstrap.
 - **Webhook reactions**: новый `mcp-reactor` сервис с очередью на RabbitMQ.
 - **Альтернативный backend**: за счёт абстракции `IssueTrackerClient` в коде

@@ -273,7 +273,7 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
           identity: ctx.resolveIdentity(),
           agentMode: ctx.resolveIdentityMode(),
           serverVersion: ctx.serverVersion,
-          defaultWorkspace: ctx.defaultWorkspace,
+          workspace: ctx.workspace,
           defaultProject: ctx.defaultProjectSlug,
         }),
       ),
@@ -293,19 +293,20 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
   );
 
   // ---- list_projects ----
+  // Workspace берётся строго из токена (ctx.workspace), не из параметра запроса —
+  // требование безопасности: кросс-тенантный доступ невозможен by design.
   server.registerTool(
     'list_projects',
     {
-      description: 'List projects in the default workspace (or one specified by slug).',
-      inputSchema: { workspace: z.string().min(1).optional() },
+      description: 'List projects in the resolved workspace (tenant-scoped).',
+      inputSchema: {},
     },
-    async (args) =>
+    async () =>
       await instrumentRead(ctx, 'list_projects', async () =>
         await listProjects({
           plane: ctx.plane,
           cache: ctx.cache,
-          workspace: args.workspace ?? ctx.defaultWorkspace,
-          allowedProjects: ctx.allowedProjects,
+          workspace: ctx.workspace,
         }),
       ),
   );
@@ -322,9 +323,8 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
         await listStates({
           plane: ctx.plane,
           cache: ctx.cache,
-          workspace: ctx.defaultWorkspace,
+          workspace: ctx.workspace,
           defaultProjectRef: ctx.defaultProjectSlug,
-          allowedProjects: ctx.allowedProjects,
           ...(args.project !== undefined ? { projectRef: args.project } : {}),
         }),
       ),
@@ -342,9 +342,8 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
         await listLabels({
           plane: ctx.plane,
           cache: ctx.cache,
-          workspace: ctx.defaultWorkspace,
+          workspace: ctx.workspace,
           defaultProjectRef: ctx.defaultProjectSlug,
-          allowedProjects: ctx.allowedProjects,
           ...(args.project !== undefined ? { projectRef: args.project } : {}),
         }),
       ),
@@ -362,9 +361,8 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
         await listCycles({
           plane: ctx.plane,
           cache: ctx.cache,
-          workspace: ctx.defaultWorkspace,
+          workspace: ctx.workspace,
           defaultProjectRef: ctx.defaultProjectSlug,
-          allowedProjects: ctx.allowedProjects,
           ...(args.project !== undefined ? { projectRef: args.project } : {}),
         }),
       ),
@@ -382,9 +380,8 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
         await listModules({
           plane: ctx.plane,
           cache: ctx.cache,
-          workspace: ctx.defaultWorkspace,
+          workspace: ctx.workspace,
           defaultProjectRef: ctx.defaultProjectSlug,
-          allowedProjects: ctx.allowedProjects,
           ...(args.project !== undefined ? { projectRef: args.project } : {}),
         }),
       ),
@@ -403,9 +400,8 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
         return await listIssues({
           plane: ctx.plane,
           cache: ctx.cache,
-          workspace: ctx.defaultWorkspace,
+          workspace: ctx.workspace,
           defaultProjectRef: ctx.defaultProjectSlug,
-          allowedProjects: ctx.allowedProjects,
           input,
         });
       }),
@@ -424,9 +420,8 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
         return await getIssue({
           plane: ctx.plane,
           cache: ctx.cache,
-          workspace: ctx.defaultWorkspace,
+          workspace: ctx.workspace,
           defaultProjectRef: ctx.defaultProjectSlug,
-          allowedProjects: ctx.allowedProjects,
           issueRef: input.issue_id,
           ...(input.project !== undefined ? { projectRef: input.project } : {}),
           // SLONK-14: discovery вложений для preview-полей.
@@ -452,9 +447,8 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
         return await searchIssues({
           plane: ctx.plane,
           cache: ctx.cache,
-          workspace: ctx.defaultWorkspace,
+          workspace: ctx.workspace,
           defaultProjectRef: ctx.defaultProjectSlug,
-          allowedProjects: ctx.allowedProjects,
           query: input.query,
           ...(input.limit !== undefined ? { limit: input.limit } : {}),
           ...(input.project !== undefined ? { projectRef: input.project } : {}),
@@ -475,9 +469,8 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
         return await getIssueHistory({
           plane: ctx.plane,
           cache: ctx.cache,
-          workspace: ctx.defaultWorkspace,
+          workspace: ctx.workspace,
           defaultProjectRef: ctx.defaultProjectSlug,
-          allowedProjects: ctx.allowedProjects,
           issueRef: input.issue_id,
           ...(input.project !== undefined ? { projectRef: input.project } : {}),
         });
@@ -501,9 +494,8 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
           await createIssue({
             plane: ctx.plane,
             cache: ctx.cache,
-            workspace: ctx.defaultWorkspace,
+            workspace: ctx.workspace,
             defaultProjectRef: ctx.defaultProjectSlug,
-            allowedProjects: ctx.allowedProjects,
             input,
           }),
       });
@@ -528,9 +520,8 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
           await updateIssue({
             plane: ctx.plane,
             cache: ctx.cache,
-            workspace: ctx.defaultWorkspace,
+            workspace: ctx.workspace,
             defaultProjectRef: ctx.defaultProjectSlug,
-            allowedProjects: ctx.allowedProjects,
             input,
           }),
       });
@@ -555,9 +546,8 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
           await transitionIssue({
             plane: ctx.plane,
             cache: ctx.cache,
-            workspace: ctx.defaultWorkspace,
+            workspace: ctx.workspace,
             defaultProjectRef: ctx.defaultProjectSlug,
-            allowedProjects: ctx.allowedProjects,
             identity: ctx.resolveIdentity(),
             input,
           }),
@@ -585,9 +575,8 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
             cache: ctx.cache,
             audit: ctx.audit,
             identityStore: ctx.identityStore,
-            workspace: ctx.defaultWorkspace,
+            workspace: ctx.workspace,
             defaultProjectRef: ctx.defaultProjectSlug,
-            allowedProjects: ctx.allowedProjects,
             identity: ctx.resolveIdentity(),
             traceId,
             planeUserId: ctx.resolvePlaneUserId(),
@@ -616,9 +605,8 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
             plane: ctx.plane,
             cache: ctx.cache,
             audit: ctx.audit,
-            workspace: ctx.defaultWorkspace,
+            workspace: ctx.workspace,
             defaultProjectRef: ctx.defaultProjectSlug,
-            allowedProjects: ctx.allowedProjects,
             identity: ctx.resolveIdentity(),
             planeUserId: ctx.resolvePlaneUserId(),
             input,
@@ -645,9 +633,8 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
           await blockIssue({
             plane: ctx.plane,
             cache: ctx.cache,
-            workspace: ctx.defaultWorkspace,
+            workspace: ctx.workspace,
             defaultProjectRef: ctx.defaultProjectSlug,
-            allowedProjects: ctx.allowedProjects,
             identity: ctx.resolveIdentity(),
             input,
           }),
@@ -673,9 +660,8 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
           await commentIssue({
             plane: ctx.plane,
             cache: ctx.cache,
-            workspace: ctx.defaultWorkspace,
+            workspace: ctx.workspace,
             defaultProjectRef: ctx.defaultProjectSlug,
-            allowedProjects: ctx.allowedProjects,
             identity: ctx.resolveIdentity(),
             input,
           }),
@@ -701,9 +687,8 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
           await attachFile({
             plane: ctx.plane,
             cache: ctx.cache,
-            workspace: ctx.defaultWorkspace,
+            workspace: ctx.workspace,
             defaultProjectRef: ctx.defaultProjectSlug,
-            allowedProjects: ctx.allowedProjects,
             identity: ctx.resolveIdentity(),
             bucket: ctx.minioBucket,
             endpoint: ctx.minioEndpoint,
@@ -733,9 +718,8 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
             plane: ctx.plane,
             cache: ctx.cache,
             gitRefs: ctx.gitRefs,
-            workspace: ctx.defaultWorkspace,
+            workspace: ctx.workspace,
             defaultProjectRef: ctx.defaultProjectSlug,
-            allowedProjects: ctx.allowedProjects,
             input,
           }),
       });
@@ -761,9 +745,8 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
             plane: ctx.plane,
             cache: ctx.cache,
             gitRefs: ctx.gitRefs,
-            workspace: ctx.defaultWorkspace,
+            workspace: ctx.workspace,
             defaultProjectRef: ctx.defaultProjectSlug,
-            allowedProjects: ctx.allowedProjects,
             input,
           }),
       });
@@ -805,9 +788,8 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
           minio: ctx.minio,
           cache: ctx.cache,
           logger: ctx.logger,
-          workspace: ctx.defaultWorkspace,
+          workspace: ctx.workspace,
           defaultProjectRef: ctx.defaultProjectSlug,
-          allowedProjects: ctx.allowedProjects,
           planeBucket: ctx.minioBucketPlane,
           mcpBucket: ctx.minioBucket,
           minioEndpoints: ctx.minioEndpoints,
@@ -840,9 +822,8 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
             minio: ctx.minio,
             cache: ctx.cache,
             logger: ctx.logger,
-            workspace: ctx.defaultWorkspace,
+            workspace: ctx.workspace,
             defaultProjectRef: ctx.defaultProjectSlug,
-            allowedProjects: ctx.allowedProjects,
             planeBucket: ctx.minioBucketPlane,
             mcpBucket: ctx.minioBucket,
             minioEndpoints: ctx.minioEndpoints,

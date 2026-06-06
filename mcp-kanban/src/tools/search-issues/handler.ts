@@ -16,7 +16,6 @@ export async function searchIssues(deps: {
   cache: TtlCache;
   workspace: string;
   defaultProjectRef: string;
-  allowedProjects: string[];
   query: string;
   limit?: number;
   projectRef?: string;
@@ -26,7 +25,6 @@ export async function searchIssues(deps: {
     workspaceSlug: deps.workspace,
     ...(deps.projectRef !== undefined ? { projectRef: deps.projectRef } : {}),
     defaultProjectRef: deps.defaultProjectRef,
-    allowedProjects: deps.allowedProjects,
   });
 
   const filter: Parameters<PlaneClient['listIssues']>[2] = {

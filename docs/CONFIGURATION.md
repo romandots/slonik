@@ -140,9 +140,9 @@ Compose автоматически собирает `AMQP_URL` для Celery и�
 |---|---|---|
 | `MCP_SERVER_PORT` | `8787` | HTTP/SSE порт |
 | `MCP_AUTH_TOKEN` | `change_me` | Bearer для агентов **(secret)** |
-| `MCP_DEFAULT_WORKSPACE` | `agents` | slug рабочего workspace |
+| `MCP_DEFAULT_WORKSPACE` | `agents` | slug рабочего workspace (= тенант по умолчанию). При старте сервера этот workspace автоматически регистрируется в `oauth.sqlite` с `PLANE_API_KEY` и `MCP_AUTH_TOKEN` как credentials — backward compat для single-tenant деплоев. |
 | `MCP_DEFAULT_PROJECT` | `SLONK` | Plane-идентификатор проекта по умолчанию, если агент не передал `project` в MCP-вызов |
-| `MCP_ALLOWED_PROJECTS` | `SLONK` | comma-separated whitelist проектов, к которым MCP даёт доступ (identifier / имя / нормализованный slug / UUID). Multi-project: `CODE_AGENTS,BACKEND,WEB` — см. [USER_GUIDE §2.2](./USER_GUIDE.md#22-несколько-проектов-в-одном-workspace) |
+| `MCP_ALLOWED_PROJECTS` | `SLONK` | **DEPRECATED** (SLONK-15). Поле сохранено для совместимости, но больше не ограничивает доступ. Граница доступа к проектам определяется workspace тенанта (из OAuth-токена). Будет удалено в следующей MAJOR-версии. |
 | `MCP_AGENT_IDENTITY_MODE` | `per_user` | `per_user` или `single_bot` |
 | `MCP_OPTIONAL_WORKSPACES` | `false` | создавать ли `backend`, `frontend`, … |
 | `MCP_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
@@ -178,10 +178,22 @@ Compose автоматически собирает `AMQP_URL` для Celery и�
 | `MCP_OAUTH_MAX_CLIENTS` | `50` | Cap на Dynamic Client Registration (защита от spam) |
 | `MCP_OAUTH_STORE_PATH` | `/mcp_data/oauth.sqlite` | Путь к SQLite-хранилищу tokens/codes |
 
-Оператор (владелец канбана) логинится вводом `MCP_AUTH_TOKEN` как пароля на форме
-`/oauth/authorize`. Полученный access-token разрешает полный доступ к `/mcp` с identity
-`operator`. На `/mcp` приём обоих типов Bearer (static token + OAuth token) происходит
-автоматически — выбор по содержимому токена.
+**Multitenant (SLONK-15).** Начиная с v1.7 OAuth-стор поддерживает несколько тенантов:
+
+- `oauth.sqlite` содержит таблицу `tenants`: `workspace → plane_api_key + auth_token_hash`.
+- При старте дефолтный тенант (`MCP_DEFAULT_WORKSPACE` + `PLANE_API_KEY` + `MCP_AUTH_TOKEN`)
+  регистрируется автоматически — backward compat.
+- Новый тенант регистрируется через `store.registerTenant(...)` (CLI/bootstrap расширение).
+- На `/oauth/authorize` можно передать `?workspace=<slug>` — форма покажет workspace;
+  пароль проверяется по `auth_token_hash` тенанта, fallback — `MCP_AUTH_TOKEN`.
+- Access-token несёт привязку к workspace (`workspace` claim); сервер выбирает
+  `PlaneClient` с ключом этого workspace.
+- **Security invariant:** workspace берётся только из токена, никогда из параметра запроса.
+  Креды тенанта А не дают доступа к данным тенанта Б.
+
+Оператор каждого тенанта логинится своим `auth_token` (или общим `MCP_AUTH_TOKEN` для
+дефолтного workspace). Полученный access-token даёт полный доступ к `/mcp` для своего
+workspace с identity `operator`.
 
 Токены хранятся только как SHA-256-хэши в `oauth.sqlite`. Плейнтекст не пишется
 никуда; в логах redact'ируется (расширение pino-список).
@@ -374,27 +386,25 @@ identities:                                            # SLONK-6: legacy fallbac
 | `minio` | `192m` | Memory grows linearly with active uploads. |
 | `plane-migrator` | `384m` | one-shot Django migrations, лимит для safety. |
 | `plane-api` | `512m` | gunicorn worker (`GUNICORN_WORKERS=1`); при >1 — поднимать. |
-| `plane-worker` | `384m` | Celery worker. |
+| `plane-worker` | `768m` | Celery worker; на пиках автоматизаций / mass-update'ов 384m давало OOM-kill (SLONK-9). |
 | `plane-beat` | `128m` | scheduler-only, minimal footprint. |
 | `plane-web` / `admin` / `space` / `live` | `192m` каждый | Next.js SSR; 128m даёт OOM при build cache warmup. |
 | `plane-proxy` | `96m` | Caddy reverse-proxy. |
 | `mcp-kanban` | `256m` | TtlCache bounded (`MCP_CACHE_MAX_ENTRIES`), MCP-сессии с idle-eviction (`MCP_SESSION_IDLE_MS` + `MCP_MAX_SESSIONS`). |
 
-Итоговая сумма — ~3.3 GB лимитов. На 4 GB хосте остаётся ~700 MB для
-ОС и Docker engine — это рабочая полка. Под 8 GB можно поднять лимиты
-вдвое (см. ниже).
+Итоговая сумма — ~3.9 GiB лимитов. На 4 GB хосте остаётся ~100 MiB для
+ОС и Docker engine — baseline уже не помещается на голом 4 GB-хосте;
+рекомендуется минимум 6 GB даже без overlay'ев (observability/backup).
+Под 8 GB можно поднять лимиты (см. ниже).
 
 > **Цифры — baseline под тюнинг.** Значения подобраны под пустой стек +
 > лёгкую интерактивную нагрузку (1–2 агента, единичные `make bootstrap`).
-> На реальной нагрузке отдельным сервисам нужно больше: в частности
-> **`plane-worker` (Celery) под пиками автоматизаций / mass-update'ов
-> ловит OOM-kill на `384m`** — наблюдалось в QA SLONK-5 как
-> циклические рестарты `slonk-plane-worker-1` с exit `137`. Если в
-> `docker events` видны `oom-kill` для plane-worker (или другого
-> сервиса) — поднимай его `mem_limit` в первую очередь: `plane-worker`
-> до `512m–768m`, дальше — пропорционально доступной RAM (см. тюнинг
-> ниже). Лимиты в репозитории остаются защитой от unbounded growth, а
-> не «правильным» размером под прод.
+> До SLONK-9 `plane-worker` имел `384m` и ловил OOM-kill (exit 137)
+> при пиках автоматизаций / mass-update'ов (QA SLONK-5). Текущий
+> baseline `768m` закрывает этот сценарий. Если `docker events` всё
+> равно показывают `oom-kill` для другого сервиса — поднимай его
+> `mem_limit` пропорционально доступной RAM (см. тюнинг ниже). Лимиты
+> остаются защитой от unbounded growth, а не «правильным» размером под прод.
 
 #### MCP-kanban memory bounds
 
@@ -433,9 +443,9 @@ identities:                                            # SLONK-6: legacy fallbac
 
 - **2 GB RAM.** Не пытайся — Plane backend сам по себе не помещается.
 - **4 GB RAM.** Baseline-цифры выше.
-- **8 GB RAM.** Можно удвоить `postgres → 1g`, `plane-api → 1g`,
-  `plane-worker → 768m`, остальные оставить. Это даёт головному
-  worker'у Plane дышать на пиках (миграции, mass-update).
+- **8 GB RAM.** Можно поднять `postgres → 1g`, `plane-api → 1g`,
+  `plane-worker → 1g`, остальные оставить. Это даёт worker'у Plane
+  дышать на пиках (миграции, mass-update).
 - **16+ GB RAM.** `mem_limit` всё ещё полезен (защита от unbounded
   growth bug'ов в upstream), но цифры можно умножить на 2–4. Альтернатива
   — `mem_reservation` (soft-лимит) + `mem_limit` ×2 от него.
@@ -665,3 +675,56 @@ docker compose up -d
 - [ ] `curl /health` MCP и Plane возвращают 200.
 - [ ] Claude Code видит инструменты MCP (`/mcp` в CLI).
 - [ ] Тестовый `claim_issue` отрабатывает.
+
+## 12. CI/CD (GitHub Actions)
+
+Два workflow в `.github/workflows/`:
+
+### 12.1 PR pipeline — `ci.yml`
+
+Запускается на каждый PR в `main` или `develop`. Три параллельных джобы:
+
+| Джоба | Что делает |
+|---|---|
+| `lint` | `pnpm lint` + `pnpm typecheck` |
+| `build` | `pnpm build` (tsc) + `docker build` (smoke, без push) |
+| `test` | `pnpm test` (vitest) |
+
+Красный статус блокирует merge (настраивается в branch protection правилах репозитория).
+
+**Кэш:** pnpm store кэшируется через `actions/cache`. Node 22 LTS из `mcp-kanban/.nvmrc`.
+
+### 12.2 Release/Deploy pipeline — `release-deploy.yml`
+
+Запускается на `push` в `main` (т.е. после squash-merge PR):
+
+1. **Gate** — повторный прогон lint + build + test (gate перед публикацией).
+2. **Release** — сборка `mcp-kanban` и `backup`, push в GHCR:
+   - `ghcr.io/romandots/slonk/mcp-kanban:VERSION` + `:latest`
+   - `ghcr.io/romandots/slonk/backup:VERSION` + `:latest`
+   - Версия — из `mcp-kanban/package.json`.
+3. **Deploy** — SSH на прод-хост:
+   - `docker pull ghcr.io/.../mcp-kanban:VERSION`
+   - `SLONK_MCP_IMAGE_TAG=VERSION docker compose up -d mcp-kanban --wait`
+   - При неуспехе healthcheck — автоматический rollback на предыдущий тег.
+4. **Smoke** — `make smoke` после успешного деплоя.
+
+**Concurrency:** deploy-джоба не запускается параллельно (`cancel-in-progress: false`).
+
+### 12.3 Необходимые GitHub Secrets
+
+| Secret | Описание |
+|---|---|
+| `SSH_HOST` | IP / hostname прод-хоста |
+| `SSH_USER` | Пользователь SSH (в группе `docker`, не root) |
+| `SSH_PRIVATE_KEY` | Приватный SSH-ключ (deploy key) |
+| `GHCR_PULL_TOKEN` | PAT с `read:packages` для `docker login ghcr.io` на проде |
+
+Push в GHCR из workflow — через автоматический `GITHUB_TOKEN` (`packages: write`).
+
+### 12.4 Настройка прод-хоста
+
+- `DEPLOY_DIR` в workflow → `/opt/slonk` (можно поменять через env в workflow).
+- На хосте должен быть `docker compose` (v2), `make`, `.env` с прод-секретами.
+- Перед первым деплоем: `docker login ghcr.io -u <user> --password <GHCR_PULL_TOKEN>`.
+- Branch protection: `Require status checks to pass before merging` → выбрать `lint`, `build`, `test`.

@@ -4,7 +4,7 @@ export interface WhoAmIContext {
   identity: AgentIdentity;
   agentMode: 'per_user' | 'single_bot';
   serverVersion: string;
-  defaultWorkspace: string;
+  workspace: string;
   defaultProject: string;
 }
 
@@ -12,7 +12,7 @@ export interface WhoAmIResult {
   identity: AgentIdentity;
   agent_mode: 'per_user' | 'single_bot';
   server_version: string;
-  default_workspace: string;
+  workspace: string;
   default_project: string;
 }
 
@@ -28,7 +28,7 @@ export function whoAmI(ctx: WhoAmIContext): WhoAmIResult {
     identity: ctx.identity,
     agent_mode: ctx.agentMode,
     server_version: ctx.serverVersion,
-    default_workspace: ctx.defaultWorkspace,
+    workspace: ctx.workspace,
     default_project: ctx.defaultProject,
   };
 }

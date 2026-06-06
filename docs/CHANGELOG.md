@@ -7,7 +7,47 @@
 
 ## [Unreleased]
 
+### Changed
+- **`plane-worker` baseline `mem_limit` поднят `384m → 768m` (SLONK-9).**
+  QA-прогон выявил циклические OOM-kill'ы (`exit 137`) при Celery-нагрузке
+  (notifications, webhooks, mass-update'ы). Новый лимит даёт +50% запаса.
+  `docs/CONFIGURATION.md §5` обновлён: таблица, сумма лимитов (`~3.9 GiB`),
+  headroom на 4 GB-хосте (`~100 MiB`, рекомендуется минимум 6 GB), секция 8 GB
+  (`plane-worker → 1g`).
+
 ### Added
+- **Markdown → HTML в описаниях задач** (SLONK-17). `toPlaneDescriptionHtml` теперь
+  парсит полный CommonMark через `marked`: заголовки, жирный/курсив, списки, блоки кода,
+  цитаты, ссылки. `sanitizeHtml` вынесен в `src/sanitize-html.ts` и используется
+  совместно описаниями и комментариями. `javascript:`-ссылки и `<script>`/`<style>`/
+  `<iframe>` вырезаются. Добавлен passthrough `class="language-*"` для fenced code blocks.
+- **CI/CD на GitHub Actions** (SLONK-16). Два workflow:
+  - `.github/workflows/ci.yml` — PR pipeline: lint + typecheck + build + test (3 параллельных джобы);
+    кэш pnpm-store, Node из `.nvmrc` (22). Красный чек блокирует merge.
+  - `.github/workflows/release-deploy.yml` — Release/Deploy на `push: main`: gate (lint + build + test)
+    → build & push `mcp-kanban` + `backup` в GHCR (`ghcr.io/romandots/slonk/...`)
+    → SSH-deploy на прод с health-gate + rollback при неуспехе → `make smoke`.
+    Concurrency-guard исключает параллельные деплои. Секреты — только через GitHub Secrets.
+  - `mcp-kanban/eslint.config.js` — новый flat-config для ESLint 9 (был отсутствующим);
+    исправлены pre-existing ошибки (`prefer-const`, `no-require-imports`, неиспользуемые импорты).
+- **Multitenant архитектура** (SLONK-15). Workspace = тенант; доступ к проектам workspace
+  определяется OAuth-токеном, а не allow-list. Ключевые изменения:
+  - Новая таблица `tenants` в `oauth.sqlite`: `workspace → plane_api_key + auth_token_hash`.
+    Методы: `registerTenant`, `getTenantByWorkspace`, `getTenantByAuthTokenHash`, `listTenants`.
+  - Поле `workspace` добавлено в `oauth_codes` и `oauth_tokens`; schema migration
+    при старте добавляет колонки к существующим БД (`ALTER TABLE ... ADD COLUMN`).
+  - `PlaneClientFactory` в `server.ts`: per-workspace `PlaneClient`, кэшируется в Map;
+    при старте дефолтный workspace автоматически регистрируется как тенант
+    (backward compat — существующие деплои работают без изменений).
+  - `auth.ts`: `AuthedRequest` теперь несёт `workspace: string`; OAuth-путь извлекает
+    workspace из токена; static-token путь ищет тенанта по хэшу токена, fallback → `MCP_DEFAULT_WORKSPACE`.
+  - `ToolContext`: поле `defaultWorkspace` заменено на `workspace`; убрано `allowedProjects`.
+  - `project-resolver.ts`: убрана проверка allow-list; граница доступа = workspace из токена.
+  - `list_projects`: убрана фильтрация по `allowedProjects`; отдаются все проекты workspace тенанта.
+  - `/oauth/authorize`: принимает опциональный query param `workspace`; форма показывает
+    workspace; пароль валидируется по credential тенанта (hash) или fallback на `MCP_AUTH_TOKEN`.
+  - `MCP_ALLOWED_PROJECTS`: deprecated (поле сохранено для совместимости, игнорируется).
+  - Добавлено 6 тестов для tenant isolation: регистрация, lookup, upsert, workspace в токенах.
 - **Встроенный OAuth 2.1 Authorization Server** для добавления self-hosted slonk
   как remote-коннектора на claude.ai (Phase 11, SLONK-oauth). Реализация следует
   RFC 9728 (Protected Resource Metadata), RFC 8414 (Authorization Server Metadata),

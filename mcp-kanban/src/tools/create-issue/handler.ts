@@ -15,7 +15,6 @@ export async function createIssue(deps: {
   cache: TtlCache;
   workspace: string;
   defaultProjectRef: string;
-  allowedProjects: string[];
   input: CreateIssueInput;
 }): Promise<CreateIssueResult> {
   const project = await resolveProject({
@@ -23,7 +22,6 @@ export async function createIssue(deps: {
     workspaceSlug: deps.workspace,
     ...(deps.input.project !== undefined ? { projectRef: deps.input.project } : {}),
     defaultProjectRef: deps.defaultProjectRef,
-    allowedProjects: deps.allowedProjects,
   });
 
   const [states, labels] = await Promise.all([

@@ -108,6 +108,7 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
     trustProxy: true,
   });
 
+  // PlaneClient для workspace по умолчанию (backward compat + /health endpoint).
   const plane = new PlaneClient({ config, logger });
   const minio: MinioClient =
     opts.minio ??
@@ -159,6 +160,34 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
       })
     : undefined;
 
+  // Auto-регистрируем workspace по умолчанию как тенанта (backward compat).
+  // Если PLANE_API_KEY задан в env — он становится кредами дефолтного workspace.
+  // Повторные запуски идемпотентны (ON CONFLICT DO UPDATE).
+  if (oauth !== undefined && config.PLANE_API_KEY !== undefined) {
+    oauth.registerTenant({
+      workspace: config.MCP_DEFAULT_WORKSPACE,
+      plane_api_key: config.PLANE_API_KEY,
+      auth_token_hash: hashTokenForAuth(config.MCP_AUTH_TOKEN),
+      created_at_ms: Date.now(),
+    });
+    logger.info({ workspace: config.MCP_DEFAULT_WORKSPACE }, 'default tenant registered');
+  }
+
+  // PlaneClient factory: per-workspace клиент, кэшируется в Map.
+  const planeClientCache = new Map<string, PlaneClient>();
+  const getPlaneClient = (workspace: string): PlaneClient => {
+    const cached = planeClientCache.get(workspace);
+    if (cached !== undefined) return cached;
+    const tenant = oauth?.getTenantByWorkspace(workspace);
+    const apiKey = tenant?.plane_api_key ?? config.PLANE_API_KEY;
+    const client =
+      apiKey === config.PLANE_API_KEY
+        ? plane
+        : new PlaneClient({ config: { ...config, PLANE_API_KEY: apiKey }, logger });
+    planeClientCache.set(workspace, client);
+    return client;
+  };
+
   if (oauth !== undefined && config.MCP_OAUTH_ISSUER !== undefined && config.MCP_OAUTH_ISSUER.startsWith('http://')) {
     logger.warn(
       { issuer: config.MCP_OAUTH_ISSUER },
@@ -170,11 +199,15 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
     config.MCP_OAUTH_ISSUER !== undefined ? resourceUri(config.MCP_OAUTH_ISSUER) : undefined;
   const oauthValidator =
     oauth !== undefined
-      ? (token: string): { identity: AgentIdentity; scope: string } | undefined => {
+      ? (token: string): { identity: AgentIdentity; scope: string; workspace: string } | undefined => {
           const row = oauth.validateAccessToken(hashTokenForAuth(token), Date.now());
           if (row === undefined) return undefined;
           if (expectedResource !== undefined && row.resource !== expectedResource) return undefined;
-          return { identity: row.identity, scope: row.scope };
+          return {
+            identity: row.identity,
+            scope: row.scope,
+            workspace: row.workspace || config.MCP_DEFAULT_WORKSPACE,
+          };
         }
       : undefined;
 
@@ -184,8 +217,12 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
 
   const baseAuthOpts = {
     expectedToken: config.MCP_AUTH_TOKEN,
+    defaultWorkspace: config.MCP_DEFAULT_WORKSPACE,
     identityRegistry: effectiveRegistry,
     ...(oauthValidator !== undefined ? { oauthValidator } : {}),
+    ...(oauth !== undefined
+      ? { tenantByAuthTokenHash: (hash: string) => oauth.getTenantByAuthTokenHash(hash) }
+      : {}),
   };
 
   // ---------------- /health ----------------
@@ -253,6 +290,7 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
         store: oauth,
         issuer: config.MCP_OAUTH_ISSUER,
         authToken: config.MCP_AUTH_TOKEN,
+        defaultWorkspace: config.MCP_DEFAULT_WORKSPACE,
         operatorIdentity: config.MCP_OAUTH_OPERATOR_IDENTITY,
         accessTtlSec: config.MCP_OAUTH_ACCESS_TTL_SEC,
         refreshTtlSec: config.MCP_OAUTH_REFRESH_TTL_SEC,
@@ -300,6 +338,7 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
     // выигрывает.
     touchSeq: number;
     identity: AgentIdentity | undefined;
+    workspace: string;
   }
   const sessions = new Map<string, SessionEntry>();
   let sessionTouchSeq = 0;
@@ -369,6 +408,7 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
   app.all('/mcp', async (request, reply) => {
     authenticate(request, reply, baseAuthOpts);
     const identity = (request as unknown as AuthedRequest).identity;
+    const workspace = (request as unknown as AuthedRequest).workspace ?? config.MCP_DEFAULT_WORKSPACE;
 
     const sessionId = headerString(request.headers['mcp-session-id']);
     const entry = sessionId !== undefined ? sessions.get(sessionId) : undefined;
@@ -389,6 +429,7 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
             lastUsedAt: Date.now(),
             touchSeq: nextTouchSeq(),
             identity,
+            workspace,
           });
           logger.info({ session: sid, identity }, 'mcp session opened');
           // enforceMaxSessions запускается ПОСЛЕ insert'а новой записи:
@@ -415,7 +456,7 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
       registerTools(mcp, {
         config,
         serverVersion: SERVER_VERSION,
-        plane,
+        plane: getPlaneClient(workspace),
         cache,
         logger,
         resolveIdentity: () => identity,
@@ -424,9 +465,8 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
           if (stored === 'per_user' || stored === 'single_bot') return stored;
           return config.MCP_AGENT_IDENTITY_MODE;
         },
-        defaultWorkspace: config.MCP_DEFAULT_WORKSPACE,
+        workspace,
         defaultProjectSlug: config.MCP_DEFAULT_PROJECT,
-        allowedProjects: config.MCP_ALLOWED_PROJECTS,
         audit,
         identityStore,
         rateLimiter,
@@ -678,7 +718,7 @@ async function dispatch(): Promise<void> {
     return;
   }
   if (cmd !== undefined && cmd !== '') {
-    // eslint-disable-next-line no-console
+     
     console.error(`Unknown command: ${cmd}`);
     process.exit(2);
   }
@@ -690,7 +730,7 @@ const isEntrypoint = process.argv[1] !== undefined
   && import.meta.url === `file://${process.argv[1]}`;
 if (isEntrypoint) {
   dispatch().catch((err) => {
-    // eslint-disable-next-line no-console
+     
     console.error('Fatal startup error:', err);
     process.exit(1);
   });

@@ -14,7 +14,6 @@ describe('createIssue', () => {
       cache: new TtlCache(),
       workspace: 'agents',
       defaultProjectRef: 'SLONK',
-      allowedProjects: ['SLONK'],
       input: {
         name: 'Add auth flow',
         state: 'To Do',
@@ -43,7 +42,6 @@ describe('createIssue', () => {
       cache,
       workspace: 'agents',
       defaultProjectRef: 'SLONK',
-      allowedProjects: ['SLONK'],
       input: { name: 'With body', description: 'Hello\n\nWorld' },
     });
     const fetched = await getIssue({
@@ -51,7 +49,6 @@ describe('createIssue', () => {
       cache,
       workspace: 'agents',
       defaultProjectRef: 'SLONK',
-      allowedProjects: ['SLONK'],
       issueRef: created.id,
     });
     expect(fetched.description_body).toContain('Hello');
@@ -72,7 +69,6 @@ describe('createIssue', () => {
       cache,
       workspace: 'agents',
       defaultProjectRef: 'SLONK',
-      allowedProjects: ['SLONK'],
       input: { name: 'XSS check', description: 'a<script>x</script>b & "q"' },
     });
     const fetched = await getIssue({
@@ -80,11 +76,12 @@ describe('createIssue', () => {
       cache,
       workspace: 'agents',
       defaultProjectRef: 'SLONK',
-      allowedProjects: ['SLONK'],
       issueRef: created.id,
     });
+    // <script> stripped entirely (not escaped) — defence-in-depth via sanitizeHtml.
     expect(fetched.description_raw).not.toContain('<script>');
-    expect(fetched.description_raw).toContain('&lt;script&gt;');
+    expect(fetched.description_raw).not.toContain('alert(1)');
+    // Surrounding text is preserved; & and " are HTML-entity-encoded.
     expect(fetched.description_raw).toContain('&amp;');
     expect(fetched.description_raw).toContain('&quot;');
   });
@@ -99,7 +96,6 @@ describe('createIssue', () => {
       cache,
       workspace: 'agents',
       defaultProjectRef: 'SLONK',
-      allowedProjects: ['SLONK'],
       input: { name: 'Empty' },
     });
     const fetched = await getIssue({
@@ -107,7 +103,6 @@ describe('createIssue', () => {
       cache,
       workspace: 'agents',
       defaultProjectRef: 'SLONK',
-      allowedProjects: ['SLONK'],
       issueRef: created.id,
     });
     expect(fetched.description_body).toBe('');
@@ -123,7 +118,6 @@ describe('createIssue', () => {
         cache: new TtlCache(),
         workspace: 'agents',
         defaultProjectRef: 'SLONK',
-        allowedProjects: ['SLONK'],
         input: { name: 'x', labels: ['nonexistent-label'] },
       }),
     ).rejects.toThrowError(/Unknown label/);

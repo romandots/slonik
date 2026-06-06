@@ -31,6 +31,7 @@
 | **MCP** | Model Context Protocol — стандарт инструментов для LLM-агентов |
 | **MCP Server** | Наш сервис, экспонирующий Plane через MCP-протокол |
 | **Workspace** | Контейнер Plane верхнего уровня (организация) |
+| **Tenant** | Логическая единица изоляции в OAuth-режиме: workspace + собственный Plane API-ключ. Workspace и tenant — синонимы в данном контексте. Граница доступа агента определяется тем, в каком workspace зарегистрирован его OAuth-токен. |
 | **Project** | Подразделение workspace, содержит issues |
 | **Issue / Work item** | Задача |
 | **State** | Статус задачи (Backlog, To Do, Development, …) |
@@ -81,7 +82,8 @@
 - Локальный SQLite-стор для:
   - таблицы соответствия `mcp_agent_identity → plane_user_id`;
   - таблицы связей `issue_id → git_refs[]` (репо/ветка/PR/коммит);
-  - таблицы аудита действий MCP (см. §6.7).
+  - таблицы аудита действий MCP (см. §6.7);
+  - таблицы `tenants` (OAuth-режим): `workspace → plane_api_key + auth_token_hash`, хранит per-tenant Plane-credentials для workspace-изоляции (см. §6.1).
 - Сторонние библиотеки определены в [CONVENTIONS.md](./CONVENTIONS.md#стек-mcp-server).
 
 ### 4.3 Persistence
@@ -113,8 +115,15 @@ Bootstrap выполняется командой `docker compose run --rm mcp-k
 ### 5.2 Project
 
 В `agents` создаётся проект «Code Agents — Default Project» с identifier
-`SLONK`. На него указывают `MCP_DEFAULT_PROJECT` / `MCP_ALLOWED_PROJECTS`
+`SLONK`. На него указывает `MCP_DEFAULT_PROJECT`
 (Plane-проекты не имеют отдельного slug — адресуем по identifier).
+
+> **`MCP_ALLOWED_PROJECTS` — DEPRECATED.** До SLONK-15 это поле ограничивало
+> список проектов, доступных агентам. Начиная со SLONK-15 граница доступа
+> определяется workspace из OAuth-токена: агент видит все проекты своего
+> workspace и только их. `MCP_ALLOWED_PROJECTS` оставлен для обратной
+> совместимости, но не обрабатывается сервером. Будет удалён в следующей
+> MAJOR-версии.
 
 В проекте включены модули: cycles, modules, views, pages.
 
@@ -341,14 +350,28 @@ TipTap'ом безвозвратно — `parseDescription` вернёт пус�
 | `/.well-known/oauth-protected-resource` | GET | Метаданные Resource Server (это `/mcp`), указывают на AS и resource URI | RFC 9728 |
 | `/.well-known/oauth-authorization-server` | GET | Метаданные AS: endpoints, поддерживаемые методы (PKCE S256 обязателен), grant'ы | RFC 8414 |
 | `/oauth/register` | POST | Dynamic Client Registration (открыт, rate-limited, capped на `MCP_OAUTH_MAX_CLIENTS`) | RFC 7591 |
-| `/oauth/authorize` | GET | Рендерит HTML-форму логина (оператор вводит пароль = `MCP_AUTH_TOKEN`) | — |
-| `/oauth/authorize` | POST | Проверка пароля (constant-time), выдача single-use authorization code (PKCE S256-bound, TTL = `MCP_OAUTH_CODE_TTL_SEC`) | — |
-| `/oauth/token` | POST | Grant: `authorization_code` (PKCE верификация) или `refresh_token` (с ротацией). Возвращает opaque `access_token` + `refresh_token` | — |
+| `/oauth/authorize` | GET | Рендерит HTML-форму логина (оператор вводит пароль = `MCP_AUTH_TOKEN` или tenant-специфичный) | — |
+| `/oauth/authorize` | POST | Проверка пароля (constant-time), выдача single-use authorization code (PKCE S256-bound, TTL = `MCP_OAUTH_CODE_TTL_SEC`); code привязан к workspace | — |
+| `/oauth/token` | POST | Grant: `authorization_code` (PKCE верификация) или `refresh_token` (с ротацией). Возвращает opaque `access_token` + `refresh_token`; токен привязан к workspace | — |
 | `/oauth/revoke` | POST | Отзыв access/refresh токена | RFC 7009 |
 
 OAuth flow для claude.ai: discovery → Dynamic Client Registration → `/authorize`
-(пользователь вводит пароль) → authorization code → `/oauth/token` → access token →
-`/mcp` с `Authorization: Bearer <access_token>`.
+(пользователь вводит пароль для нужного workspace) → authorization code →
+`/oauth/token` → access token → `/mcp` с `Authorization: Bearer <access_token>`.
+
+**Workspace из токена (инвариант безопасности).** Workspace агента берётся
+исключительно из access-token, выданного при авторизации. Параметр workspace
+в запросе к MCP-tools игнорируется. При использовании static Bearer (без OAuth)
+workspace = `MCP_DEFAULT_WORKSPACE`.
+
+**Multi-tenant (OAuth-режим).** Для каждого workspace можно зарегистрировать
+отдельный Plane API-ключ через таблицу `tenants` в OAuth-хранилище
+(`MCP_OAUTH_STORE_PATH`). При авторизации через `/oauth/authorize?workspace=<name>`
+MCP сверяет введённый пароль с `auth_token_hash` тенанта (если тенант найден)
+или с глобальным `MCP_AUTH_TOKEN` (fallback). При работе MCP подбирает
+PlaneClient для workspace агента: если у тенанта прописан собственный API-ключ —
+использует его, иначе берёт `PLANE_API_KEY` из ENV. `MCP_DEFAULT_WORKSPACE`
+авто-регистрируется как дефолтный тенант при старте сервера.
 
 ### 6.2 Перечень инструментов
 

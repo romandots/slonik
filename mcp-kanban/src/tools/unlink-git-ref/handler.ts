@@ -26,7 +26,6 @@ export async function unlinkGitRef(deps: {
   gitRefs: GitRefsIndex;
   workspace: string;
   defaultProjectRef: string;
-  allowedProjects: string[];
   input: UnlinkGitRefInput;
 }): Promise<UnlinkGitRefResult> {
   const parsed = parseIssueRef(deps.input.issue_id);
@@ -39,7 +38,6 @@ export async function unlinkGitRef(deps: {
         ? { projectRef: parsed.identifier }
         : {}),
     defaultProjectRef: deps.defaultProjectRef,
-    allowedProjects: deps.allowedProjects,
   });
   const issueId = await resolveIssueId(deps.plane, deps.workspace, project, parsed);
 

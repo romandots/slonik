@@ -15,7 +15,6 @@ describe('listIssues', () => {
       cache: new TtlCache(),
       workspace: 'agents',
       defaultProjectRef: 'SLONK',
-      allowedProjects: ['SLONK'],
       input: {},
     });
     expect(r.issues).toHaveLength(2);
@@ -35,7 +34,6 @@ describe('listIssues', () => {
       cache: new TtlCache(),
       workspace: 'agents',
       defaultProjectRef: 'SLONK',
-      allowedProjects: ['SLONK'],
       input: { state: 'Development' },
     });
     expect(r.issues.map((i) => i.name)).toEqual(['B']);
@@ -51,10 +49,9 @@ describe('listIssues', () => {
         cache: new TtlCache(),
         workspace: 'agents',
         defaultProjectRef: 'SLONK',
-        allowedProjects: ['SLONK'],
         input: { project: 'OTHER' },
       }),
-    ).rejects.toThrowError(/MCP_ALLOWED_PROJECTS/);
+    ).rejects.toThrowError(/not found in workspace/);
   });
 
   it('honours the in-memory cache (second call does not hit Plane again)', async () => {
@@ -76,7 +73,6 @@ describe('listIssues', () => {
       cache,
       workspace: 'agents',
       defaultProjectRef: 'SLONK',
-      allowedProjects: ['SLONK'],
       input: { state: 'To Do' as const },
     };
     await listIssues(opts);

@@ -1,15 +1,20 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { McpError } from './errors.js';
 import type { AgentIdentity, IdentityRegistry } from './identity.js';
+import { hashToken } from './oauth/crypto.js';
 
 const AUTH_SCHEME = /^Bearer\s+(.+)$/i;
 
 export interface AuthedRequest extends FastifyRequest {
   identity: AgentIdentity;
+  /** Workspace slug тенанта, разрешённый при аутентификации. */
+  workspace: string;
 }
 
 export interface AuthOptions {
   expectedToken: string;
+  /** Workspace по умолчанию — используется для static-token path без явного тенанта. */
+  defaultWorkspace: string;
   /** Если false — проверяется только Bearer, identity не нужна. */
   requireIdentity?: boolean;
   /**
@@ -22,10 +27,15 @@ export interface AuthOptions {
   /**
    * Опциональный валидатор OAuth access-токена. Если presented Bearer не
    * равен статичному expectedToken — пробуем его как OAuth-токен. Успех →
-   * identity берётся из токена, X-Agent-Identity не требуется. Sync, потому
-   * что lookup идёт в better-sqlite3 (синхронный).
+   * identity и workspace берутся из токена, X-Agent-Identity не требуется.
+   * Sync, потому что lookup идёт в better-sqlite3 (синхронный).
    */
-  oauthValidator?: (token: string) => { identity: AgentIdentity; scope: string } | undefined;
+  oauthValidator?: (token: string) => { identity: AgentIdentity; scope: string; workspace: string } | undefined;
+  /**
+   * Опциональный lookup тенанта по хэшу статик-токена. Если задан —
+   * static Bearer path резолвит workspace из стора, иначе — defaultWorkspace.
+   */
+  tenantByAuthTokenHash?: (hash: string) => { workspace: string } | undefined;
 }
 
 /**
@@ -54,6 +64,14 @@ export function authenticate(
   // Path A — статичный shared-token: identity из X-Agent-Identity (как было).
   if (constantTimeEqual(presented, options.expectedToken)) {
     applyStaticIdentity(request, options);
+    // Workspace: ищем тенанта по хэшу токена; fallback — defaultWorkspace.
+    if (options.tenantByAuthTokenHash !== undefined) {
+      const hash = hashToken(presented);
+      const tenant = options.tenantByAuthTokenHash(hash);
+      (request as AuthedRequest).workspace = tenant?.workspace ?? options.defaultWorkspace;
+    } else {
+      (request as AuthedRequest).workspace = options.defaultWorkspace;
+    }
     return;
   }
 
@@ -72,6 +90,7 @@ export function authenticate(
         });
       }
       (request as AuthedRequest).identity = resolved.identity;
+      (request as AuthedRequest).workspace = resolved.workspace || options.defaultWorkspace;
       return;
     }
   }
