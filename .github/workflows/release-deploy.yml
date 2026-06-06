@@ -159,4 +159,15 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            cd /home/romandots/slonik && make smoke-mcp
+            set -euo pipefail
+            # Inline-проверка: не зависит от файлов рабочей копии на хосте
+            # (деплой обновляет образ, но не git-checkout с Makefile/compose).
+            # /health публикуется mcp-kanban на хост-порту 8787, без авторизации.
+            echo "MCP health check (http://localhost:8787/health)..."
+            if curl --fail --silent --show-error --max-time 10 http://localhost:8787/health; then
+              echo
+              echo "✓ MCP отвечает"
+            else
+              echo "✗ MCP недоступен"
+              exit 1
+            fi
