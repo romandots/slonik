@@ -45,7 +45,7 @@ push в main ──► release-deploy.yml:
    deploy (SSH на прод: pull → compose up --wait → health-gate → rollback при провале)
         │
         ▼
-   smoke (make smoke-mcp на проде)
+   smoke (inline curl localhost:8787/health на проде)
 ```
 
 Версия образа берётся из `mcp-kanban/package.json` → поле `version`.
@@ -92,12 +92,33 @@ push в main ──► release-deploy.yml:
 
 ### 3.4 `smoke` — пост-деплой проверка
 
-После успешного деплоя — `make smoke-mcp` на проде: статус контейнера
-`mcp-kanban` + `GET http://localhost:${MCP_HOST_PORT:-8787}/health`. Проверяется
-именно то, что деплоится (опубликованный порт MCP), без завязки на топологию
-Plane/прокси. Падение smoke помечает workflow красным (но контейнер уже поднят).
-Цель `make smoke` (проверка Plane UI на `localhost:${PLANE_HOST_PORT:-3000}`)
-остаётся для локальной/dev-проверки, где порт Plane опубликован на хост.
+После успешного деплоя — **inline-curl** к `http://localhost:8787/health`
+(опубликованный порт `mcp-kanban`, эндпойнт без авторизации). Проверяется именно
+то, что деплоится, без завязки на топологию Plane/прокси. Шаг намеренно
+**не** вызывает `make` — деплой обновляет только образ, а не рабочую копию
+репозитория на хосте (см. §3.5), поэтому smoke не должен зависеть от файлов
+на хосте. Падение smoke помечает workflow красным (но контейнер уже поднят).
+
+Для ручной/локальной проверки в `Makefile` есть цели `make smoke-mcp`
+(статус `mcp-kanban` + `/health`) и `make smoke` (Plane UI на
+`localhost:${PLANE_HOST_PORT:-3000}`, где порт Plane опубликован на хост).
+
+### 3.5 Что деплой НЕ обновляет на хосте
+
+Deploy-джоба делает `docker pull` нового образа и `docker compose up -d
+mcp-kanban` — она **не** трогает git-checkout в `DEPLOY_DIR`. Значит,
+`docker-compose.yml`, overlay-файлы, `Makefile` и `.env` на проде остаются
+теми, что лежат там сейчас. Если изменение затрагивает эти файлы (новый
+сервис/порт в compose, новая переменная в `.env`, изменённая команда в
+`Makefile`), его нужно применить на хосте отдельно:
+
+```bash
+cd /home/romandots/slonik
+git pull --ff-only        # если рабочая копия — git-клон
+# или вручную обновить нужные файлы; .env правится руками (в git его нет)
+```
+
+Сам образ `mcp-kanban` при этом приедет автоматически через пайплайн.
 
 ---
 
@@ -278,7 +299,8 @@ retention-политикой пакета).
 | `sed: .env: Permission denied` | `.env` не писабелен для `SSH_USER` — поправь владельца/права |
 | деплой не стартует на push | push не в `main`, либо required reviewers в `production` ждут approve |
 | образ собрался, но прод на старой версии | `SLONK_MCP_IMAGE_TAG` в `.env` не обновился (провал health-gate → откат) — смотри лог деплоя |
-| smoke красный, контейнер живой | MCP ещё прогревается — проверь `docker compose ps mcp-kanban`, повтори `make smoke-mcp`; для Plane UI на проде помни, что порт не опубликован (см. §3.4) |
+| smoke красный, контейнер живой | MCP ещё прогревается / порт 8787 не опубликован — проверь `docker compose ps mcp-kanban` и `curl localhost:8787/health` на хосте (см. §3.4) |
+| `make: No rule to make target ...` в smoke | рабочая копия на хосте устарела — деплой не делает `git pull` (см. §3.5); обнови файлы на проде вручную |
 
 ---
 

@@ -24,14 +24,16 @@
   в `release-deploy.yml` (env deploy-джобы + шаг `Post-deploy smoke`) под
   фактическое расположение рабочей копии на прод-хосте. `docs/DEPLOY.md`
   синхронизирован.
-- **Пост-деплой smoke переведён на MCP health-эндпойнт.** Новая цель
-  `make smoke-mcp` (`docker compose ps mcp-kanban` + `GET
-  localhost:${MCP_HOST_PORT:-8787}/health`) и шаг `Post-deploy smoke` в
-  `release-deploy.yml` теперь проверяют опубликованный порт mcp-kanban, а не
-  Plane UI на `localhost:3000` (на проде Plane published только через caddy
-  80/443, порт 3000 наружу не выставлен — прежний `make smoke` всегда падал).
-  Цель `make smoke` сохранена для локальной/dev-проверки. `docs/DEPLOY.md §3.4`
-  обновлён.
+- **Пост-деплой smoke переведён на MCP health-эндпойнт.** Шаг `Post-deploy
+  smoke` в `release-deploy.yml` теперь делает inline-`curl
+  localhost:8787/health` (опубликованный порт mcp-kanban, без авторизации)
+  вместо Plane UI на `localhost:3000` (на проде Plane published только через
+  caddy 80/443 — прежний `make smoke` всегда падал). Шаг намеренно не вызывает
+  `make`: деплой обновляет образ, но не рабочую копию репозитория на хосте,
+  поэтому smoke не должен зависеть от файлов на хосте. В `Makefile` добавлена
+  цель `make smoke-mcp` для ручной/локальной проверки; `make smoke` сохранена.
+  `docs/DEPLOY.md §3.4–3.5` описывают smoke и факт, что деплой не делает
+  `git pull` на хосте.
 
 ### Added
 - **`docs/DEPLOY.md`** — канонический документ по деплою и автодеплою: схема
