@@ -20,6 +20,19 @@
   тенанта) отклоняется (400), чтобы ввод произвольной строки + `MCP_AUTH_TOKEN`
   не авторизовал к несуществующему workspace. Поле `workspace` валидируется
   slug-regex + max-length. Инвариант изоляции (workspace из токена) сохранён.
+### Fixed
+- **OAuth/multitenant не работали через docker-compose: `MCP_OAUTH_*` не
+  пробрасывались в контейнер `mcp-kanban`.** Сервис задаёт env явным списком, в
+  котором не было ни одной `MCP_OAUTH_*`-переменной — поэтому при
+  `MCP_OAUTH_ENABLED=true` в `.env` внутри контейнера переменная оставалась
+  пустой, `config.ts` брал дефолт `false`, OAuth 2.1 AS не поднимался, и
+  `/oauth/*` + `/.well-known/oauth-*` отдавали 404. Remote-коннектор claude.ai
+  не проходил discovery («Couldn't connect»). Добавлен проброс
+  `MCP_OAUTH_ENABLED`, `MCP_OAUTH_ISSUER`, `MCP_OAUTH_OPERATOR_IDENTITY`,
+  `MCP_OAUTH_ACCESS_TTL_SEC`, `MCP_OAUTH_REFRESH_TTL_SEC`,
+  `MCP_OAUTH_CODE_TTL_SEC`, `MCP_OAUTH_MAX_CLIENTS`, `MCP_OAUTH_STORE_PATH` в
+  `docker-compose.yml` (с дефолтами; `MCP_OAUTH_ENABLED` по умолчанию `0` —
+  backward compat).
 
 ### Changed
 - **`plane-worker` baseline `mem_limit` поднят `384m → 768m` (SLONK-9).**

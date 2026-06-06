@@ -369,6 +369,19 @@ services:
       MCP_RETRY_BACKOFF_MS: ${MCP_RETRY_BACKOFF_MS}
       MCP_PLANE_TIMEOUT_MS: ${MCP_PLANE_TIMEOUT_MS}
       MCP_METRICS_ENABLED: ${MCP_METRICS_ENABLED}
+      # OAuth 2.1 AS / multitenant (SLONK-15/SLONK-18). Без проброса этих
+      # переменных config.ts берёт дефолты (OAuth выключен), и /oauth/* +
+      # /.well-known/oauth-* отдают 404 — remote-коннектор claude.ai не может
+      # пройти discovery. MCP_OAUTH_ISSUER должен указывать на внешний HTTPS-URL
+      # (CADDY_MCP_DOMAIN), без trailing slash и без path.
+      MCP_OAUTH_ENABLED: ${MCP_OAUTH_ENABLED:-0}
+      MCP_OAUTH_ISSUER: ${MCP_OAUTH_ISSUER:-}
+      MCP_OAUTH_OPERATOR_IDENTITY: ${MCP_OAUTH_OPERATOR_IDENTITY:-operator}
+      MCP_OAUTH_ACCESS_TTL_SEC: ${MCP_OAUTH_ACCESS_TTL_SEC:-3600}
+      MCP_OAUTH_REFRESH_TTL_SEC: ${MCP_OAUTH_REFRESH_TTL_SEC:-2592000}
+      MCP_OAUTH_CODE_TTL_SEC: ${MCP_OAUTH_CODE_TTL_SEC:-60}
+      MCP_OAUTH_MAX_CLIENTS: ${MCP_OAUTH_MAX_CLIENTS:-50}
+      MCP_OAUTH_STORE_PATH: ${MCP_OAUTH_STORE_PATH:-}
       # SLONK-6: путь к директории `roles/`. По умолчанию пусто — loader
       # ищет рядом с package.json (`/app/roles`).
       MCP_ROLES_DIR: ${MCP_ROLES_DIR:-}
