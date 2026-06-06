@@ -10,6 +10,7 @@ import {
   OAUTH_SCOPE,
 } from './metadata.js';
 import { generateOpaqueToken, hashToken, verifyPkceS256, constantTimeEqual } from './crypto.js';
+import { WORKSPACE_SLUG_RE } from './defaults.js';
 
 export interface OAuthRouteDeps {
   store: OAuthStore;
@@ -43,8 +44,10 @@ const AuthorizeQuery = z.object({
   state: z.string().optional().default(''),
   resource: z.string().url().optional(),
   scope: z.string().optional(),
-  /** Workspace slug тенанта. Если не передан — используется workspace по умолчанию. */
-  workspace: z.string().min(1).optional(),
+  /** Workspace slug тенанта. Если не передан — используется workspace по умолчанию.
+   *  Валидируется тем же slug-regex, что add-tenant/bootstrap: bounded length +
+   *  без мусора (защита от длинного ввода и нечитаемых slug'ов в форме/коде). */
+  workspace: z.string().min(1).max(64).regex(WORKSPACE_SLUG_RE).optional(),
 });
 
 const AuthorizePost = AuthorizeQuery.extend({ password: z.string().min(1) });
@@ -135,7 +138,7 @@ export function registerOAuthRoutes(app: FastifyInstance, deps: OAuthRouteDeps):
     }
     reply.status(200).type('text/html');
     htmlSecurityHeaders(reply);
-    return renderLoginForm(q);
+    return renderLoginForm(q, deps.defaultWorkspace);
   });
 
   // ---- authorize (POST -> issue code) ----
@@ -166,25 +169,44 @@ export function registerOAuthRoutes(app: FastifyInstance, deps: OAuthRouteDeps):
       reply.status(400);
       return { error: 'invalid_scope' };
     }
-    // Резолвим workspace и проверяем пароль: сначала ищем тенанта,
-    // затем fallback на глобальный MCP_AUTH_TOKEN для default workspace.
+    // Резолвим workspace (SLONK-19: оператор вводит его в форме, т.к.
+    // claude.ai не пробрасывает ?workspace= в authorize) и проверяем пароль:
+    // сначала ищем тенанта, затем fallback на глобальный MCP_AUTH_TOKEN —
+    // только для дефолтного workspace.
     const targetWorkspace = q.workspace ?? deps.defaultWorkspace ?? '';
     const tenant = deps.store.getTenantByWorkspace(targetWorkspace);
-    const expectedPassword = tenant !== undefined
-      ? undefined // проверка через hash ниже
-      : deps.authToken;
+
+    // Если оператор ЯВНО ввёл workspace, который не дефолтный и без тенанта —
+    // отклоняем, а не проваливаемся в fallback на MCP_AUTH_TOKEN: иначе ввод
+    // произвольной строки + глобальный токен авторизовал бы к несуществующему
+    // workspace. Когда поле не задано (старый флоу без workspace) — не трогаем.
+    if (
+      q.workspace !== undefined &&
+      tenant === undefined &&
+      q.workspace !== deps.defaultWorkspace
+    ) {
+      reply.status(400).type('text/html');
+      htmlSecurityHeaders(reply);
+      return renderLoginForm(q, deps.defaultWorkspace, `Unknown workspace: ${q.workspace}`);
+    }
 
     let passwordOk: boolean;
     if (tenant !== undefined) {
       passwordOk = constantTimeEqual(hashToken(q.password), tenant.auth_token_hash);
     } else {
-      passwordOk = expectedPassword !== undefined && constantTimeEqual(q.password, expectedPassword);
+      // tenant === undefined здесь возможно только при targetWorkspace ===
+      // defaultWorkspace (дефолтный тенант не авто-зарегистрирован, например
+      // PLANE_API_KEY не задан) — backward-compat сверка с MCP_AUTH_TOKEN.
+      // Хэшируем обе стороны, как в tenant-ветке, чтобы семантика сверки была
+      // одинаковой (hash-to-hash) и не зависела от внутренней реализации
+      // constantTimeEqual.
+      passwordOk = constantTimeEqual(hashToken(q.password), hashToken(deps.authToken));
     }
 
     if (!passwordOk) {
       reply.status(401).type('text/html');
       htmlSecurityHeaders(reply);
-      return renderLoginForm(q, 'Invalid password');
+      return renderLoginForm(q, deps.defaultWorkspace, 'Invalid password');
     }
     const code = generateOpaqueToken();
     deps.store.saveCode({
@@ -322,13 +344,20 @@ function escapeHtml(s: string): string {
   );
 }
 
-function renderLoginForm(q: z.infer<typeof AuthorizeQuery>, errorMsg?: string): string {
+function renderLoginForm(
+  q: z.infer<typeof AuthorizeQuery>,
+  defaultWorkspace: string,
+  errorMsg?: string,
+): string {
   const hidden = (name: string, value: string) =>
     `<input type="hidden" name="${name}" value="${escapeHtml(value)}">`;
+  // SLONK-19: workspace — редактируемое поле. claude.ai не передаёт ?workspace=
+  // в authorize, поэтому оператор вводит его здесь, чтобы выбрать тенанта.
+  // Префилл — введённое ранее значение (при ре-рендере ошибки) либо дефолт.
+  const workspaceValue = q.workspace ?? defaultWorkspace;
   return `<!doctype html><html><head><meta charset="utf-8"><title>slonk · authorize</title></head>
 <body style="font-family:system-ui;max-width:28rem;margin:4rem auto;">
   <h1>Authorize slonk MCP</h1>
-  ${q.workspace !== undefined ? `<p style="color:#555;font-size:.9rem">Workspace: <strong>${escapeHtml(q.workspace)}</strong></p>` : ''}
   ${errorMsg ? `<p style="color:#b00">${escapeHtml(errorMsg)}</p>` : ''}
   <form method="POST" action="/oauth/authorize">
     ${hidden('response_type', q.response_type)}
@@ -339,8 +368,10 @@ function renderLoginForm(q: z.infer<typeof AuthorizeQuery>, errorMsg?: string): 
     ${hidden('state', q.state)}
     ${q.resource !== undefined ? hidden('resource', q.resource) : ''}
     ${q.scope !== undefined ? hidden('scope', q.scope) : ''}
-    ${q.workspace !== undefined ? hidden('workspace', q.workspace) : ''}
-    <label>Operator password<br><input type="password" name="password" autofocus
+    <label>Workspace<br><input type="text" name="workspace" required maxlength="64"
+      ${errorMsg ? 'autofocus' : ''} value="${escapeHtml(workspaceValue)}"
+      style="width:100%;padding:.5rem;margin:.5rem 0;"></label>
+    <label>Operator password<br><input type="password" name="password" ${errorMsg ? '' : 'autofocus'}
       style="width:100%;padding:.5rem;margin:.5rem 0;"></label>
     <button type="submit" style="padding:.5rem 1rem;">Authorize</button>
   </form>

@@ -350,14 +350,16 @@ TipTap'ом безвозвратно — `parseDescription` вернёт пус�
 | `/.well-known/oauth-protected-resource` | GET | Метаданные Resource Server (это `/mcp`), указывают на AS и resource URI | RFC 9728 |
 | `/.well-known/oauth-authorization-server` | GET | Метаданные AS: endpoints, поддерживаемые методы (PKCE S256 обязателен), grant'ы | RFC 8414 |
 | `/oauth/register` | POST | Dynamic Client Registration (открыт, rate-limited, capped на `MCP_OAUTH_MAX_CLIENTS`) | RFC 7591 |
-| `/oauth/authorize` | GET | Рендерит HTML-форму логина (оператор вводит пароль = `MCP_AUTH_TOKEN` или tenant-специфичный) | — |
+| `/oauth/authorize` | GET | Рендерит HTML-форму логина: поля **Workspace** (slug тенанта; по умолчанию `MCP_DEFAULT_WORKSPACE`) и пароль (= `MCP_AUTH_TOKEN` для дефолтного либо tenant-специфичный). SLONK-19: workspace выбирается в форме, т.к. claude.ai не пробрасывает `?workspace=` | — |
 | `/oauth/authorize` | POST | Проверка пароля (constant-time), выдача single-use authorization code (PKCE S256-bound, TTL = `MCP_OAUTH_CODE_TTL_SEC`); code привязан к workspace | — |
 | `/oauth/token` | POST | Grant: `authorization_code` (PKCE верификация) или `refresh_token` (с ротацией). Возвращает opaque `access_token` + `refresh_token`; токен привязан к workspace | — |
 | `/oauth/revoke` | POST | Отзыв access/refresh токена | RFC 7009 |
 
 OAuth flow для claude.ai: discovery → Dynamic Client Registration → `/authorize`
-(пользователь вводит пароль для нужного workspace) → authorization code →
-`/oauth/token` → access token → `/mcp` с `Authorization: Bearer <access_token>`.
+(оператор вводит **workspace** нужного тенанта + его пароль в форме) →
+authorization code → `/oauth/token` → access token (привязан к этому workspace)
+→ `/mcp` с `Authorization: Bearer <access_token>`. Неизвестный workspace
+(не дефолтный и без зарегистрированного тенанта) форма отклоняет.
 
 **Workspace из токена (инвариант безопасности).** Workspace агента берётся
 исключительно из access-token, выданного при авторизации. Параметр workspace
