@@ -20,6 +20,10 @@
   `cache: pnpm` в `actions/setup-node` (не `actions/cache`); добавлено
   упоминание GitHub Environment `production`; `docker login` — через
   `--password-stdin`.
+- **`DEPLOY_DIR` деплоя переведён `/opt/slonk` → `/home/romandots/slonik`**
+  в `release-deploy.yml` (env deploy-джобы + шаг `Post-deploy smoke`) под
+  фактическое расположение рабочей копии на прод-хосте. `docs/DEPLOY.md`
+  синхронизирован.
 
 ### Added
 - **`docs/DEPLOY.md`** — канонический документ по деплою и автодеплою: схема
