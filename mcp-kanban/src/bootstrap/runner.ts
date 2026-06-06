@@ -74,6 +74,12 @@ export interface RunnerDeps {
    */
   identitiesSource?: IdentitiesSource;
   config: Pick<Config, 'MCP_AGENT_IDENTITY_MODE'>;
+  /**
+   * SLONK-18 (multitenant): bootstrap'ить этот workspace вместо
+   * `manifest.workspace.slug`. PlaneClient уже приходит с кредами тенанта
+   * (см. cli.ts). Когда не задан — поведение прежнее (slug из манифеста).
+   */
+  workspaceSlugOverride?: string;
 }
 
 /**
@@ -96,9 +102,11 @@ export async function runBootstrap(deps: RunnerDeps): Promise<BootstrapReport> {
   const { plane, manifest, logger, store, config } = deps;
   const identitiesSource: IdentitiesSource =
     deps.identitiesSource ?? { kind: 'manifest' };
+  // SLONK-18: workspace для всего прогона. Override (тенант) перебивает манифест.
+  const workspaceSlug = deps.workspaceSlugOverride ?? manifest.workspace.slug;
   const t0 = performance.now();
 
-  const ws = await ensureWorkspace(plane, manifest, logger);
+  const ws = await ensureWorkspace(plane, workspaceSlug, logger);
   const projects: BootstrapReport['projects'] = [];
   let stateCreated = 0;
   let stateExisting = 0;
@@ -129,7 +137,7 @@ export async function runBootstrap(deps: RunnerDeps): Promise<BootstrapReport> {
     try {
       const ensured = await ensureProject(
         plane,
-        manifest.workspace.slug,
+        workspaceSlug,
         projectManifest,
         logger,
       );
@@ -137,7 +145,7 @@ export async function runBootstrap(deps: RunnerDeps): Promise<BootstrapReport> {
 
       const stateDiff = await ensureStates(
         plane,
-        manifest.workspace.slug,
+        workspaceSlug,
         ensured.project.id,
         manifest.states,
         logger,
@@ -151,7 +159,7 @@ export async function runBootstrap(deps: RunnerDeps): Promise<BootstrapReport> {
 
       const labelDiff = await ensureLabels(
         plane,
-        manifest.workspace.slug,
+        workspaceSlug,
         ensured.project.id,
         manifest.labels,
         logger,
@@ -169,7 +177,7 @@ export async function runBootstrap(deps: RunnerDeps): Promise<BootstrapReport> {
       report.error = { code: 'PROJECT_BOOTSTRAP_FAILED', message: msg };
       logger.error(
         {
-          workspace: manifest.workspace.slug,
+          workspace: workspaceSlug,
           project: projectManifest.identifier,
           slug: projectManifest.slug,
           err: msg,
@@ -185,6 +193,7 @@ export async function runBootstrap(deps: RunnerDeps): Promise<BootstrapReport> {
     store,
     logger,
     manifest,
+    workspaceSlug,
     source: identitiesSource,
     desiredMode: config.MCP_AGENT_IDENTITY_MODE,
   });
@@ -196,7 +205,7 @@ export async function runBootstrap(deps: RunnerDeps): Promise<BootstrapReport> {
   void primaryStates;
 
   return {
-    workspace: { slug: manifest.workspace.slug, created: ws.created },
+    workspace: { slug: workspaceSlug, created: ws.created },
     projects,
     states: {
       total: totalStates,
@@ -216,12 +225,12 @@ export async function runBootstrap(deps: RunnerDeps): Promise<BootstrapReport> {
 
 async function ensureWorkspace(
   plane: PlaneClient,
-  manifest: Manifest,
+  workspaceSlug: string,
   logger: Logger,
 ): Promise<{ created: boolean }> {
-  const existing = await plane.getWorkspaceBySlug(manifest.workspace.slug);
+  const existing = await plane.getWorkspaceBySlug(workspaceSlug);
   if (existing !== undefined) {
-    logger.info({ slug: manifest.workspace.slug }, 'workspace exists');
+    logger.info({ slug: workspaceSlug }, 'workspace exists');
     return { created: false };
   }
   // Plane v1.3.0 workspace-scoped API token не может создавать workspaces:
@@ -229,7 +238,7 @@ async function ensureWorkspace(
   // создан в UI до запуска bootstrap, а API-токен — взят из его
   // "Workspace settings → API tokens".
   throw new Error(
-    `Workspace "${manifest.workspace.slug}" not found via API token. ` +
+    `Workspace "${workspaceSlug}" not found via API token. ` +
       `Plane API tokens are workspace-scoped and cannot create workspaces; ` +
       `create the workspace via Plane UI first and ensure PLANE_API_KEY is ` +
       `issued from its Workspace settings → API tokens.`,
@@ -450,10 +459,12 @@ async function ensureIdentities(args: {
   store: IdentityStore;
   logger: Logger;
   manifest: Manifest;
+  /** SLONK-18: workspace для invite/members (тенант либо манифест). */
+  workspaceSlug: string;
   source: IdentitiesSource;
   desiredMode: IdentityMode;
 }): Promise<BootstrapReport['identities']> {
-  const { plane, store, logger, manifest, source, desiredMode } = args;
+  const { plane, store, logger, manifest, workspaceSlug, source, desiredMode } = args;
   const identities = resolveIdentities(source, manifest);
   const sourceTag: 'roles' | 'manifest' = source.kind;
 
@@ -465,7 +476,7 @@ async function ensureIdentities(args: {
   // инвайтим. Любая ошибка инвайта переключает на single_bot fallback.
   let members;
   try {
-    members = await plane.listWorkspaceMembers(manifest.workspace.slug);
+    members = await plane.listWorkspaceMembers(workspaceSlug);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.warn({ err: msg }, 'cannot list workspace members; falling back to single_bot');
@@ -490,7 +501,7 @@ async function ensureIdentities(args: {
       continue;
     }
     try {
-      await plane.inviteWorkspaceMember(manifest.workspace.slug, {
+      await plane.inviteWorkspaceMember(workspaceSlug, {
         email: ident.email,
       });
       // Invitation.id ≠ User.id — реальный plane_user_id появится в

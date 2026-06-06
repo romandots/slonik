@@ -236,6 +236,56 @@ projects/` → «Create Project»). Plane создаст дефолтные 5 st
 Все ENV-переменные валидируются `zod`-схемой в `mcp-kanban/src/config.ts` на
 старте — при опечатке MCP не запустится и в лог пойдёт человеко-читаемая ошибка.
 
+### 2.4 Несколько тенантов (multitenant, SLONK-18)
+
+Один инстанс slonk может обслуживать несколько изолированных тенантов — у
+каждого свой Plane workspace, свой Plane API-ключ и свой пароль для
+OAuth-логина. Агенты разных тенантов не видят данные друг друга: workspace
+агента определяется **только** access-токеном, выданным при OAuth-логине, а не
+параметром запроса. Требуется включённый OAuth (`MCP_OAUTH_ENABLED=true`).
+
+Дефолтный workspace (`MCP_DEFAULT_WORKSPACE` + `PLANE_API_KEY` +
+`MCP_AUTH_TOKEN`) регистрируется тенантом автоматически при старте. Чтобы
+добавить **второй** тенант:
+
+1. **Создай его workspace в Plane UI.** Workspace-scoped API-токен не умеет
+   создавать workspaces — заведи workspace руками (`http://localhost:3000` →
+   создать workspace) и выпусти его API-ключ в *Workspace settings → API
+   tokens*.
+
+2. **Зарегистрируй тенанта** в OAuth-сторе:
+
+   ```bash
+   make add-tenant ARGS="--workspace acme --plane-api-key plane_api_acme --password 'S3cret-pass'"
+   ```
+
+   Опусти `--password`, чтобы сгенерировать случайный (покажется один раз —
+   сразу сохрани). Команда идемпотентна: повторный запуск обновляет ключ/пароль
+   тенанта. Пароль хранится только как SHA-256-хэш; ключ и пароль обратно не
+   печатаются.
+
+   > Ключ/пароль во флагах остаются в истории shell и в `ps`. На общем хосте
+   > используй интерактивный режим:
+   > `docker compose run --rm -iT mcp-kanban node dist/server.js add-tenant`.
+
+3. **Инициализируй workspace тенанта** (states / labels / agent-identities)
+   тем же bootstrap с override'ом:
+
+   ```bash
+   make bootstrap ARGS="--workspace acme --plane-api-key plane_api_acme"
+   ```
+
+4. **Подключи агента к тенанту.** В OAuth-флоу (claude.ai remote-коннектор или
+   свой клиент) на шаге `/oauth/authorize?workspace=acme` оператор вводит
+   пароль тенанта `acme`. Полученный access-token привязан к `acme`; все
+   MCP-вызовы этого агента уходят в проекты workspace `acme` с identity
+   `operator`.
+
+**Смена ключа существующего тенанта** требует рестарта сервера
+(`docker compose up -d mcp-kanban`) — per-workspace PlaneClient кэшируется в
+памяти. Пароль и регистрация *нового* тенанта подхватываются из стора сразу,
+без рестарта.
+
 ## 3. Запуск стека
 
 > Все `make`-команды ниже запускаются **из корня репозитория** (`slonk/`,

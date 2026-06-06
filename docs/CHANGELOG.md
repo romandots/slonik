@@ -36,6 +36,30 @@
   `git pull` на хосте.
 
 ### Added
+- **Multitenant: CLI `add-tenant` + multi-workspace bootstrap (SLONK-18).**
+  Оператор может регистрировать несколько тенантов на одном инстансе —
+  каждый со своим Plane workspace, своим Plane API-ключом и своим паролем
+  для OAuth-логина. Ядро multitenant (таблица `tenants`, per-workspace
+  `getPlaneClient`, per-tenant пароль на `/oauth/authorize?workspace=<slug>`)
+  было заложено в SLONK-15; SLONK-18 добавляет операторский слой:
+  - Новая команда `node dist/server.js add-tenant` (цель `make add-tenant`,
+    контейнерный запуск, пишет в том `mcp_data/oauth.sqlite`). Флаги
+    `--workspace`, `--plane-api-key`, `--password` (≥8 символов; опусти —
+    сгенерируется и покажется один раз), `--max-clients`, `--store`.
+    Идемпотентна (`ON CONFLICT DO UPDATE`): повторный запуск обновляет
+    ключ/пароль. Пароль хранится только как SHA-256 hex; Plane API-ключ и
+    сырой пароль не эхо-ятся обратно и не логируются.
+  - `bootstrap` принимает `--workspace <slug>` и `--plane-api-key <key>`
+    (`make bootstrap ARGS="--workspace <slug> --plane-api-key <key>"`), чтобы
+    инициализировать states/labels/identities в workspace конкретного
+    тенанта. Без флагов поведение прежнее (workspace из манифеста, ключ из
+    ENV). Slug валидируется regex (`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`) — это и
+    защита от подстановки `../`-сегментов в URL Plane API.
+  - Известное ограничение: смена API-ключа уже работающего тенанта требует
+    рестарта `mcp-kanban` (per-workspace PlaneClient кэшируется). Новый тенант
+    подхватывается при первом запросе.
+  - Документация: `docs/SPEC.md §6.1`, `docs/CONFIGURATION.md`,
+    `docs/USER_GUIDE.md`.
 - **`docs/DEPLOY.md`** — канонический документ по деплою и автодеплою: схема
   CI/CD-пайплайна, автодеплой на `push: main`, CI на PR, ручной деплой,
   подготовка прод-хоста (каталог, SSH deploy key, логин в GHCR, свой

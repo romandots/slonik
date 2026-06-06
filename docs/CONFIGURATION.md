@@ -183,7 +183,7 @@ Compose автоматически собирает `AMQP_URL` для Celery и�
 - `oauth.sqlite` содержит таблицу `tenants`: `workspace → plane_api_key + auth_token_hash`.
 - При старте дефолтный тенант (`MCP_DEFAULT_WORKSPACE` + `PLANE_API_KEY` + `MCP_AUTH_TOKEN`)
   регистрируется автоматически — backward compat.
-- Новый тенант регистрируется через `store.registerTenant(...)` (CLI/bootstrap расширение).
+- Новый тенант регистрируется оператором командой `make add-tenant` (SLONK-18, см. ниже).
 - На `/oauth/authorize` можно передать `?workspace=<slug>` — форма покажет workspace;
   пароль проверяется по `auth_token_hash` тенанта, fallback — `MCP_AUTH_TOKEN`.
 - Access-token несёт привязку к workspace (`workspace` claim); сервер выбирает
@@ -197,6 +197,42 @@ workspace с identity `operator`.
 
 Токены хранятся только как SHA-256-хэши в `oauth.sqlite`. Плейнтекст не пишется
 никуда; в логах redact'ируется (расширение pino-список).
+
+**Регистрация тенанта — `add-tenant` (SLONK-18).** Команда пишет ряд в таблицу
+`tenants` (`oauth.sqlite`). Основной запуск — контейнерный (том `mcp_data`
+внутри Docker), по образцу `make bootstrap`:
+
+```bash
+make add-tenant ARGS="--workspace acme --plane-api-key plane_api_xxx --password 'S3cret-pass'"
+```
+
+| Флаг | Обяз. | Назначение |
+|---|---|---|
+| `--workspace <slug>` | да | slug Plane-workspace тенанта; валидируется `^[a-z0-9]([a-z0-9-]*[a-z0-9])?$` |
+| `--plane-api-key <key>` | да | workspace-scoped Plane API-ключ этого workspace |
+| `--password <pass>` | нет | пароль для `/oauth/authorize?workspace=<slug>` (≥8 символов). Опусти — сгенерируется и покажется один раз |
+| `--max-clients <n>` | нет | per-tenant cap OAuth-клиентов (default `MCP_OAUTH_MAX_CLIENTS`) |
+| `--store <path>` | нет | путь к `oauth.sqlite` (для запуска с хоста против bind/cp-копии) |
+
+Свойства:
+
+- **Идемпотентна** (`ON CONFLICT(workspace) DO UPDATE`): повторный запуск
+  обновляет `plane_api_key`/`auth_token_hash`/`max_clients`; `created_at_ms`
+  не трогается. Сообщает `registered` (новый) или `updated`.
+- **Секреты:** пароль хранится только как SHA-256 hex; Plane API-ключ и сырой
+  пароль обратно не печатаются и не логируются. Сгенерированный пароль виден
+  один раз в stdout (и в `docker logs` контейнера однократного запуска) —
+  сохрани его сразу.
+- **Безопасность argv:** ключ/пароль, переданные флагами, остаются в истории
+  shell и в выводе `ps`. На общих хостах используй интерактивный режим
+  (`docker compose run --rm -iT mcp-kanban node dist/server.js add-tenant`) или
+  генерацию пароля (без `--password`).
+- После `add-tenant` инициализируй workspace тенанта в Plane:
+  `make bootstrap ARGS="--workspace <slug> --plane-api-key <key>"` (см. §4).
+  Workspace должен существовать в Plane UI заранее.
+- **Ограничение:** смена ключа уже зарегистрированного тенанта требует рестарта
+  `mcp-kanban` (`docker compose up -d mcp-kanban`) — per-workspace PlaneClient
+  кэшируется в памяти. Пароль и новые тенанты подхватываются сразу.
 
 ### 2.7 Caddy (опц.)
 
@@ -264,6 +300,13 @@ PR + строка в [CHANGELOG.md](./CHANGELOG.md).
 5. `docker compose up -d mcp-kanban` (перезапуск с новым ключом).
 6. `docker compose run --rm mcp-kanban bootstrap` — создаст workspace,
    project, states, labels, agent-identities.
+
+> **Multitenant (SLONK-18).** `bootstrap` принимает override workspace и ключа:
+> `make bootstrap ARGS="--workspace <slug> --plane-api-key <key>"` —
+> инициализирует states/labels/identities в workspace конкретного тенанта (его
+> Plane API-ключом). Без флагов — поведение прежнее (workspace из манифеста,
+> ключ из `PLANE_API_KEY`). Сам тенант предварительно регистрируется через
+> `make add-tenant` (см. §2.6).
 
 Файл `mcp-kanban/bootstrap/manifest.yaml` — единый источник правды для имени
 workspace, проекта, состояний, лейблов и identities **для конкретной

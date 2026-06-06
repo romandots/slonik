@@ -25,7 +25,7 @@ ifeq ($(backup),1)
 	COMPOSE_FILES += -f docker-compose.backup.yml
 endif
 
-.PHONY: help up up-dev up-proxy up-obs up-backup backup-now down down-v logs ps smoke smoke-mcp smoke-roles test build release bootstrap add-role config pull
+.PHONY: help up up-dev up-proxy up-obs up-backup backup-now down down-v logs ps smoke smoke-mcp smoke-roles test build release bootstrap add-role add-tenant config pull
 
 help: ## Показать доступные цели
 	@awk 'BEGIN { FS = ":.*##"; printf "Доступные цели:\n" } \
@@ -137,14 +137,26 @@ endif
 	@docker images --format 'table {{.Repository}}:{{.Tag}}\t{{.Size}}' \
 		| grep -E '^slonk/(mcp-kanban|backup):' || true
 
-bootstrap: ## Идемпотентная инициализация Plane (workspace/project/states/labels/identities)
-	$(COMPOSE) $(COMPOSE_FILES) run --rm mcp-kanban node dist/server.js bootstrap
+ARGS ?=
+bootstrap: ## Идемпотентная инициализация Plane (workspace/project/states/labels/identities). Multitenant: ARGS="--workspace <slug> --plane-api-key <key>"
+	$(COMPOSE) $(COMPOSE_FILES) run --rm mcp-kanban node dist/server.js bootstrap $(ARGS)
+
+# SLONK-18: регистрация тенанта (workspace + Plane API key + пароль) в OAuth-сторе.
+# Запускается В КОНТЕЙНЕРЕ — пишет в том mcp_data (oauth.sqlite) напрямую, по
+# образцу `bootstrap`. Эта цель работает только non-interactive: передавай оба
+# обязательных флага в ARGS (без них процесс ждал бы stdin, которого у
+# `run --rm` без -iT нет). Опусти --password, чтобы сгенерировать пароль.
+#   make add-tenant ARGS="--workspace acme --plane-api-key plane_api_xxx --password 'S3cret-pass'"
+# Для интерактивного ввода запусти напрямую с TTY:
+#   docker compose run --rm -iT mcp-kanban node dist/server.js add-tenant
+# Учти: пароль, переданный в ARGS, остаётся в истории shell и в выводе `ps`.
+add-tenant: ## SLONK-18: зарегистрировать тенанта (workspace+API key+пароль) в OAuth-сторе
+	$(COMPOSE) $(COMPOSE_FILES) run --rm mcp-kanban node dist/server.js add-tenant $(ARGS)
 
 # SLONK-12: интерактивное создание новой роли в mcp-kanban/roles/.
 # Запускается ЛОКАЛЬНО (не в контейнере), чтобы был TTY для prompt'ов и
 # чтобы файл сразу появился в репозиторской директории `mcp-kanban/roles/`.
 # Принимает позиционные аргументы как обычная CLI: `make add-role -- --role X ...`.
-ARGS ?=
 add-role: ## SLONK-12: интерактивно добавить новую роль в mcp-kanban/roles/
 	cd mcp-kanban && pnpm tsx src/server.ts add-role $(ARGS)
 
