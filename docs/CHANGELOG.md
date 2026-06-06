@@ -21,6 +21,26 @@
   не авторизовал к несуществующему workspace. Поле `workspace` валидируется
   slug-regex + max-length. Инвариант изоляции (workspace из токена) сохранён.
 ### Fixed
+- **Периодическая «потеря MCP-подключения» у remote-коннектора claude.ai.**
+  Две независимые причины обрыва, обе чинятся на стороне сервера:
+  - *Протухший OAuth access-токен (раз в `MCP_OAUTH_ACCESS_TTL_SEC`, по
+    умолчанию час).* `/mcp` на невалидный/истёкший Bearer отдавал «голый» 401
+    без заголовка `WWW-Authenticate`. Коннектор по MCP Authorization spec
+    (RFC 9728) ждёт в 401 `Bearer …, resource_metadata="…"`, чтобы запустить
+    discovery и обновить токен по refresh-гранту; без заголовка он трактовал
+    401 как обрыв. Теперь при включённом OAuth 401 содержит
+    `WWW-Authenticate: Bearer error="invalid_token", resource_metadata=<…/.well-known/oauth-protected-resource>`.
+    На клиентах со статичным `MCP_AUTH_TOKEN` заголовок не появляется.
+  - *Вытесненная MCP-сессия.* После eviction (idle-janitor
+    `MCP_SESSION_IDLE_MS`, cap-LRU `MCP_MAX_SESSIONS` или рестарт сервера)
+    клиент слал старый `mcp-session-id`, а сервер молча создавал новый
+    неинициализированный транспорт — SDK отвечал 400 «Server not initialized».
+    Теперь на неизвестный `mcp-session-id` (для не-`initialize` запроса)
+    сервер отдаёт 404, по которому коннектор гладко переоткрывает сессию и
+    повторяет вызов. Это объясняло и «стабильные» падения `get_issue` /
+    `get_issue_history`: как самые «тяжёлые» read-вызовы (lookup задачи по
+    `SLONK-N` + несколько запросов к Plane) они чаще прочих выполнялись первыми
+    после долгой паузы на кодинг и попадали ровно на границу обрыва.
 - **OAuth/multitenant не работали через docker-compose: `MCP_OAUTH_*` не
   пробрасывались в контейнер `mcp-kanban`.** Сервис задаёт env явным списком, в
   котором не было ни одной `MCP_OAUTH_*`-переменной — поэтому при

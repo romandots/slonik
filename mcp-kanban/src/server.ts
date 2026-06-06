@@ -1,6 +1,7 @@
 import Fastify, { type FastifyBaseLogger, type FastifyInstance } from 'fastify';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -31,7 +32,7 @@ import { MetricsRegistry } from './metrics.js';
 import formbody from '@fastify/formbody';
 import { OAuthStore } from './oauth/store.js';
 import { registerOAuthRoutes } from './oauth/routes.js';
-import { resourceUri } from './oauth/metadata.js';
+import { resourceUri, protectedResourceMetadataUrl } from './oauth/metadata.js';
 import { hashToken as hashTokenForAuth } from './oauth/crypto.js';
 import { OAUTH_STORE_DEFAULT_PATH } from './oauth/defaults.js';
 
@@ -414,6 +415,30 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
 
     const sessionId = headerString(request.headers['mcp-session-id']);
     const entry = sessionId !== undefined ? sessions.get(sessionId) : undefined;
+
+    // Stale/expired session: клиент прислал mcp-session-id, которого у нас уже
+    // нет — сессию вытеснил idle-janitor (MCP_SESSION_IDLE_MS), cap-LRU
+    // (MCP_MAX_SESSIONS) или сервер перезапускался. Раньше мы молча создавали
+    // новый неинициализированный транспорт и звали handleRequest; SDK на
+    // non-initialize запрос без инициализации отвечает 400 «Server not
+    // initialized», и remote-коннектор claude.ai трактует это как обрыв
+    // соединения (периодическая «потеря MCP»). По MCP Streamable HTTP spec на
+    // неизвестный session id надо отвечать 404 — тогда клиент сам гладко
+    // переоткрывает сессию новым initialize и повторяет вызов. Исключение —
+    // сам initialize: при реконнекте он может прийти со «старым» id, его
+    // пропускаем в ветку создания транспорта ниже.
+    if (sessionId !== undefined && entry === undefined && !isInitializeRequest(request.body)) {
+      reply.status(404).send({
+        jsonrpc: '2.0',
+        error: {
+          code: -32001,
+          message: 'Session not found or expired; reinitialize the MCP session',
+        },
+        id: null,
+      });
+      return;
+    }
+
     // transport переприсваивается ниже, если сессия только создаётся (новый
     // StreamableHTTPServerTransport), поэтому остаётся `let`.
     let transport = entry?.transport;
@@ -500,6 +525,26 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
   // ---------------- error handling ----------------
   app.setErrorHandler((err, request, reply) => {
     if (err instanceof McpError) {
+      // На 401 с включённым OAuth отдаём WWW-Authenticate с указателем на
+      // resource-metadata (RFC 9728 / MCP Authorization spec). Без него
+      // remote-коннектор claude.ai не понимает, что access-токен протух и
+      // нужно сходить за discovery + refresh — и показывает периодический
+      // «обрыв соединения» каждый раз, когда токен истекает (по умолчанию раз
+      // в час, MCP_OAUTH_ACCESS_TTL_SEC). Заголовок безвреден для клиентов на
+      // статичном MCP_AUTH_TOKEN — они его игнорируют.
+      if (
+        err.code === 'UNAUTHORIZED' &&
+        config.MCP_OAUTH_ENABLED &&
+        config.MCP_OAUTH_ISSUER !== undefined
+      ) {
+        const metadataUrl = protectedResourceMetadataUrl(config.MCP_OAUTH_ISSUER);
+        reply.header(
+          'WWW-Authenticate',
+          `Bearer error="invalid_token", ` +
+            `error_description="The access token is missing, invalid or expired", ` +
+            `resource_metadata="${metadataUrl}"`,
+        );
+      }
       logger.warn(
         { trace_id: request.id, code: err.code, err: err.message },
         'mcp error response',
