@@ -87,4 +87,5 @@ logs/
 mcp-kanban/schemas/*.json
 
 # Claude Code session artifacts (loop/cron locks, local settings)
-.claude/
+.claude/worktrees/
+.claude/settings.local.json
