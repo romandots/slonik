@@ -275,11 +275,17 @@ OAuth-логина. Агенты разных тенантов не видят �
    make bootstrap ARGS="--workspace acme --plane-api-key plane_api_acme"
    ```
 
-4. **Подключи агента к тенанту.** В OAuth-флоу (claude.ai remote-коннектор или
-   свой клиент) на шаге `/oauth/authorize?workspace=acme` оператор вводит
-   пароль тенанта `acme`. Полученный access-token привязан к `acme`; все
-   MCP-вызовы этого агента уходят в проекты workspace `acme` с identity
-   `operator`.
+4. **Подключи агента к тенанту.** Адрес коннектора — обычный `https://<хост>/mcp`
+   (workspace в URL **не указывается**: claude.ai его не пробрасывает). Тенант
+   выбирается на форме логина: в OAuth-флоу на шаге `/oauth/authorize` сервер
+   показывает поле **Workspace** (по умолчанию подставлен `agents`) и поле
+   пароля. Впиши туда `acme` и пароль тенанта `acme` (SLONK-19). Полученный
+   access-token привязан к `acme`; все MCP-вызовы этого агента уходят в проекты
+   workspace `acme` с identity `operator`.
+
+   > Класть `?workspace=acme` в адрес коннектора бесполезно — claude.ai строит
+   > URL авторизации из OAuth-метаданных и query-хвост отбрасывает. Выбор
+   > тенанта — только через поле Workspace на форме логина.
 
 **Смена ключа существующего тенанта** требует рестарта сервера
 (`docker compose up -d mcp-kanban`) — per-workspace PlaneClient кэшируется в
