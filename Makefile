@@ -25,7 +25,7 @@ ifeq ($(backup),1)
 	COMPOSE_FILES += -f docker-compose.backup.yml
 endif
 
-.PHONY: help up up-dev up-proxy up-obs up-backup backup-now down down-v logs ps smoke smoke-roles test build release bootstrap add-role config pull
+.PHONY: help up up-dev up-proxy up-obs up-backup backup-now down down-v logs ps smoke smoke-mcp smoke-roles test build release bootstrap add-role config pull
 
 help: ## Показать доступные цели
 	@awk 'BEGIN { FS = ":.*##"; printf "Доступные цели:\n" } \
@@ -94,6 +94,16 @@ smoke: ## Проверка работоспособности: статус се
 		"http://localhost:$${PLANE_HOST_PORT:-3000}/" >/dev/null \
 		&& echo "✓ Plane UI отвечает" \
 		|| (echo "✗ Plane UI недоступен" && exit 1)
+
+smoke-mcp: ## Пост-деплой проверка: статус mcp-kanban + /health эндпойнт
+	@echo "[1/2] Статус mcp-kanban:"
+	@$(COMPOSE) $(COMPOSE_FILES) ps mcp-kanban
+	@echo
+	@echo "[2/2] MCP health check (http://localhost:$${MCP_HOST_PORT:-8787}/health)..."
+	@curl --fail --silent --max-time 10 \
+		"http://localhost:$${MCP_HOST_PORT:-8787}/health" >/dev/null \
+		&& echo "✓ MCP отвечает" \
+		|| (echo "✗ MCP недоступен" && exit 1)
 
 config: ## Вывести merged compose-конфиг (полезно для отладки)
 	$(COMPOSE) $(COMPOSE_FILES) config

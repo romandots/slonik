@@ -45,7 +45,7 @@ push в main ──► release-deploy.yml:
    deploy (SSH на прод: pull → compose up --wait → health-gate → rollback при провале)
         │
         ▼
-   smoke (make smoke на проде)
+   smoke (make smoke-mcp на проде)
 ```
 
 Версия образа берётся из `mcp-kanban/package.json` → поле `version`.
@@ -92,8 +92,12 @@ push в main ──► release-deploy.yml:
 
 ### 3.4 `smoke` — пост-деплой проверка
 
-После успешного деплоя — `make smoke` на проде (`docker compose ps` + curl
-Plane UI). Падение smoke помечает workflow красным (но контейнер уже поднят).
+После успешного деплоя — `make smoke-mcp` на проде: статус контейнера
+`mcp-kanban` + `GET http://localhost:${MCP_HOST_PORT:-8787}/health`. Проверяется
+именно то, что деплоится (опубликованный порт MCP), без завязки на топологию
+Plane/прокси. Падение smoke помечает workflow красным (но контейнер уже поднят).
+Цель `make smoke` (проверка Plane UI на `localhost:${PLANE_HOST_PORT:-3000}`)
+остаётся для локальной/dev-проверки, где порт Plane опубликован на хост.
 
 ---
 
@@ -274,7 +278,7 @@ retention-политикой пакета).
 | `sed: .env: Permission denied` | `.env` не писабелен для `SSH_USER` — поправь владельца/права |
 | деплой не стартует на push | push не в `main`, либо required reviewers в `production` ждут approve |
 | образ собрался, но прод на старой версии | `SLONK_MCP_IMAGE_TAG` в `.env` не обновился (провал health-gate → откат) — смотри лог деплоя |
-| smoke красный, контейнер живой | Plane ещё поднимается / proxy не готов — проверь `docker compose ps`, повтори `make smoke` |
+| smoke красный, контейнер живой | MCP ещё прогревается — проверь `docker compose ps mcp-kanban`, повтори `make smoke-mcp`; для Plane UI на проде помни, что порт не опубликован (см. §3.4) |
 
 ---
 
