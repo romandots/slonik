@@ -33,6 +33,7 @@ import { OAuthStore } from './oauth/store.js';
 import { registerOAuthRoutes } from './oauth/routes.js';
 import { resourceUri } from './oauth/metadata.js';
 import { hashToken as hashTokenForAuth } from './oauth/crypto.js';
+import { OAUTH_STORE_DEFAULT_PATH } from './oauth/defaults.js';
 
 const SERVER_VERSION = readPackageVersion();
 
@@ -60,7 +61,8 @@ export interface BuildServerOptions {
 
 export const AUDIT_STORE_DEFAULT_PATH = '/mcp_data/audit.sqlite';
 export const GIT_REFS_STORE_DEFAULT_PATH = '/mcp_data/git_refs.sqlite';
-export const OAUTH_STORE_DEFAULT_PATH = '/mcp_data/oauth.sqlite';
+// Источник правды — oauth/defaults.ts; re-export сохраняет публичный API модуля.
+export { OAUTH_STORE_DEFAULT_PATH };
 
 export interface BuiltServer {
   app: FastifyInstance;
@@ -704,17 +706,40 @@ async function main(): Promise<void> {
 //   (нет)         — запуск HTTP-сервера (см. main()).
 //   bootstrap     — идемпотентный bootstrap Plane.
 //   add-role      — интерактивно создать новый файл `roles/<role>.md` (SLONK-12).
+//   add-tenant    — зарегистрировать тенанта (workspace+API key+пароль) в OAuth-сторе (SLONK-18).
 async function dispatch(): Promise<void> {
   const cmd = process.argv[2];
   if (cmd === 'bootstrap') {
     const { bootstrapCli } = await import('./bootstrap/cli.js');
-    await bootstrapCli();
+    // SLONK-18: остаток argv — флаги bootstrap (--workspace / --plane-api-key
+    // для multitenant); без них поведение байт-в-байт прежнее.
+    await bootstrapCli({ argv: process.argv.slice(3) });
     return;
   }
   if (cmd === 'add-role') {
     const { addRoleCli } = await import('./bootstrap/add-role.js');
     // process.argv[2] = 'add-role'; передаём остаток как флаги команды.
     await addRoleCli({ argv: process.argv.slice(3) });
+    return;
+  }
+  if (cmd === 'add-tenant') {
+    const { addTenantCli } = await import('./bootstrap/add-tenant.js');
+    // SLONK-18: регистрация тенанта (workspace + Plane API key + пароль) в
+    // OAuth-сторе для multitenant-режима.
+    try {
+      await addTenantCli({ argv: process.argv.slice(3) });
+    } catch (err) {
+      // `-h/--help` бросает Error(USAGE) (начинается с "Usage:") — это не
+      // ошибка: печатаем справку и выходим с кодом 0. Реальные ошибки ввода
+      // ("Unknown argument: …", zod) — пробрасываем в общий handler (exit 1).
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.startsWith('Usage:')) {
+
+        console.log(msg);
+        return;
+      }
+      throw err;
+    }
     return;
   }
   if (cmd !== undefined && cmd !== '') {

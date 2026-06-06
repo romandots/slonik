@@ -659,4 +659,47 @@ describe('runBootstrap', () => {
     expect(second.identities.skipped).toBe(1);
     expect(store.get('developer-agent')?.state_aliases).toEqual(['Разработка']);
   });
+
+  // ---------- SLONK-18: multitenant workspace override ----------
+
+  it('SLONK-18: workspaceSlugOverride bootstraps the tenant workspace, not the manifest one', async () => {
+    const world = newWorld();
+    const manifest = makeManifest();
+    // Сидим НЕ манифестный 'agents', а workspace тенанта.
+    world.workspaces.push({ id: 'ws-tenant', slug: 'tenant-x', name: 'Tenant X', owner: 'me' });
+    const plane = fakePlane(world);
+
+    const r = await runBootstrap({
+      plane,
+      store,
+      logger: silentLogger,
+      manifest,
+      config: { MCP_AGENT_IDENTITY_MODE: 'per_user' },
+      workspaceSlugOverride: 'tenant-x',
+    });
+
+    expect(r.workspace.slug).toBe('tenant-x');
+    expect(r.workspace.created).toBe(false);
+    expect(r.projects[0]?.created).toBe(true);
+    // invite/members шли в workspace тенанта, не в манифестный 'agents'.
+    expect(world.members.get('tenant-x')?.length).toBe(2);
+    expect(world.members.get('agents')).toBeUndefined();
+  });
+
+  it('SLONK-18: without override falls back to the manifest workspace (backward compat)', async () => {
+    const world = newWorld();
+    const manifest = makeManifest();
+    seedWorkspace(world, manifest);
+    const plane = fakePlane(world);
+
+    const r = await runBootstrap({
+      plane,
+      store,
+      logger: silentLogger,
+      manifest,
+      config: { MCP_AGENT_IDENTITY_MODE: 'per_user' },
+    });
+
+    expect(r.workspace.slug).toBe('agents');
+  });
 });

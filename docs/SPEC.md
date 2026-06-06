@@ -373,6 +373,44 @@ PlaneClient для workspace агента: если у тенанта пропи
 использует его, иначе берёт `PLANE_API_KEY` из ENV. `MCP_DEFAULT_WORKSPACE`
 авто-регистрируется как дефолтный тенант при старте сервера.
 
+**Регистрация тенантов (SLONK-18).** Сверх дефолтного workspace тенанты
+заводит оператор командой `add-tenant` (цель `make add-tenant`, контейнерный
+запуск — пишет в том `mcp_data/oauth.sqlite`):
+
+```bash
+make add-tenant ARGS="--workspace <slug> --plane-api-key <key> --password '<pass>'"
+```
+
+- `--workspace <slug>` — slug Plane-workspace тенанта (граница изоляции;
+  валидируется `^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`).
+- `--plane-api-key <key>` — workspace-scoped Plane API-ключ этого workspace.
+- `--password <pass>` — пароль для `/oauth/authorize?workspace=<slug>`
+  (≥8 символов). Если опущен — генерируется CSPRNG-пароль и печатается **один
+  раз**. Пароль хранится только как SHA-256 hex (`auth_token_hash`),
+  единообразно с дефолтным тенантом и со сверкой в `/oauth/authorize`.
+- `--max-clients <n>` — per-tenant cap OAuth-клиентов (default
+  `MCP_OAUTH_MAX_CLIENTS`).
+
+Команда идемпотентна (`ON CONFLICT(workspace) DO UPDATE`): повторный запуск
+обновляет ключ/пароль тенанта на месте. Plane API-ключ и сырой пароль не
+эхо-ятся обратно и не пишутся в лог.
+
+После регистрации тенанта его Plane-workspace инициализируется тем же
+bootstrap с override'ом workspace/ключа:
+
+```bash
+make bootstrap ARGS="--workspace <slug> --plane-api-key <key>"
+```
+
+Без флагов `bootstrap` работает как прежде (workspace из манифеста, ключ из
+`PLANE_API_KEY`). Workspace тенанта должен быть заранее создан в Plane UI —
+workspace-scoped API-токен не может создавать workspaces.
+
+**Ограничение:** смена API-ключа уже зарегистрированного тенанта на
+работающем сервере требует рестарта `mcp-kanban` (per-workspace PlaneClient
+кэшируется в памяти без TTL). Пароль (`auth_token_hash`) и новый тенант
+подхватываются из стора немедленно.
+
 ### 6.2 Перечень инструментов
 
 | Tool | Назначение |
