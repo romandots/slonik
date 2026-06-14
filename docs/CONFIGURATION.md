@@ -126,7 +126,7 @@ Compose автоматически собирает `AMQP_URL` для Celery и�
 | `MINIO_BUCKET_PLANE` | `plane-uploads` | bucket для вложений Plane (создаётся автоматически на старте `plane-api`); SSRF-фильтр inline-asset парсера комментариев (SLONK-14) принимает только URL'ы первого сегмента path = именно этого bucket |
 | `MINIO_BUCKET_MCP` | `mcp-artifacts` | bucket для агент-артефактов (используется `attach_file`, discovery `mcp_artifact`-source в `list_attachments`) |
 | `MINIO_INTERNAL_ENDPOINT` | `http://minio:9000` | Внутренний URL MinIO/S3, используется MCP для `statObject` / `listObjectsV2` и как одна из двух known-origin для SSRF-whitelist. По умолчанию hardcoded в compose; переопределяется только при внешнем S3 |
-| `MINIO_PUBLIC_ENDPOINT` | `http://localhost:9000` | Внешний URL MinIO для presigned GET URL (SLONK-14, `read_attachment` / `list_attachments`). Этот hostname:port агент будет открывать с хоста; он же — вторая разрешённая origin для SSRF-whitelist парсера inline-asset'ов комментариев. Если MinIO стоит за reverse-proxy, поставьте сюда внешний hostname proxy |
+| `MINIO_PUBLIC_ENDPOINT` | `http://localhost:9000` | Внешний URL MinIO для presigned GET URL (SLONK-14, `read_attachment` / `list_attachments`). Этот hostname:port агент будет открывать с хоста; он же — вторая разрешённая origin для SSRF-whitelist парсера inline-asset'ов комментариев. В проде за внешним Caddy (SLONK-21) поставьте сюда публичный домен MinIO с https, напр. `https://minio.slonk.example.com` (= `CADDY_MINIO_DOMAIN`) — тогда presigned URL скачивается агентом из интернета |
 | `MINIO_ACCESS_KEY` | `${MINIO_ROOT_USER}` | Access key для MCP-клиента MinIO (SLONK-14). В v1 — те же root-creds, что у Plane; в Phase 7 рекомендуется разделить service-account с read-only policy |
 | `MINIO_SECRET_KEY` | `${MINIO_ROOT_PASSWORD}` | **(secret)** Secret key для MCP-клиента MinIO (SLONK-14). Редактируется в логах pino |
 | `MINIO_USE_SSL` | `0` | TLS для presigned URL'ов MCP-клиента MinIO (SLONK-14, `1` = `https`, `0` = `http`). Default `0` для bundled-MinIO; в проде с TLS — `1` |
@@ -240,6 +240,7 @@ make add-tenant ARGS="--workspace acme --plane-api-key plane_api_xxx --password 
 |---|---|---|
 | `CADDY_DOMAIN` | `slonk.example.com` | основной FQDN |
 | `CADDY_MCP_DOMAIN` | `mcp.slonk.example.com` | FQDN для MCP |
+| `CADDY_MINIO_DOMAIN` | `minio.slonk.example.com` | FQDN для MinIO S3 API (SLONK-21). Caddy проксирует его на `minio:9000`; под этот домен MCP подписывает presigned GET URL'ы (`MINIO_PUBLIC_ENDPOINT=https://<этот-домен>`), чтобы агент мог скачивать аттачи из интернета |
 | `CADDY_ACME_EMAIL` | — | email для Let's Encrypt |
 
 ### 2.8 Backup (опц.)
@@ -638,6 +639,13 @@ bridge через `mcp-remote` можно будет убрать.
   encode zstd gzip
   reverse_proxy mcp-kanban:8787
   # MCP требует поддержки SSE; Caddy умеет это «из коробки»
+}
+
+{$CADDY_MINIO_DOMAIN} {
+  # MinIO S3 API наружу (SLONK-21) — presigned GET для read_attachment.
+  # Host НЕ переписываем: SigV4-подпись считается по этому домену, Caddy по
+  # умолчанию пробрасывает исходный Host, MinIO пересчитывает подпись по нему.
+  reverse_proxy minio:9000
 }
 ```
 
