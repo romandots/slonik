@@ -8,6 +8,18 @@
 ## [Unreleased]
 
 ### Added
+- **Публичный домен MinIO для чтения аттачей агентом (SLONK-21).** Внешний Caddy
+  (overlay `docker-compose.proxy.yml`) получил сайт-блок для нового
+  `CADDY_MINIO_DOMAIN` → `reverse_proxy minio:9000`. Раньше presigned GET URL
+  из `read_attachment` указывал на `http://minio:9000` / `http://localhost:9000`
+  — внутренний адрес, недоступный облачному агенту, так что скачать PNG/PDF из
+  карточки было нельзя. Теперь `MINIO_PUBLIC_ENDPOINT=https://<CADDY_MINIO_DOMAIN>`
+  заставляет MCP подписывать URL под публичный хост, а Caddy терминирует TLS и
+  проксирует на внутренний MinIO. Host намеренно не переписывается — SigV4-подпись
+  считается по публичному домену, и MinIO пересчитывает её по проброшенному Host.
+  Код MCP-клиента не менялся (presign через `publicClient` уже был); добавлены
+  только маршрут Caddy и переменная `CADDY_MINIO_DOMAIN` (compose + `.env.example`
+  + CONFIGURATION).
 - **Выбор тенанта в форме OAuth-логина (SLONK-19).** Форма `/oauth/authorize`
   теперь содержит редактируемое поле **Workspace** (по умолчанию
   `MCP_DEFAULT_WORKSPACE`): оператор вводит slug тенанта + его пароль. Раньше
