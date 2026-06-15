@@ -33,6 +33,14 @@
   не авторизовал к несуществующему workspace. Поле `workspace` валидируется
   slug-regex + max-length. Инвариант изоляции (workspace из токена) сохранён.
 ### Fixed
+- **`read_attachment` падал с `STORAGE_UNAVAILABLE` при `MINIO_USE_SSL=1` (SLONK-23).**
+  Внутренний MinIO-клиент брал TLS как `internal.useSSL || MINIO_USE_SSL`, поэтому
+  с прод-конфигом (`MINIO_INTERNAL_ENDPOINT=http://minio:9000` + `MINIO_USE_SSL=1`)
+  он шёл по HTTPS на plaintext-порт MinIO и падал с
+  `ssl3_get_record:wrong version number` ещё на `statObject` — до выдачи presigned
+  URL. `MINIO_USE_SSL` относится только к presign-стороне: теперь флаг влияет на
+  public-клиент, а internal-клиент берёт схему строго из `MINIO_INTERNAL_ENDPOINT`.
+  Добавлен регрессионный тест на разрешение TLS обоих клиентов.
 - **Периодическая «потеря MCP-подключения» у remote-коннектора claude.ai.**
   Две независимые причины обрыва, обе чинятся на стороне сервера:
   - *Протухший OAuth access-токен (раз в `MCP_OAUTH_ACCESS_TTL_SEC`, по

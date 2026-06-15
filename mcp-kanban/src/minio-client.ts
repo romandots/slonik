@@ -72,17 +72,24 @@ export class RealMinioClient implements MinioClient {
         : internal;
     const accessKey = opts.config.MINIO_ACCESS_KEY ?? '';
     const secretKey = opts.config.MINIO_SECRET_KEY ?? '';
+    // `MINIO_USE_SSL` управляет TLS только для presign-стороны (см.
+    // CONFIGURATION.md) — поэтому OR'им его в public-клиент, а НЕ в internal.
+    // internal-клиент ходит server-to-server на `MINIO_INTERNAL_ENDPOINT`
+    // (обычно plaintext `http://minio:9000`); его TLS обязан определяться
+    // строго схемой этого URL. Иначе при `MINIO_USE_SSL=1` internal-клиент
+    // полез бы по HTTPS на plaintext-порт MinIO и падал бы с
+    // `ssl3_get_record:wrong version number` (SLONK-23).
     this.publicClient = new MinioSdkClient({
       endPoint: publicEndpoint.host,
       port: publicEndpoint.port,
-      useSSL: publicEndpoint.useSSL,
+      useSSL: publicEndpoint.useSSL || opts.config.MINIO_USE_SSL,
       accessKey,
       secretKey,
     });
     this.internalClient = new MinioSdkClient({
       endPoint: internal.host,
       port: internal.port,
-      useSSL: internal.useSSL || opts.config.MINIO_USE_SSL,
+      useSSL: internal.useSSL,
       accessKey,
       secretKey,
     });
