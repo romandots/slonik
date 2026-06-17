@@ -452,7 +452,7 @@ function stripTags(s: string): string {
  * FakeMinioClient — in-memory MinIO для тестов SLONK-14.
  *
  * Объекты живут в `world.minioObjects` (ключ = `<bucket>:<objectKey>`).
- * `presignedGetObject` отдаёт детерминированный fake-URL
+ * `presigned*Object` отдают детерминированные fake-URL'ы
  * (`fake://${bucket}/${key}?expires=N`), `statObject` достаёт entry или
  * бросает `NOT_FOUND`, `listObjectsV2` фильтрует по `<bucket>:<prefix>`.
  *
@@ -461,6 +461,9 @@ function stripTags(s: string): string {
  */
 export function fakeMinio(world: FakeWorld): MinioClient {
   return {
+    async ensureBucket(_bucket: string): Promise<void> {
+      return;
+    },
     async statObject(bucket: string, objectKey: string): Promise<MinioStat> {
       const obj = world.minioObjects.get(`${bucket}:${objectKey}`);
       if (obj === undefined) {
@@ -479,6 +482,9 @@ export function fakeMinio(world: FakeWorld): MinioClient {
       // Включаем X-Amz-Signature-like подпись, чтобы тесты могли проверить
       // редакцию presigned URL'ов в логах.
       return `https://fake-minio.local/${bucket}/${objectKey}?X-Amz-Signature=fake-signature&X-Amz-Expires=${expirySec}`;
+    },
+    async presignedPutObject(bucket: string, objectKey: string, expirySec: number): Promise<string> {
+      return `https://fake-minio.local/${bucket}/${objectKey}?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=fake-put-signature&X-Amz-Expires=${expirySec}`;
     },
     async listObjectsV2(bucket: string, prefix: string): Promise<MinioObject[]> {
       if (world.failMinioList) {

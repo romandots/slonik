@@ -500,7 +500,6 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
         resolvePlaneUserId: () => identityStore.get(identity)?.plane_user_id ?? null,
         minioBucket: config.MINIO_BUCKET_MCP,
         minioBucketPlane: config.MINIO_BUCKET_PLANE,
-        minioEndpoint: config.MINIO_INTERNAL_ENDPOINT,
         minioEndpoints: collectMinioEndpoints(config),
         minio,
         signedUrlExpirationSec: config.PLANE_SIGNED_URL_EXPIRATION,

@@ -8,6 +8,14 @@
 ## [Unreleased]
 
 ### Added
+- **Настоящий SigV4 presigned PUT для `attach_file` (SLONK-22).**
+  Presign-фаза больше не возвращает stub вида `http://minio:9000/<bucket>/<key>`:
+  MCP создаёт `MINIO_BUCKET_MCP` при первом upload-presign и выдаёт временный
+  `PUT` URL, подписанный MinIO SDK через public endpoint (`MINIO_PUBLIC_ENDPOINT`).
+  `complete=true` проверяет, что объект уже загружен, и публикует в комментарии
+  временную presigned GET-ссылку под тем же публичным доменом. Кастомный
+  `X-Slonk-Identity` убран из `required_headers`, потому что он не участвует в
+  SigV4-подписи SDK и мог ломать загрузку у клиентов.
 - **Публичный домен MinIO для чтения аттачей агентом (SLONK-21).** Внешний Caddy
   (overlay `docker-compose.proxy.yml`) получил сайт-блок для нового
   `CADDY_MINIO_DOMAIN` → `reverse_proxy minio:9000`. Раньше presigned GET URL

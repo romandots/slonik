@@ -4,9 +4,8 @@ import type { Config } from './config.js';
 import { McpError } from './errors.js';
 
 // Тонкая обёртка над `minio` npm SDK. Контракт узкий: только те операции,
-// которые реально нужны для read_attachment / list_attachments
-// (SLONK-14). Запись (presignedPutObject и т.п.) намеренно отсутствует —
-// write-side `attach_file` остаётся v1-stub'ом до отдельной задачи.
+// которые реально нужны для read_attachment / list_attachments / attach_file
+// (SLONK-14, SLONK-22).
 //
 // Все ошибки SDK заворачиваем в `McpError({code: 'STORAGE_UNAVAILABLE'})`,
 // 404 на `statObject` — в `NOT_FOUND`. Это даёт хендлерам единый
@@ -32,13 +31,15 @@ export interface MinioObject {
  * `RealMinioClient` (поверх `minio` SDK); тестовая — `FakeMinioClient`
  * (в `tools/test-fakes.ts`).
  *
- * Метод `presignedGetObject` возвращает временный URL. Контракт: получатель
- * этого URL делает обычный HTTP GET без дополнительных заголовков.
+ * Методы `presigned*Object` возвращают временные URL'ы. Контракт: получатель
+ * URL делает обычный HTTP GET/PUT без дополнительных обязательных заголовков.
  * Срок жизни — `expirySec`.
  */
 export interface MinioClient {
+  ensureBucket(bucket: string): Promise<void>;
   statObject(bucket: string, objectKey: string): Promise<MinioStat>;
   presignedGetObject(bucket: string, objectKey: string, expirySec: number): Promise<string>;
+  presignedPutObject(bucket: string, objectKey: string, expirySec: number): Promise<string>;
   listObjectsV2(bucket: string, prefix: string): Promise<MinioObject[]>;
   /** Health-check: возвращает true, если MinIO доступен (для /health). */
   checkHealth(): Promise<boolean>;
@@ -95,6 +96,17 @@ export class RealMinioClient implements MinioClient {
     });
   }
 
+  async ensureBucket(bucket: string): Promise<void> {
+    try {
+      if (await this.internalClient.bucketExists(bucket)) return;
+      await this.internalClient.makeBucket(bucket);
+    } catch (err) {
+      const code = (err as MinioErrorLike)?.code;
+      if (code === 'BucketAlreadyOwnedByYou' || code === 'BucketAlreadyExists') return;
+      throw mapMinioError(err, `ensureBucket(${bucket})`);
+    }
+  }
+
   async statObject(bucket: string, objectKey: string): Promise<MinioStat> {
     try {
       const stat = await this.internalClient.statObject(bucket, objectKey);
@@ -119,6 +131,16 @@ export class RealMinioClient implements MinioClient {
       return await this.publicClient.presignedGetObject(bucket, objectKey, expirySec);
     } catch (err) {
       throw mapMinioError(err, `presignedGetObject(${bucket}, ${objectKey})`);
+    }
+  }
+
+  async presignedPutObject(bucket: string, objectKey: string, expirySec: number): Promise<string> {
+    try {
+      // SDK подписывает URL для endpoint'а, прописанного при инициализации,
+      // — поэтому presign идёт через `publicClient` (внешний URL).
+      return await this.publicClient.presignedPutObject(bucket, objectKey, expirySec);
+    } catch (err) {
+      throw mapMinioError(err, `presignedPutObject(${bucket}, ${objectKey})`);
     }
   }
 
