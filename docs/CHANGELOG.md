@@ -7,6 +7,14 @@
 
 ## [Unreleased]
 
+### Changed
+- **`plane-worker` baseline `mem_limit` поднят `384m → 768m` (SLONK-9).**
+  QA-прогон выявил циклические OOM-kill'ы (`exit 137`) при Celery-нагрузке
+  (notifications, webhooks, mass-update'ы). Новый лимит даёт +50% запаса.
+  `docs/CONFIGURATION.md §5` обновлён: таблица, сумма лимитов (`~3.9 GiB`),
+  headroom на 4 GB-хосте (`~100 MiB`, рекомендуется минимум 6 GB), секция 8 GB
+  (`plane-worker → 1g`).
+
 ### Added
 - Добавлен режим прямой загрузки файлов через `attach_file.content_base64` для MCP-клиентов (SLONK-27).
 - **Inline-изображения Plane editor в `list_attachments` / `read_attachment` (SLONK-24).**
