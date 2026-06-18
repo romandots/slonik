@@ -8,6 +8,7 @@
 ## [Unreleased]
 
 ### Added
+- Добавлен режим прямой загрузки файлов через `attach_file.content_base64` для MCP-клиентов (SLONK-27).
 - **Inline-изображения Plane editor в `list_attachments` / `read_attachment` (SLONK-24).**
   Discovery `plane_comment_inline` теперь распознаёт не только прямые MinIO URL,
   но и TipTap/Plane `<image-component src="<asset-uuid>">` в комментариях и

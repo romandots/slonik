@@ -1,8 +1,10 @@
+import { createHash } from 'node:crypto';
 import type { PlaneClient } from '../../plane-client.js';
 import type { TtlCache } from '../../cache.js';
 import type { AgentIdentity } from '../../identity.js';
 import type { MinioClient } from '../../minio-client.js';
 import { McpError } from '../../errors.js';
+import { mcaIdFromObjectKey, type PublicAttachment } from '../../attachments/types.js';
 import { resolveProject } from '../project-resolver.js';
 import { parseIssueRef } from '../get-issue/schema.js';
 import { resolveIssueId } from '../update-issue/handler.js';
@@ -32,6 +34,16 @@ export interface CompleteResult {
   object_key: string;
 }
 
+export interface DirectUploadResult {
+  kind: 'direct';
+  issue_id: string;
+  object_key: string;
+  size: number;
+  attachment: PublicAttachment;
+}
+
+const DIRECT_UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
+
 export async function attachFile(deps: {
   plane: PlaneClient;
   cache: TtlCache;
@@ -44,8 +56,8 @@ export async function attachFile(deps: {
   /** TTL presigned (MCP_PLANE_TIMEOUT… не подходит, отдельный SPEC). */
   expiresInSec: number;
   input: AttachFileInput;
-}): Promise<PresignResult | CompleteResult> {
-  const parsed = parseIssueRef(deps.input.issue_id);
+}): Promise<PresignResult | CompleteResult | DirectUploadResult> {
+  const parsed = parseIssueRef(String(deps.input.issue_id));
   const project = await resolveProject({
     plane: deps.plane,
     workspaceSlug: deps.workspace,
@@ -57,6 +69,50 @@ export async function attachFile(deps: {
     defaultProjectRef: deps.defaultProjectRef,
   });
   const issueId = await resolveIssueId(deps.plane, deps.workspace, project, parsed);
+
+  if (deps.input.content_base64) {
+    if (deps.input.size > DIRECT_UPLOAD_MAX_BYTES) {
+      throw new McpError({
+        code: 'INVALID_INPUT',
+        message: `direct upload size exceeds ${DIRECT_UPLOAD_MAX_BYTES} bytes`,
+      });
+    }
+    const objectKey = makeObjectKey(deps.identity, deps.input.filename, issueId);
+    const content = decodeBase64(deps.input.content_base64);
+    if (content.byteLength !== deps.input.size) {
+      throw new McpError({
+        code: 'INVALID_INPUT',
+        message: `content_base64 decodes to ${content.byteLength} bytes, expected size ${deps.input.size}`,
+      });
+    }
+
+    await deps.minio.putObject(deps.bucket, objectKey, content, content.byteLength, {
+      'Content-Type': deps.input.mime_type,
+    });
+    await deps.plane.createIssueComment(deps.workspace, project.id, issueId, {
+      comment_html: formatComment(
+        deps.identity,
+        `attached <code>${deps.input.filename}</code> (${deps.input.size} bytes) as <code>${objectKey}</code>`,
+      ),
+    });
+    deps.cache.clear();
+
+    return {
+      kind: 'direct',
+      issue_id: issueId,
+      object_key: objectKey,
+      size: content.byteLength,
+      attachment: {
+        id: mcaIdFromObjectKey(objectKey, sha1),
+        source: 'mcp_artifact',
+        filename: deps.input.filename,
+        mime_type: deps.input.mime_type,
+        size: content.byteLength,
+        uploaded_at: new Date().toISOString(),
+        uploaded_by: deps.identity,
+      },
+    };
+  }
 
   if (deps.input.complete === true) {
     if (deps.input.object_key === undefined) {
@@ -106,6 +162,19 @@ function makeObjectKey(identity: AgentIdentity, filename: string, issueId: strin
   return `issues/${issueId}/${ts}-${identity}-${safe}`;
 }
 
+function decodeBase64(value: string): Buffer {
+  const normalized = value.replace(/\s/g, '');
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(normalized) || normalized.length % 4 !== 0) {
+    throw new McpError({ code: 'INVALID_INPUT', message: 'content_base64 must be valid standard base64' });
+  }
+
+  const decoded = Buffer.from(normalized, 'base64');
+  if (decoded.toString('base64') !== normalized) {
+    throw new McpError({ code: 'INVALID_INPUT', message: 'content_base64 must be canonical standard base64' });
+  }
+  return decoded;
+}
+
 function ensureObjectKeyBelongsToIssue(objectKey: string, issueId: string): void {
   const expectedPrefix = `issues/${issueId}/`;
   if (!objectKey.startsWith(expectedPrefix)) {
@@ -114,4 +183,8 @@ function ensureObjectKeyBelongsToIssue(objectKey: string, issueId: string): void
       message: 'object_key must be the key returned by attach_file presign for this issue',
     });
   }
+}
+
+function sha1(value: string): string {
+  return createHash('sha1').update(value).digest('hex');
 }
