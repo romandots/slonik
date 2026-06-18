@@ -8,6 +8,7 @@
 ## [Unreleased]
 
 ### Added
+- Добавлен режим прямой загрузки файлов через `attach_file.content_base64` для MCP-клиентов (SLONK-27).
 - **Встроенный OAuth 2.1 Authorization Server** для добавления self-hosted slonk
   как remote-коннектора на claude.ai (Phase 11, SLONK-oauth). Реализация следует
   RFC 9728 (Protected Resource Metadata), RFC 8414 (Authorization Server Metadata),
