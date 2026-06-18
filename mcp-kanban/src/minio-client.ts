@@ -4,9 +4,8 @@ import type { Config } from './config.js';
 import { McpError } from './errors.js';
 
 // Тонкая обёртка над `minio` npm SDK. Контракт узкий: только те операции,
-// которые реально нужны read- и write-tool'ам — `statObject`,
-// `presignedGetObject`, `listObjectsV2` (read_attachment / list_attachments,
-// SLONK-14) и `presignedPutObject` (write-side `attach_file`, SLONK-18).
+// которые реально нужны для read_attachment / list_attachments / attach_file
+// (SLONK-14, SLONK-22).
 //
 // Все ошибки SDK заворачиваем в `McpError({code: 'STORAGE_UNAVAILABLE'})`,
 // 404 на `statObject` — в `NOT_FOUND`. Это даёт хендлерам единый
@@ -32,11 +31,12 @@ export interface MinioObject {
  * `RealMinioClient` (поверх `minio` SDK); тестовая — `FakeMinioClient`
  * (в `tools/test-fakes.ts`).
  *
- * Метод `presignedGetObject` возвращает временный URL. Контракт: получатель
- * этого URL делает обычный HTTP GET без дополнительных заголовков.
+ * Методы `presigned*Object` возвращают временные URL'ы. Контракт: получатель
+ * URL делает обычный HTTP GET/PUT без дополнительных обязательных заголовков.
  * Срок жизни — `expirySec`.
  */
 export interface MinioClient {
+  ensureBucket(bucket: string): Promise<void>;
   statObject(bucket: string, objectKey: string): Promise<MinioStat>;
   putObject(
     bucket: string,
@@ -46,13 +46,6 @@ export interface MinioClient {
     metaData?: Record<string, string>,
   ): Promise<void>;
   presignedGetObject(bucket: string, objectKey: string, expirySec: number): Promise<string>;
-  /**
-   * Временный URL для прямого аплоада агентом (HTTP PUT тела файла).
-   * Контракт: получатель делает `PUT <url>` с телом файла; авторизация
-   * закодирована в query-подписи, поэтому дополнительных заголовков не
-   * требуется (Content-Type можно проставить, но он не входит в подпись).
-   * Срок жизни — `expirySec`. Используется write-side `attach_file` (SLONK-18).
-   */
   presignedPutObject(bucket: string, objectKey: string, expirySec: number): Promise<string>;
   listObjectsV2(bucket: string, prefix: string): Promise<MinioObject[]>;
   /** Health-check: возвращает true, если MinIO доступен (для /health). */
@@ -87,20 +80,38 @@ export class RealMinioClient implements MinioClient {
         : internal;
     const accessKey = opts.config.MINIO_ACCESS_KEY ?? '';
     const secretKey = opts.config.MINIO_SECRET_KEY ?? '';
+    // `MINIO_USE_SSL` управляет TLS только для presign-стороны (см.
+    // CONFIGURATION.md) — поэтому OR'им его в public-клиент, а НЕ в internal.
+    // internal-клиент ходит server-to-server на `MINIO_INTERNAL_ENDPOINT`
+    // (обычно plaintext `http://minio:9000`); его TLS обязан определяться
+    // строго схемой этого URL. Иначе при `MINIO_USE_SSL=1` internal-клиент
+    // полез бы по HTTPS на plaintext-порт MinIO и падал бы с
+    // `ssl3_get_record:wrong version number` (SLONK-23).
     this.publicClient = new MinioSdkClient({
       endPoint: publicEndpoint.host,
       port: publicEndpoint.port,
-      useSSL: publicEndpoint.useSSL,
+      useSSL: publicEndpoint.useSSL || opts.config.MINIO_USE_SSL,
       accessKey,
       secretKey,
     });
     this.internalClient = new MinioSdkClient({
       endPoint: internal.host,
       port: internal.port,
-      useSSL: internal.useSSL || opts.config.MINIO_USE_SSL,
+      useSSL: internal.useSSL,
       accessKey,
       secretKey,
     });
+  }
+
+  async ensureBucket(bucket: string): Promise<void> {
+    try {
+      if (await this.internalClient.bucketExists(bucket)) return;
+      await this.internalClient.makeBucket(bucket);
+    } catch (err) {
+      const code = (err as MinioErrorLike)?.code;
+      if (code === 'BucketAlreadyOwnedByYou' || code === 'BucketAlreadyExists') return;
+      throw mapMinioError(err, `ensureBucket(${bucket})`);
+    }
   }
 
   async statObject(bucket: string, objectKey: string): Promise<MinioStat> {
@@ -146,8 +157,8 @@ export class RealMinioClient implements MinioClient {
 
   async presignedPutObject(bucket: string, objectKey: string, expirySec: number): Promise<string> {
     try {
-      // Как и GET: PUT-URL должен указывать на внешний endpoint, иначе агент
-      // вне docker-сети не достучится — подписываем через `publicClient`.
+      // SDK подписывает URL для endpoint'а, прописанного при инициализации,
+      // — поэтому presign идёт через `publicClient` (внешний URL).
       return await this.publicClient.presignedPutObject(bucket, objectKey, expirySec);
     } catch (err) {
       throw mapMinioError(err, `presignedPutObject(${bucket}, ${objectKey})`);

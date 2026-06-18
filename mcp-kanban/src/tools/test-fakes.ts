@@ -14,6 +14,7 @@ import type {
   PlaneProject,
   PlaneState,
   PlaneUser,
+  PlaneWorkspaceAsset,
   PlaneWorkspace,
 } from '../plane-client.js';
 import type { MinioClient, MinioObject, MinioStat } from '../minio-client.js';
@@ -34,6 +35,8 @@ export interface FakeWorld {
   inviteResponses: Map<string, { id: string; email: string } | Error>;
   /** SLONK-14: UI-attachments Plane по ключу `<projectId>:<issueId>`. */
   planeAttachments: Map<string, PlaneAttachment[]>;
+  /** SLONK-24: workspace assets Plane по ключу `<workspaceSlug>:<assetId>`. */
+  workspaceAssets: Map<string, PlaneWorkspaceAsset>;
   /** SLONK-14: объекты MinIO по ключу `<bucket>:<objectKey>`. */
   minioObjects: Map<string, { size: number; contentType?: string; lastModified?: Date; content?: Buffer }>;
   /** SLONK-14: симулируемые ошибки источников (для partial-failure тестов). */
@@ -58,6 +61,7 @@ export function newWorld(): FakeWorld {
     members: new Map(),
     inviteResponses: new Map(),
     planeAttachments: new Map(),
+    workspaceAssets: new Map(),
     minioObjects: new Map(),
     failPlaneAttachments: false,
     failMinioList: false,
@@ -401,6 +405,9 @@ export function fakePlane(world: FakeWorld): PlaneClient {
       }
       return [...(world.planeAttachments.get(`${projectId}:${issueId}`) ?? [])];
     },
+    async getWorkspaceAsset(ws: string, assetId: string) {
+      return world.workspaceAssets.get(`${ws}:${assetId}`);
+    },
     async createIssueComment(_ws: string, projectId: string, issueId: string, input: { comment_html: string }) {
       const key = `${projectId}:${issueId}`;
       const arr = world.comments.get(key) ?? [];
@@ -452,7 +459,7 @@ function stripTags(s: string): string {
  * FakeMinioClient — in-memory MinIO для тестов SLONK-14.
  *
  * Объекты живут в `world.minioObjects` (ключ = `<bucket>:<objectKey>`).
- * `presignedGetObject` отдаёт детерминированный fake-URL
+ * `presigned*Object` отдают детерминированные fake-URL'ы
  * (`fake://${bucket}/${key}?expires=N`), `statObject` достаёт entry или
  * бросает `NOT_FOUND`, `listObjectsV2` фильтрует по `<bucket>:<prefix>`.
  *
@@ -461,6 +468,9 @@ function stripTags(s: string): string {
  */
 export function fakeMinio(world: FakeWorld): MinioClient {
   return {
+    async ensureBucket(_bucket: string): Promise<void> {
+      return;
+    },
     async statObject(bucket: string, objectKey: string): Promise<MinioStat> {
       const obj = world.minioObjects.get(`${bucket}:${objectKey}`);
       if (obj === undefined) {
@@ -496,9 +506,7 @@ export function fakeMinio(world: FakeWorld): MinioClient {
       return `https://fake-minio.local/${bucket}/${objectKey}?X-Amz-Signature=fake-signature&X-Amz-Expires=${expirySec}`;
     },
     async presignedPutObject(bucket: string, objectKey: string, expirySec: number): Promise<string> {
-      // Тот же детерминированный signed-URL, но с X-Amz-Method=PUT, чтобы
-      // тесты могли отличить upload- от download-подписи.
-      return `https://fake-minio.local/${bucket}/${objectKey}?X-Amz-Signature=fake-signature&X-Amz-Method=PUT&X-Amz-Expires=${expirySec}`;
+      return `https://fake-minio.local/${bucket}/${objectKey}?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=fake-put-signature&X-Amz-Expires=${expirySec}`;
     },
     async listObjectsV2(bucket: string, prefix: string): Promise<MinioObject[]> {
       if (world.failMinioList) {
@@ -553,6 +561,15 @@ export function addPlaneAttachment(
   const arr = world.planeAttachments.get(key) ?? [];
   arr.push(attachment);
   world.planeAttachments.set(key, arr);
+}
+
+/** Seed-хелпер: кладёт workspace asset Plane для image-component refs. */
+export function addWorkspaceAsset(
+  world: FakeWorld,
+  workspaceSlug: string,
+  asset: PlaneWorkspaceAsset,
+): void {
+  world.workspaceAssets.set(`${workspaceSlug}:${asset.id}`, asset);
 }
 
 /** Seed-хелпер: добавляет комментарий с заданным html (для inline-asset парсера). */

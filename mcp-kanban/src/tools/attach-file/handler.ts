@@ -1,81 +1,62 @@
 import { createHash } from 'node:crypto';
 import type { PlaneClient } from '../../plane-client.js';
-import type { MinioClient } from '../../minio-client.js';
 import type { TtlCache } from '../../cache.js';
 import type { AgentIdentity } from '../../identity.js';
 import type { MinioClient } from '../../minio-client.js';
-import type { PlaneClient } from '../../plane-client.js';
 import { McpError } from '../../errors.js';
 import { mcaIdFromObjectKey, type PublicAttachment } from '../../attachments/types.js';
-import { parseIssueRef } from '../get-issue/schema.js';
 import { resolveProject } from '../project-resolver.js';
+import { parseIssueRef } from '../get-issue/schema.js';
 import { resolveIssueId } from '../update-issue/handler.js';
 import { formatComment } from '../comment-issue/handler.js';
-import { mcaIdFromObjectKey } from '../../attachments/types.js';
 import type { AttachFileInput } from './schema.js';
 
-// `attach_file` — двухфазная операция (SPEC §6.2), реализованная поверх
-// реального MinIO presign (SLONK-18):
+// `attach_file` — двухфазная операция (см. SPEC §6.2):
 //
-//   1) Без `complete=true` — выдаём НАСТОЯЩИЙ presigned PUT URL
-//      (`minio.presignedPutObject`). Агент делает `PUT <upload_url>` с телом
-//      файла напрямую в bucket агент-артефактов. Авторизация — в query-подписи,
-//      обязательных заголовков нет (Content-Type — опциональная подсказка).
-//   2) С `complete=true` и `object_key` — подтверждаем аплоад:
-//      `statObject` проверяет, что файл реально лёг (контракт «complete OK →
-//      файл на месте»), затем регистрируем его как mcp-artifact (он живёт под
-//      префиксом `issues/<id>/`, поэтому виден через `list_attachments` и
-//      резолвится `read_attachment` по стабильному `mca_`-id) и постим
-//      аннотацию-комментарий. Это закрывает прикрепление и к задаче (артефакт),
-//      и к комментарию (аннотация со ссылкой на artifact-id).
+//   1) Без `complete=true` — создаём object_key и отдаём настоящий SigV4
+//      presigned PUT URL через public MinIO endpoint.
+//   2) С `complete=true` и `object_key` — проверяем, что объект уже лежит в
+//      MinIO, и публикуем в комментарии временную presigned GET ссылку.
 
 export interface PresignResult {
   kind: 'presign';
-  issue_id: string;
-  object_key: string;
   upload_url: string;
-  method: 'PUT';
-  /** Подсказка по заголовкам: Content-Type не входит в подпись, но агент
-   *  обычно хочет проставить его при PUT. */
+  method: 'PUT' | 'POST';
   required_headers: Record<string, string>;
   object_key: string;
   /** Сколько секунд URL валиден. */
   expires_in: number;
-  required_headers: Record<string, string>;
-};
+}
 
-export type CompleteResult = {
+export interface CompleteResult {
   kind: 'complete';
   issue_id: string;
   object_key: string;
-  /** Стабильный id артефакта — резолвится `read_attachment(attachment_id)`. */
-  attachment_id: string;
-  filename: string;
-  mime_type: string;
-  size: number;
-  /** Свежий presigned GET для удобства вызывающего (в комментарий НЕ пишется —
-   *  туда идёт только стабильный artifact-id, чтобы не плодить протухающие
-   *  ссылки и не оставлять X-Amz-Signature в истории задачи). */
-  download_url: string;
-  comment_id: string;
 }
 
-export interface AttachFileDeps {
-  plane: PlaneClient;
-  minio: MinioClient;
-  cache: TtlCache;
-  workspace: string;
-  defaultProjectRef: string;
-  identity: AgentIdentity;
-  bucket: string;
-  /** TTL presigned URL'ов в секундах. */
-  expiresInSec: number;
-  input: AttachFileInput;
+export interface DirectUploadResult {
+  kind: 'direct';
+  issue_id: string;
+  object_key: string;
+  size: number;
+  attachment: PublicAttachment;
 }
 
 const DIRECT_UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
 
-export async function attachFile(deps: AttachFileDeps): Promise<PresignResult | CompleteResult | DirectUploadResult> {
+export async function attachFile(deps: {
+  plane: PlaneClient;
+  cache: TtlCache;
+  workspace: string;
+  defaultProjectRef: string;
+  identity: AgentIdentity;
+  /** MinIO bucket для агент-артефактов (MCP_*). */
+  bucket: string;
+  minio: MinioClient;
+  /** TTL presigned (MCP_PLANE_TIMEOUT… не подходит, отдельный SPEC). */
+  expiresInSec: number;
+  input: AttachFileInput;
+}): Promise<PresignResult | CompleteResult | DirectUploadResult> {
   const parsed = parseIssueRef(String(deps.input.issue_id));
   const project = await resolveProject({
     plane: deps.plane,
@@ -96,80 +77,89 @@ export async function attachFile(deps: AttachFileDeps): Promise<PresignResult | 
         message: `direct upload size exceeds ${DIRECT_UPLOAD_MAX_BYTES} bytes`,
       });
     }
-    const objectKey = makeObjectKey(issueId, deps.identity, deps.input.filename);
+    const objectKey = makeObjectKey(deps.identity, deps.input.filename, issueId);
     const content = decodeBase64(deps.input.content_base64);
     if (content.byteLength !== deps.input.size) {
       throw new McpError({
         code: 'INVALID_INPUT',
-        message: 'complete=true requires object_key (returned from the presign phase)',
+        message: `content_base64 decodes to ${content.byteLength} bytes, expected size ${deps.input.size}`,
       });
     }
-    const objectKey = deps.input.object_key;
-    // Защита от подмены чужого/произвольного ключа: complete принимает только
-    // ключи под префиксом этой задачи (тот же неймспейс, что выдаёт presign).
-    const expectedPrefix = `issues/${issueId}/`;
-    if (!objectKey.startsWith(expectedPrefix)) {
-      throw new McpError({
-        code: 'INVALID_INPUT',
-        message: `object_key must live under '${expectedPrefix}' for issue ${issueId}`,
-      });
-    }
-    // Контракт «complete OK → файл на месте»: 404 → NOT_FOUND
-    // («сначала загрузите файл на upload_url»).
-    const stat = await deps.minio.statObject(deps.bucket, objectKey);
-    const attachmentId = mcaIdFromObjectKey(objectKey, sha1);
-    const downloadUrl = await deps.minio.presignedGetObject(deps.bucket, objectKey, deps.expiresInSec);
 
-    const size = stat.size > 0 ? stat.size : deps.input.size;
-    const mimeType = stat.contentType ?? deps.input.mime_type;
-    const note = deps.input.note !== undefined ? ` — ${deps.input.note}` : '';
-    const comment = await deps.plane.createIssueComment(deps.workspace, project.id, issueId, {
+    await deps.minio.putObject(deps.bucket, objectKey, content, content.byteLength, {
+      'Content-Type': deps.input.mime_type,
+    });
+    await deps.plane.createIssueComment(deps.workspace, project.id, issueId, {
       comment_html: formatComment(
         deps.identity,
-        `attached <code>${escapeHtml(deps.input.filename)}</code> (${size} bytes), ` +
-          `attachment id <code>${attachmentId}</code> — resolve via read_attachment${escapeHtml(note)}`,
+        `attached <code>${deps.input.filename}</code> (${deps.input.size} bytes) as <code>${objectKey}</code>`,
       ),
     });
-    await createAttachmentComment(deps, project.id, issueId, objectKey);
     deps.cache.clear();
+
     return {
-      kind: 'complete',
+      kind: 'direct',
       issue_id: issueId,
       object_key: objectKey,
-      attachment_id: attachmentId,
-      filename: deps.input.filename,
-      mime_type: mimeType,
-      size,
-      download_url: downloadUrl,
-      comment_id: comment.id,
+      size: content.byteLength,
+      attachment: {
+        id: mcaIdFromObjectKey(objectKey, sha1),
+        source: 'mcp_artifact',
+        filename: deps.input.filename,
+        mime_type: deps.input.mime_type,
+        size: content.byteLength,
+        uploaded_at: new Date().toISOString(),
+        uploaded_by: deps.identity,
+      },
     };
   }
 
-  // Presign phase: реальный подписанный PUT URL через MinIO.
+  if (deps.input.complete === true) {
+    if (deps.input.object_key === undefined) {
+      throw new McpError({
+        code: 'INVALID_INPUT',
+        message: 'complete=true requires object_key (returned from presign phase)',
+      });
+    }
+    ensureObjectKeyBelongsToIssue(deps.input.object_key, issueId);
+    await deps.minio.statObject(deps.bucket, deps.input.object_key);
+    const url = await deps.minio.presignedGetObject(
+      deps.bucket,
+      deps.input.object_key,
+      deps.expiresInSec,
+    );
+    await deps.plane.createIssueComment(deps.workspace, project.id, issueId, {
+      comment_html: formatComment(
+        deps.identity,
+        `attached <code>${deps.input.filename}</code> (${deps.input.size} bytes) → <a href="${url}">${url}</a>`,
+      ),
+    });
+    deps.cache.clear();
+    return { kind: 'complete', issue_id: issueId, object_key: deps.input.object_key };
+  }
+
+  // Presign phase: deterministic object key + real SigV4 presigned PUT URL.
   const objectKey = makeObjectKey(deps.identity, deps.input.filename, issueId);
-  const uploadUrl = await deps.minio.presignedPutObject(deps.bucket, objectKey, deps.expiresInSec);
+  await deps.minio.ensureBucket(deps.bucket);
+  const uploadUrl = await deps.minio.presignedPutObject(
+    deps.bucket,
+    objectKey,
+    deps.expiresInSec,
+  );
   return {
     kind: 'presign',
     upload_url: uploadUrl,
     method: 'PUT',
-    required_headers: { 'Content-Type': deps.input.mime_type },
+    required_headers: {},
     object_key: objectKey,
     expires_in: deps.expiresInSec,
   };
 }
 
-async function createAttachmentComment(
-  deps: AttachFileDeps,
-  projectId: string,
-  issueId: string,
-  objectKey: string,
-): Promise<void> {
-  await deps.plane.createIssueComment(deps.workspace, projectId, issueId, {
-    comment_html: formatComment(
-      deps.identity,
-      `attached <code>${deps.input.filename}</code> (${deps.input.size} bytes) as <code>${objectKey}</code>`,
-    ),
-  });
+function makeObjectKey(identity: AgentIdentity, filename: string, issueId: string): string {
+  const ts = Date.now();
+  const safe = filename.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 64);
+  return `issues/${issueId}/${ts}-${identity}-${safe}`;
 }
 
 function decodeBase64(value: string): Buffer {
@@ -185,27 +175,16 @@ function decodeBase64(value: string): Buffer {
   return decoded;
 }
 
-function objectUrl(endpoint: string, bucket: string, objectKey: string): string {
-  return `${endpoint.replace(/\/$/, '')}/${bucket}/${objectKey}`;
+function ensureObjectKeyBelongsToIssue(objectKey: string, issueId: string): void {
+  const expectedPrefix = `issues/${issueId}/`;
+  if (!objectKey.startsWith(expectedPrefix)) {
+    throw new McpError({
+      code: 'INVALID_INPUT',
+      message: 'object_key must be the key returned by attach_file presign for this issue',
+    });
+  }
 }
 
-function makeObjectKey(issueId: string, identity: AgentIdentity, filename: string): string {
-  const ts = Date.now();
-  const safe = filename.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 64);
-  return `issues/${issueId}/${ts}-${identity}-${safe}`;
-}
-
-function sha1(s: string): string {
-  return createHash('sha1').update(s).digest('hex');
-}
-
-/** Минимальный HTML-escape для значений, которые мы вставляем в comment_html.
- *  (comment-issue.formatComment санитайзит тело целиком, но attach_file строит
- *  HTML вручную с <code>/<a>, поэтому экранируем пользовательские куски сами.) */
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+function sha1(value: string): string {
+  return createHash('sha1').update(value).digest('hex');
 }

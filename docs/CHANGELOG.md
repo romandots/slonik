@@ -8,17 +8,34 @@
 ## [Unreleased]
 
 ### Added
-- **Реальный MinIO presigned upload в `attach_file` (SLONK-18).** Раньше
-  presign-фаза собирала upload-URL конкатенацией строк (без подписи) — аплоад
-  против реального MinIO провалился бы; теперь `attach_file` выдаёт настоящий
-  подписанный `PUT`-URL через `minio.presignedPutObject`. На фазе `complete`
-  сервер проверяет аплоад (`statObject`), регистрирует объект как mcp-artifact
-  (живёт под `issues/<id>/`, поэтому виден через `list_attachments` и
-  резолвится `read_attachment` по стабильному `mca_`-id) и постит
-  комментарий-аннотацию с artifact-id (без presigned URL — чтобы подпись не
-  оседала в истории задачи). `complete` принимает только `object_key` под
-  префиксом своей задачи. Добавлен метод `presignedPutObject` в `MinioClient`
-  (real + fake). Закрывает прикрепление файлов и к задаче, и к комментариям.
+- Добавлен режим прямой загрузки файлов через `attach_file.content_base64` для MCP-клиентов (SLONK-27).
+- **Inline-изображения Plane editor в `list_attachments` / `read_attachment` (SLONK-24).**
+  Discovery `plane_comment_inline` теперь распознаёт не только прямые MinIO URL,
+  но и TipTap/Plane `<image-component src="<asset-uuid>">` в комментариях и
+  описании задачи. Для таких refs MCP резолвит workspace asset через Plane API и
+  отдаёт рабочий download URL без логирования самого URL в audit. Для absolute
+  `/api/assets/...` ссылок добавлен отдельный origin-whitelist
+  `PLANE_PUBLIC_ENDPOINT`; внешние произвольные URL по-прежнему отбрасываются.
+- **Настоящий SigV4 presigned PUT для `attach_file` (SLONK-22).**
+  Presign-фаза больше не возвращает stub вида `http://minio:9000/<bucket>/<key>`:
+  MCP создаёт `MINIO_BUCKET_MCP` при первом upload-presign и выдаёт временный
+  `PUT` URL, подписанный MinIO SDK через public endpoint (`MINIO_PUBLIC_ENDPOINT`).
+  `complete=true` проверяет, что объект уже загружен, и публикует в комментарии
+  временную presigned GET-ссылку под тем же публичным доменом. Кастомный
+  `X-Slonk-Identity` убран из `required_headers`, потому что он не участвует в
+  SigV4-подписи SDK и мог ломать загрузку у клиентов.
+- **Публичный домен MinIO для чтения аттачей агентом (SLONK-21).** Внешний Caddy
+  (overlay `docker-compose.proxy.yml`) получил сайт-блок для нового
+  `CADDY_MINIO_DOMAIN` → `reverse_proxy minio:9000`. Раньше presigned GET URL
+  из `read_attachment` указывал на `http://minio:9000` / `http://localhost:9000`
+  — внутренний адрес, недоступный облачному агенту, так что скачать PNG/PDF из
+  карточки было нельзя. Теперь `MINIO_PUBLIC_ENDPOINT=https://<CADDY_MINIO_DOMAIN>`
+  заставляет MCP подписывать URL под публичный хост, а Caddy терминирует TLS и
+  проксирует на внутренний MinIO. Host намеренно не переписывается — SigV4-подпись
+  считается по публичному домену, и MinIO пересчитывает её по проброшенному Host.
+  Код MCP-клиента не менялся (presign через `publicClient` уже был); добавлены
+  только маршрут Caddy и переменная `CADDY_MINIO_DOMAIN` (compose + `.env.example`
+  + CONFIGURATION).
 - **Выбор тенанта в форме OAuth-логина (SLONK-19).** Форма `/oauth/authorize`
   теперь содержит редактируемое поле **Workspace** (по умолчанию
   `MCP_DEFAULT_WORKSPACE`): оператор вводит slug тенанта + его пароль. Раньше
@@ -32,6 +49,14 @@
   не авторизовал к несуществующему workspace. Поле `workspace` валидируется
   slug-regex + max-length. Инвариант изоляции (workspace из токена) сохранён.
 ### Fixed
+- **`read_attachment` падал с `STORAGE_UNAVAILABLE` при `MINIO_USE_SSL=1` (SLONK-23).**
+  Внутренний MinIO-клиент брал TLS как `internal.useSSL || MINIO_USE_SSL`, поэтому
+  с прод-конфигом (`MINIO_INTERNAL_ENDPOINT=http://minio:9000` + `MINIO_USE_SSL=1`)
+  он шёл по HTTPS на plaintext-порт MinIO и падал с
+  `ssl3_get_record:wrong version number` ещё на `statObject` — до выдачи presigned
+  URL. `MINIO_USE_SSL` относится только к presign-стороне: теперь флаг влияет на
+  public-клиент, а internal-клиент берёт схему строго из `MINIO_INTERNAL_ENDPOINT`.
+  Добавлен регрессионный тест на разрешение TLS обоих клиентов.
 - **Периодическая «потеря MCP-подключения» у remote-коннектора claude.ai.**
   Две независимые причины обрыва, обе чинятся на стороне сервера:
   - *Протухший OAuth access-токен (раз в `MCP_OAUTH_ACCESS_TTL_SEC`, по

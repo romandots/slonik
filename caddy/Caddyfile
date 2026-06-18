@@ -4,6 +4,7 @@
 # internal_net проксирует:
 #   - {$CADDY_DOMAIN} → plane-proxy:80      (Plane UI / API / god-mode)
 #   - {$CADDY_MCP_DOMAIN} → mcp-kanban:{$MCP_SERVER_PORT}  (MCP HTTP)
+#   - {$CADDY_MINIO_DOMAIN} → minio:9000    (S3 API для presigned GET, SLONK-21)
 #
 # TLS-режим управляется CADDY_TLS_MODE:
 #   - `internal` (по умолчанию) — Caddy CA, self-signed. Подходит для
@@ -58,5 +59,31 @@
 		header_up X-Forwarded-Proto https
 		# Phase 5 attach_file использует presigned PUT в MinIO напрямую,
 		# минуя MCP, — ничего общего с реверсом здесь.
+	}
+}
+
+# MinIO S3 API наружу (SLONK-21/22). Нужен, чтобы presigned GET/PUT URL'ы из
+# `read_attachment` / `list_attachments` / `attach_file` были доступны агенту из
+# интернета. MCP подписывает URL'ы под этот хост через MINIO_PUBLIC_ENDPOINT
+# (= https://{$CADDY_MINIO_DOMAIN}); Caddy терминирует TLS и проксирует на
+# внутренний `minio:9000`.
+{$CADDY_MINIO_DOMAIN:minio.localhost} {
+	tls {$CADDY_TLS_MODE:internal}
+
+	header {
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+	}
+
+	# КРИТИЧНО: НЕ переписывать Host. SigV4-подпись presigned URL считается
+	# по Host = {$CADDY_MINIO_DOMAIN}; Caddy по умолчанию пробрасывает
+	# исходный Host на upstream — MinIO пересчитывает подпись по нему и она
+	# совпадает. `header_up Host ...` сломает валидацию.
+	#
+	# `encode` намеренно не включаем: объекты в S3 уже сжаты, а сжатие
+	# на лету конфликтует с Range/Content-Length при отдаче блобов.
+	reverse_proxy minio:9000 {
+		header_up X-Real-IP {remote_host}
+		header_up X-Forwarded-Proto https
 	}
 }

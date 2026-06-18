@@ -32,6 +32,7 @@ const ConfigSchema = z.object({
 
   // Plane
   PLANE_API_BASE_URL: z.string().url(),
+  PLANE_PUBLIC_ENDPOINT: optionalNonEmpty.pipe(z.string().url().optional()),
   PLANE_API_KEY: optionalNonEmpty,
 
   // MinIO (для attach_file presign и read_attachment, SLONK-14)

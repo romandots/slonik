@@ -1,14 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { extractInlineAssets } from './comment-assets.js';
+import { extractInlineAssetRefs, extractInlineAssets } from './comment-assets.js';
 import type { PlaneComment } from '../plane-client.js';
 
 const MINIO_INTERNAL = 'http://minio:9000';
 const MINIO_PUBLIC = 'http://localhost:9000';
 const PLANE_BUCKET = 'plane-uploads';
+const PLANE_PUBLIC = 'https://slonk.example';
 const OPTS = {
   minioEndpoints: [MINIO_INTERNAL, MINIO_PUBLIC],
   planeBucket: PLANE_BUCKET,
+  planeAssetEndpoints: [PLANE_PUBLIC],
 };
+const ASSET_ID = '55e14ca4-6254-461c-9ca2-a056cadd744d';
 
 function mkComment(html: string, id = '11111111-1111-1111-1111-111111111111'): PlaneComment {
   return {
@@ -127,5 +130,19 @@ describe('extractInlineAssets', () => {
     const html = `<img src="${MINIO_INTERNAL}/${PLANE_BUCKET}/issues/abc/foo.png" />`;
     const out = extractInlineAssets(mkComment(html), { minioEndpoints: [], planeBucket: PLANE_BUCKET });
     expect(out).toEqual([]);
+  });
+
+  it('extracts Plane editor <image-component> asset refs', () => {
+    const html = `<image-component data-id="component-id" src="${ASSET_ID}" id="component-id"></image-component>`;
+    const out = extractInlineAssetRefs(html, OPTS);
+    expect(out).toEqual([{ kind: 'plane_asset', ref: `plane-asset:${ASSET_ID}`, asset_id: ASSET_ID }]);
+  });
+
+  it('extracts Plane asset API URLs only from whitelisted Plane origins', () => {
+    const good = `${PLANE_PUBLIC}/api/assets/v2/workspaces/ws/${ASSET_ID}/`;
+    const bad = `https://evil.example/api/assets/v2/workspaces/ws/${ASSET_ID}/`;
+    expect(extractInlineAssetRefs(`<img src="${good}" /><img src="${bad}" />`, OPTS)).toEqual([
+      { kind: 'plane_asset', ref: good, asset_id: ASSET_ID },
+    ]);
   });
 });

@@ -2,8 +2,10 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import pino from 'pino';
 import {
   addComment,
+  addIssue,
   addMinioObject,
   addPlaneAttachment,
+  addWorkspaceAsset,
   fakeMinio,
   fakePlane,
   newWorld,
@@ -16,6 +18,7 @@ const SILENT = pino({ level: 'silent' });
 const PLANE_BUCKET = 'plane-uploads';
 const MCP_BUCKET = 'mcp-artifacts';
 const MINIO_ENDPOINTS = ['http://minio:9000', 'http://localhost:9000'];
+const PLANE_ASSET_ID = '55e14ca4-6254-461c-9ca2-a056cadd744d';
 
 interface Ctx {
   world: FakeWorld;
@@ -194,5 +197,110 @@ describe('discoverAttachments', () => {
     });
     expect(out.items[0]!.size).toBe(2048);
     expect(out.items[0]!.mime_type).toBe('image/jpeg');
+  });
+
+  it('discovers Plane editor image-component assets in comments', async () => {
+    const commentId = '33333333-3333-3333-3333-333333333333';
+    addComment(ctx.world, ctx.projectId, ctx.issueId, {
+      id: commentId,
+      actor: 'user-z',
+      comment_html: `<image-component src="${PLANE_ASSET_ID}" id="component"></image-component>`,
+      created_at: '2026-05-06T12:00:00Z',
+    });
+    addWorkspaceAsset(ctx.world, 'agents', {
+      id: PLANE_ASSET_ID,
+      name: 'inline-plane.png',
+      type: 'image/png',
+      size: 157422,
+      asset_url: 'https://slonk.example/api/assets/v2/download/inline-plane.png',
+    });
+
+    const out = await discoverAttachments({
+      plane: ctx.plane,
+      minio: ctx.minio,
+      logger: SILENT,
+      workspace: 'agents',
+      projectId: ctx.projectId,
+      issueId: ctx.issueId,
+      planeBucket: PLANE_BUCKET,
+      mcpBucket: MCP_BUCKET,
+      minioEndpoints: MINIO_ENDPOINTS,
+      filters: { source: 'plane_comment_inline', comment_id: commentId },
+    });
+
+    expect(out.items).toHaveLength(1);
+    expect(out.items[0]!).toMatchObject({
+      source: 'plane_comment_inline',
+      filename: 'inline-plane.png',
+      mime_type: 'image/png',
+      size: 157422,
+      comment_id: commentId,
+    });
+  });
+
+  it('ignores Plane workspace assets with non-http download URLs', async () => {
+    const commentId = '44444444-4444-4444-4444-444444444444';
+    addComment(ctx.world, ctx.projectId, ctx.issueId, {
+      id: commentId,
+      actor: 'user-z',
+      comment_html: `<image-component src="${PLANE_ASSET_ID}"></image-component>`,
+      created_at: '2026-05-06T12:00:00Z',
+    });
+    addWorkspaceAsset(ctx.world, 'agents', {
+      id: PLANE_ASSET_ID,
+      name: 'bad.png',
+      type: 'image/png',
+      size: 1,
+      asset_url: 'javascript:alert(1)',
+    });
+
+    const out = await discoverAttachments({
+      plane: ctx.plane,
+      minio: ctx.minio,
+      logger: SILENT,
+      workspace: 'agents',
+      projectId: ctx.projectId,
+      issueId: ctx.issueId,
+      planeBucket: PLANE_BUCKET,
+      mcpBucket: MCP_BUCKET,
+      minioEndpoints: MINIO_ENDPOINTS,
+      filters: { source: 'plane_comment_inline', comment_id: commentId },
+    });
+
+    expect(out.items).toEqual([]);
+  });
+
+  it('discovers Plane editor image-component assets in issue description', async () => {
+    const issue = addIssue(ctx.world, ctx.projectId, {
+      name: 'with description image',
+      state: 'st-To Do',
+      description_html: `<p>desc</p><image-component src="${PLANE_ASSET_ID}"></image-component>`,
+    });
+    addWorkspaceAsset(ctx.world, 'agents', {
+      id: PLANE_ASSET_ID,
+      attributes: { name: 'description-inline.png', type: 'image/png', size: 42 },
+      asset_url: 'https://slonk.example/api/assets/v2/download/description-inline.png',
+    });
+
+    const out = await discoverAttachments({
+      plane: ctx.plane,
+      minio: ctx.minio,
+      logger: SILENT,
+      workspace: 'agents',
+      projectId: ctx.projectId,
+      issueId: issue.id,
+      planeBucket: PLANE_BUCKET,
+      mcpBucket: MCP_BUCKET,
+      minioEndpoints: MINIO_ENDPOINTS,
+      filters: { source: 'plane_comment_inline' },
+    });
+
+    const descriptionItem = out.items.find((item) => item.filename === 'description-inline.png');
+    expect(descriptionItem).toMatchObject({
+      source: 'plane_comment_inline',
+      filename: 'description-inline.png',
+      size: 42,
+    });
+    expect(descriptionItem!.comment_id).toBeUndefined();
   });
 });

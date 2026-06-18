@@ -44,7 +44,7 @@ export interface ToolContext {
   rateLimiter: RateLimiter;
   /** Возвращает plane_user_id текущей identity, если known. */
   resolvePlaneUserId: () => string | null;
-  /** MinIO bucket для агент-артефактов (attach_file, mcp_artifact discovery). */
+  /** MinIO bucket для attach_file. */
   minioBucket: string;
   /**
    * MinIO bucket для UI-аплоадов Plane (`MINIO_BUCKET_PLANE`,
@@ -58,6 +58,11 @@ export interface ToolContext {
    * SSRF-фильтре парсера inline-asset'ов.
    */
   minioEndpoints: string[];
+  /**
+   * Known Plane UI/API origins для inline asset-API URL'ов (`/api/assets/...`).
+   * Используется только как origin-whitelist при парсинге HTML.
+   */
+  planeAssetEndpoints: string[];
   /**
    * MinIO-клиент (presign / stat / list). В тестах подсовывается
    * `FakeMinioClient`. SLONK-14.
