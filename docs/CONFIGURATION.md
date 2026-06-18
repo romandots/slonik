@@ -639,7 +639,7 @@ docker compose up -d
    - `docker pull ghcr.io/.../mcp-kanban:VERSION`
    - `SLONK_MCP_IMAGE_TAG=VERSION docker compose up -d mcp-kanban --wait`
    - При неуспехе healthcheck — автоматический rollback на предыдущий тег.
-4. **Smoke** — `make smoke` после успешного деплоя.
+4. **Smoke** — inline `curl` к `http://localhost:8787/health` после успешного деплоя.
 
 **Concurrency:** deploy-джоба не запускается параллельно (`cancel-in-progress: false`).
 
@@ -656,7 +656,7 @@ Push в GHCR из workflow — через автоматический `GITHUB_T
 
 ### 12.4 Настройка прод-хоста
 
-- `DEPLOY_DIR` в workflow → `/opt/slonk` (можно поменять через env в workflow).
+- `DEPLOY_DIR` в workflow → `/home/romandots/slonik` (можно поменять через env в workflow).
 - На хосте должен быть `docker compose` (v2), `make`, `.env` с прод-секретами.
 - Перед первым деплоем: `docker login ghcr.io -u <user> --password <GHCR_PULL_TOKEN>`.
 - Branch protection: `Require status checks to pass before merging` → выбрать `lint`, `build`, `test`.
