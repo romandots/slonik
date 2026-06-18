@@ -8,6 +8,7 @@
 ## [Unreleased]
 
 ### Added
+- Добавлен режим прямой загрузки файлов через `attach_file.content_base64` для MCP-клиентов (SLONK-27).
 - **Выбор тенанта в форме OAuth-логина (SLONK-19).** Форма `/oauth/authorize`
   теперь содержит редактируемое поле **Workspace** (по умолчанию
   `MCP_DEFAULT_WORKSPACE`): оператор вводит slug тенанта + его пароль. Раньше

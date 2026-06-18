@@ -475,6 +475,21 @@ export function fakeMinio(world: FakeWorld): MinioClient {
         ...(obj.contentType !== undefined ? { contentType: obj.contentType } : {}),
       };
     },
+    async putObject(
+      bucket: string,
+      objectKey: string,
+      content: Buffer,
+      size: number,
+      metaData?: Record<string, string>,
+    ): Promise<void> {
+      world.minioObjects.set(`${bucket}:${objectKey}`, {
+        size,
+        content,
+        contentType: metaData?.['Content-Type'] ?? metaData?.['content-type'] ?? 'application/octet-stream',
+        lastModified: new Date(),
+      });
+    },
+
     async presignedGetObject(bucket: string, objectKey: string, expirySec: number): Promise<string> {
       // Включаем X-Amz-Signature-like подпись, чтобы тесты могли проверить
       // редакцию presigned URL'ов в логах.

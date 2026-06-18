@@ -682,10 +682,11 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
         ctx,
         tool: 'attach_file',
         input,
-        issueIdFromInput: (i) => (i as typeof input).issue_id,
+        issueIdFromInput: (i) => String((i as typeof input).issue_id),
         fn: async () =>
           await attachFile({
             plane: ctx.plane,
+            minio: ctx.minio,
             cache: ctx.cache,
             workspace: ctx.workspace,
             defaultProjectRef: ctx.defaultProjectSlug,

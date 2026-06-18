@@ -38,6 +38,13 @@ export interface MinioObject {
  */
 export interface MinioClient {
   statObject(bucket: string, objectKey: string): Promise<MinioStat>;
+  putObject(
+    bucket: string,
+    objectKey: string,
+    content: Buffer,
+    size: number,
+    metaData?: Record<string, string>,
+  ): Promise<void>;
   presignedGetObject(bucket: string, objectKey: string, expirySec: number): Promise<string>;
   listObjectsV2(bucket: string, prefix: string): Promise<MinioObject[]>;
   /** Health-check: возвращает true, если MinIO доступен (для /health). */
@@ -102,6 +109,20 @@ export class RealMinioClient implements MinioClient {
       };
     } catch (err) {
       throw mapMinioError(err, `statObject(${bucket}, ${objectKey})`);
+    }
+  }
+
+  async putObject(
+    bucket: string,
+    objectKey: string,
+    content: Buffer,
+    size: number,
+    metaData?: Record<string, string>,
+  ): Promise<void> {
+    try {
+      await this.internalClient.putObject(bucket, objectKey, content, size, metaData);
+    } catch (err) {
+      throw mapMinioError(err, `putObject(${bucket}, ${objectKey})`);
     }
   }
 
