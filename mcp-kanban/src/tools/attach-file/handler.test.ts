@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { attachFile } from './handler.js';
+import { AttachFileInput } from './schema.js';
 import { TtlCache } from '../../cache.js';
 import { addIssue, fakeMinio, fakePlane, newWorld, seedAgentsWorkspace } from '../test-fakes.js';
 
@@ -174,5 +175,20 @@ describe('attachFile', () => {
 
     expect(world.minioObjects.size).toBe(0);
     expect([...world.comments.values()].flat()).toHaveLength(0);
+  });
+
+  it('direct upload schema rejects payloads above encoded size limit', () => {
+    const maxEncodedChars = Math.ceil((10 * 1024 * 1024) / 3) * 4;
+
+    expect(() =>
+      AttachFileInput.parse({
+        issue_id: 'SLONK-1234',
+        project: 'SLONK',
+        filename: 'too-large.txt',
+        mime_type: 'text/plain',
+        size: 1,
+        content_base64: `${'A'.repeat(maxEncodedChars)}A`,
+      }),
+    ).toThrow();
   });
 });

@@ -1,5 +1,8 @@
 import { z } from 'zod';
 
+const DIRECT_UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
+const DIRECT_UPLOAD_MAX_BASE64_CHARS = Math.ceil(DIRECT_UPLOAD_MAX_BYTES / 3) * 4;
+
 export const AttachFileInput = z
   .object({
     issue_id: z.union([z.string().min(1), z.number().int().positive()]),
@@ -9,7 +12,7 @@ export const AttachFileInput = z
     size: z.number().int().positive(),
     complete: z.boolean().optional(),
     object_key: z.string().min(1).max(1024).optional(),
-    content_base64: z.string().min(1).optional(),
+    content_base64: z.string().min(1).max(DIRECT_UPLOAD_MAX_BASE64_CHARS).optional(),
   })
   .superRefine((value, ctx) => {
     if (value.content_base64 && value.object_key) {
