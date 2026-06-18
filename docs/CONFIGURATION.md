@@ -66,6 +66,7 @@ docker compose --profile backup up -d
 | `PLANE_APP_DOMAIN` | `localhost` | Домен Caddy внутри `plane-proxy`; `localhost` = без TLS |
 | `PLANE_SITE_ADDRESS` | `:80` | Listen-адрес Caddy внутри `plane-proxy` |
 | `PLANE_API_BASE_URL` | `http://plane-api:8000/api/v1` | Внутренний URL API для MCP |
+| `PLANE_PUBLIC_ENDPOINT` | `http://localhost:3000` | Публичный origin Plane UI/API, который MCP считает доверенным при распознавании inline asset-URL'ов в HTML описаний/комментариев (`/api/assets/...`, SLONK-24). В проде выставьте внешний `https://<CADDY_DOMAIN>`; произвольные внешние origin'ы по-прежнему отбрасываются |
 | `PLANE_API_KEY` | — | API-ключ workspace-admin'а **(secret)**, заполняется после bootstrap'а UI |
 | `PLANE_SECRET_KEY` | `change_me` | Django SECRET_KEY **(secret)**, `openssl rand -hex 32` |
 | `PLANE_LIVE_SECRET_KEY` | `change_me` | HMAC-секрет между `plane-api` и `plane-live` **(secret)** |

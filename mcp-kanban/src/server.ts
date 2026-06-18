@@ -501,6 +501,7 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
         minioBucket: config.MINIO_BUCKET_MCP,
         minioBucketPlane: config.MINIO_BUCKET_PLANE,
         minioEndpoints: collectMinioEndpoints(config),
+        planeAssetEndpoints: collectPlaneAssetEndpoints(config),
         minio,
         signedUrlExpirationSec: config.PLANE_SIGNED_URL_EXPIRATION,
         gitRefs,
@@ -636,6 +637,15 @@ function collectMinioEndpoints(config: Pick<Config, 'MINIO_INTERNAL_ENDPOINT' | 
   set.add(config.MINIO_INTERNAL_ENDPOINT);
   if (config.MINIO_PUBLIC_ENDPOINT !== undefined && config.MINIO_PUBLIC_ENDPOINT.length > 0) {
     set.add(config.MINIO_PUBLIC_ENDPOINT);
+  }
+  return Array.from(set);
+}
+
+function collectPlaneAssetEndpoints(config: Pick<Config, 'PLANE_API_BASE_URL' | 'PLANE_PUBLIC_ENDPOINT'>): string[] {
+  const set = new Set<string>();
+  set.add(config.PLANE_API_BASE_URL);
+  if (config.PLANE_PUBLIC_ENDPOINT !== undefined && config.PLANE_PUBLIC_ENDPOINT.length > 0) {
+    set.add(config.PLANE_PUBLIC_ENDPOINT);
   }
   return Array.from(set);
 }

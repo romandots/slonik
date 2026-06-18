@@ -7,7 +7,7 @@ import { McpError } from '../../errors.js';
 import { resolveProject } from '../project-resolver.js';
 import { parseIssueRef } from '../get-issue/schema.js';
 import { resolveIssueId } from '../update-issue/handler.js';
-import { extractInlineAssets } from '../../attachments/comment-assets.js';
+import { discoverAttachments } from '../../attachments/discovery.js';
 import { parseAttachmentId, type Attachment, type AttachmentSource } from '../../attachments/types.js';
 import type { ReadAttachmentInput } from './schema.js';
 
@@ -22,8 +22,9 @@ export interface ReadAttachmentResult {
   source: AttachmentSource;
   /** Аудит-метадата (без presigned URL) — попадает в audit_log.metadata. */
   audit: {
-    bucket: string;
-    object_key: string;
+    bucket?: string;
+    object_key?: string;
+    plane_asset_id?: string;
     expires_at: string;
   };
 }
@@ -38,6 +39,7 @@ export async function readAttachment(deps: {
   planeBucket: string;
   mcpBucket: string;
   minioEndpoints: string[];
+  planeAssetEndpoints?: string[];
   expiresInSec: number;
   input: ReadAttachmentInput;
 }): Promise<ReadAttachmentResult> {
@@ -69,9 +71,29 @@ export async function readAttachment(deps: {
     planeBucket: deps.planeBucket,
     mcpBucket: deps.mcpBucket,
     minioEndpoints: deps.minioEndpoints,
+    planeAssetEndpoints: deps.planeAssetEndpoints ?? [],
+    logger: deps.logger,
     parsedId,
     rawId: deps.input.attachment_id,
   });
+
+  const expiresAt = new Date(Date.now() + deps.expiresInSec * 1000).toISOString();
+  if (attachment.storage.kind === 'plane_asset') {
+    return {
+      download_url: attachment.storage.download_url,
+      method: 'GET',
+      required_headers: {},
+      expires_in: deps.expiresInSec,
+      mime_type: attachment.mime_type,
+      size: attachment.size,
+      filename: attachment.filename,
+      source: attachment.source,
+      audit: {
+        plane_asset_id: attachment.storage.asset_id,
+        expires_at: expiresAt,
+      },
+    };
+  }
 
   // 4) Bucket whitelist — повторная защита (id-резолверы и так выставляют
   // только allowed bucket'ы, но проверка дешёвая и страхует от регрессий).
@@ -94,8 +116,6 @@ export async function readAttachment(deps: {
     attachment.storage.object_key,
     deps.expiresInSec,
   );
-
-  const expiresAt = new Date(Date.now() + deps.expiresInSec * 1000).toISOString();
 
   return {
     download_url: url,
@@ -123,6 +143,8 @@ async function resolveAttachment(args: {
   planeBucket: string;
   mcpBucket: string;
   minioEndpoints: string[];
+  planeAssetEndpoints: string[];
+  logger: Logger;
   parsedId: ReturnType<typeof parseAttachmentId>;
   rawId: string;
 }): Promise<Attachment> {
@@ -164,6 +186,7 @@ async function resolvePlaneIssue(
     uploaded_at: found.created_at,
     ...(found.created_by !== undefined ? { uploaded_by: found.created_by } : {}),
     storage: {
+      kind: 'minio',
       bucket: args.planeBucket,
       object_key: found.asset,
     },
@@ -177,7 +200,11 @@ async function resolveCommentInline(
     projectId: string;
     issueId: string;
     planeBucket: string;
+    mcpBucket: string;
+    minio: MinioClient;
+    logger: Logger;
     minioEndpoints: string[];
+    planeAssetEndpoints: string[];
     rawId: string;
   },
   payload: string,
@@ -189,24 +216,28 @@ async function resolveCommentInline(
       message: `Malformed plane_comment_inline id payload: ${args.rawId}`,
     });
   }
-  const commentId = payload.slice(0, idx);
-  const comments = await args.plane.listIssueComments(args.workspace, args.projectId, args.issueId);
-  const comment = comments.find((c) => c.id === commentId);
-  if (comment === undefined) {
-    throw new McpError({
-      code: 'NOT_FOUND',
-      message: `Comment ${commentId} not found on issue ${args.issueId}`,
-    });
-  }
-  const assets = extractInlineAssets(comment, {
-    minioEndpoints: args.minioEndpoints,
+  const containerId = payload.slice(0, idx);
+  const result = await discoverAttachments({
+    plane: args.plane,
+    minio: args.minio,
+    logger: args.logger,
+    workspace: args.workspace,
+    projectId: args.projectId,
+    issueId: args.issueId,
     planeBucket: args.planeBucket,
+    mcpBucket: args.mcpBucket,
+    minioEndpoints: args.minioEndpoints,
+    planeAssetEndpoints: args.planeAssetEndpoints,
+    filters: {
+      source: 'plane_comment_inline',
+      ...(containerId !== args.issueId ? { comment_id: containerId } : {}),
+    },
   });
-  const match = assets.find((a) => a.id === args.rawId);
+  const match = result.items.find((a) => a.id === args.rawId);
   if (match === undefined) {
     throw new McpError({
       code: 'NOT_FOUND',
-      message: `Inline asset ${args.rawId} not found in comment ${commentId}`,
+      message: `Inline asset ${args.rawId} not found on issue ${args.issueId}`,
     });
   }
   return match;
@@ -240,6 +271,7 @@ async function resolveMcpArtifact(
     uploaded_at: parsed.uploadedAt ?? (match.lastModified?.toISOString() ?? new Date(0).toISOString()),
     ...(parsed.uploadedBy !== undefined ? { uploaded_by: parsed.uploadedBy } : {}),
     storage: {
+      kind: 'minio',
       bucket: args.mcpBucket,
       object_key: match.key,
     },

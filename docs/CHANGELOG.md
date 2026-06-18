@@ -8,6 +8,13 @@
 ## [Unreleased]
 
 ### Added
+- **Inline-изображения Plane editor в `list_attachments` / `read_attachment` (SLONK-24).**
+  Discovery `plane_comment_inline` теперь распознаёт не только прямые MinIO URL,
+  но и TipTap/Plane `<image-component src="<asset-uuid>">` в комментариях и
+  описании задачи. Для таких refs MCP резолвит workspace asset через Plane API и
+  отдаёт рабочий download URL без логирования самого URL в audit. Для absolute
+  `/api/assets/...` ссылок добавлен отдельный origin-whitelist
+  `PLANE_PUBLIC_ENDPOINT`; внешние произвольные URL по-прежнему отбрасываются.
 - **Настоящий SigV4 presigned PUT для `attach_file` (SLONK-22).**
   Presign-фаза больше не возвращает stub вида `http://minio:9000/<bucket>/<key>`:
   MCP создаёт `MINIO_BUCKET_MCP` при первом upload-presign и выдаёт временный

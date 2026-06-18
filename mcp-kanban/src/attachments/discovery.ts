@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto';
 import type { Logger } from '../logger.js';
-import type { PlaneClient } from '../plane-client.js';
+import type { PlaneClient, PlaneWorkspaceAsset } from '../plane-client.js';
 import type { MinioClient } from '../minio-client.js';
-import { extractInlineAssets } from './comment-assets.js';
+import { extractInlineAssetRefs, type InlineAssetRef } from './comment-assets.js';
 import { mcaIdFromObjectKey, type Attachment, type AttachmentSource } from './types.js';
+import { pciIdFromAsset } from './types.js';
 
 // Discovery: три источника вложений запускаются параллельно через
 // allSettled, ошибка одного → `partial: true`, остальные продолжают
@@ -36,6 +37,7 @@ export interface DiscoveryDeps {
   planeBucket: string;
   mcpBucket: string;
   minioEndpoints: string[];
+  planeAssetEndpoints?: string[];
   filters?: DiscoveryFilters;
 }
 
@@ -136,6 +138,7 @@ async function fromPlaneIssue(deps: DiscoveryDeps): Promise<Attachment[]> {
     uploaded_at: p.created_at,
     ...(p.created_by !== undefined ? { uploaded_by: p.created_by } : {}),
     storage: {
+      kind: 'minio' as const,
       bucket: deps.planeBucket,
       object_key: p.asset,
     },
@@ -148,36 +151,151 @@ async function fromCommentInline(deps: DiscoveryDeps): Promise<Attachment[]> {
   const comments = await deps.plane.listIssueComments(deps.workspace, deps.projectId, deps.issueId);
   const out: Attachment[] = [];
   for (const c of comments) {
-    const items = extractInlineAssets(c, {
-      minioEndpoints: deps.minioEndpoints,
-      planeBucket: deps.planeBucket,
-    });
-    // Подтягиваем `size` через statObject — это +N round-trips, но без
-    // этого `size` остаётся 0 и AC #1 не выполняется. Не падаем на
-    // отдельных ошибках statObject — оставляем size=0 и продолжаем
-    // (отдельный комментарий мог содержать ссылку на удалённый файл).
-    for (const item of items) {
-      try {
-        const stat = await deps.minio.statObject(item.storage.bucket, item.storage.object_key);
-        item.size = stat.size;
-        if (stat.contentType !== undefined && stat.contentType.length > 0) {
-          item.mime_type = stat.contentType;
-        }
-      } catch (err) {
-        deps.logger.warn(
-          {
-            issue_id: deps.issueId,
-            comment_id: c.id,
-            object_key: item.storage.object_key,
-            err: err instanceof Error ? err.message : String(err),
-          },
-          'inline asset stat failed; keeping size=0',
-        );
-      }
-      out.push(item);
-    }
+    out.push(
+      ...(await fromInlineHtmlContainer(deps, {
+        containerId: c.id,
+        html: c.comment_html ?? '',
+        uploadedAt: c.created_at,
+        uploadedBy: c.actor,
+        commentId: c.id,
+      })),
+    );
+  }
+
+  const issue = await deps.plane.getIssue(deps.workspace, deps.projectId, deps.issueId);
+  const descriptionHtml = issue?.description_html ?? issue?.description ?? '';
+  if (descriptionHtml.length > 0) {
+    out.push(
+      ...(await fromInlineHtmlContainer(deps, {
+        containerId: deps.issueId,
+        html: descriptionHtml,
+        uploadedAt: issue?.updated_at ?? issue?.created_at ?? new Date(0).toISOString(),
+      })),
+    );
   }
   return out;
+}
+
+async function fromInlineHtmlContainer(
+  deps: DiscoveryDeps,
+  args: {
+    containerId: string;
+    html: string;
+    uploadedAt: string;
+    uploadedBy?: string;
+    commentId?: string;
+  },
+): Promise<Attachment[]> {
+  const refs = extractInlineAssetRefs(args.html, {
+    minioEndpoints: deps.minioEndpoints,
+    planeBucket: deps.planeBucket,
+    planeAssetEndpoints: deps.planeAssetEndpoints ?? [],
+  });
+  const out: Attachment[] = [];
+  for (const ref of refs) {
+    const item = await inlineRefToAttachment(deps, args, ref);
+    if (item === null) continue;
+    out.push(item);
+  }
+  return out;
+}
+
+async function inlineRefToAttachment(
+  deps: DiscoveryDeps,
+  args: {
+    containerId: string;
+    uploadedAt: string;
+    uploadedBy?: string;
+    commentId?: string;
+  },
+  ref: InlineAssetRef,
+): Promise<Attachment | null> {
+  if (ref.kind === 'plane_asset') {
+    const asset = await deps.plane.getWorkspaceAsset(deps.workspace, ref.asset_id);
+    if (asset === undefined) return null;
+    return attachmentFromPlaneAsset(args, ref, asset);
+  }
+
+  const item: Attachment = {
+    id: pciIdFromAsset(args.containerId, ref.ref, sha1),
+    source: 'plane_comment_inline',
+    filename: ref.filename,
+    mime_type: ref.mime_type,
+    size: 0,
+    uploaded_at: args.uploadedAt,
+    ...(args.uploadedBy !== undefined && args.uploadedBy.length > 0 ? { uploaded_by: args.uploadedBy } : {}),
+    ...(args.commentId !== undefined ? { comment_id: args.commentId } : {}),
+    storage: {
+      kind: 'minio',
+      bucket: ref.bucket,
+      object_key: ref.object_key,
+    },
+  };
+
+  try {
+    const stat = await deps.minio.statObject(ref.bucket, ref.object_key);
+    item.size = stat.size;
+    if (stat.contentType !== undefined && stat.contentType.length > 0) {
+      item.mime_type = stat.contentType;
+    }
+  } catch (err) {
+    deps.logger.warn(
+      {
+        issue_id: deps.issueId,
+        comment_id: args.commentId,
+        object_key: ref.object_key,
+        err: err instanceof Error ? err.message : String(err),
+      },
+      'inline asset stat failed; keeping size=0',
+    );
+  }
+  return item;
+}
+
+function attachmentFromPlaneAsset(
+  args: {
+    containerId: string;
+    uploadedAt: string;
+    uploadedBy?: string;
+    commentId?: string;
+  },
+  ref: Extract<InlineAssetRef, { kind: 'plane_asset' }>,
+  asset: PlaneWorkspaceAsset,
+): Attachment | null {
+  const downloadUrl = asset.asset_url ?? asset.url;
+  if (downloadUrl === undefined || downloadUrl.length === 0) return null;
+  if (!isHttpUrl(downloadUrl)) return null;
+  const filename = asset.attributes?.name ?? asset.name ?? `${asset.id}.bin`;
+  const mimeType = asset.attributes?.type ?? asset.type ?? inferMime(filename);
+  const size = asset.attributes?.size ?? asset.size ?? 0;
+  return {
+    id: pciIdFromAsset(args.containerId, ref.ref, sha1),
+    source: 'plane_comment_inline',
+    filename,
+    mime_type: mimeType,
+    size,
+    uploaded_at: asset.created_at ?? args.uploadedAt,
+    ...(asset.created_by !== undefined
+      ? { uploaded_by: asset.created_by }
+      : args.uploadedBy !== undefined && args.uploadedBy.length > 0
+        ? { uploaded_by: args.uploadedBy }
+        : {}),
+    ...(args.commentId !== undefined ? { comment_id: args.commentId } : {}),
+    storage: {
+      kind: 'plane_asset',
+      asset_id: asset.id,
+      download_url: downloadUrl,
+    },
+  };
+}
+
+function isHttpUrl(raw: string): boolean {
+  try {
+    const u = new URL(raw);
+    return u.protocol === 'http:' || u.protocol === 'https:';
+  } catch {
+    return false;
+  }
 }
 
 // ---------------- source 3: mcp_artifact ----------------
@@ -198,6 +316,7 @@ async function fromMcpArtifact(deps: DiscoveryDeps): Promise<Attachment[]> {
       uploaded_at: parsed.uploadedAt ?? (obj.lastModified?.toISOString() ?? new Date(0).toISOString()),
       ...(parsed.uploadedBy !== undefined ? { uploaded_by: parsed.uploadedBy } : {}),
       storage: {
+        kind: 'minio' as const,
         bucket: deps.mcpBucket,
         object_key: obj.key,
       },
