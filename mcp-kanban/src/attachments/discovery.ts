@@ -264,6 +264,7 @@ function attachmentFromPlaneAsset(
 ): Attachment | null {
   const downloadUrl = asset.asset_url ?? asset.url;
   if (downloadUrl === undefined || downloadUrl.length === 0) return null;
+  if (!isHttpUrl(downloadUrl)) return null;
   const filename = asset.attributes?.name ?? asset.name ?? `${asset.id}.bin`;
   const mimeType = asset.attributes?.type ?? asset.type ?? inferMime(filename);
   const size = asset.attributes?.size ?? asset.size ?? 0;
@@ -286,6 +287,15 @@ function attachmentFromPlaneAsset(
       download_url: downloadUrl,
     },
   };
+}
+
+function isHttpUrl(raw: string): boolean {
+  try {
+    const u = new URL(raw);
+    return u.protocol === 'http:' || u.protocol === 'https:';
+  } catch {
+    return false;
+  }
 }
 
 // ---------------- source 3: mcp_artifact ----------------

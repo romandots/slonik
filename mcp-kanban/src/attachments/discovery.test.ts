@@ -238,6 +238,38 @@ describe('discoverAttachments', () => {
     });
   });
 
+  it('ignores Plane workspace assets with non-http download URLs', async () => {
+    const commentId = '44444444-4444-4444-4444-444444444444';
+    addComment(ctx.world, ctx.projectId, ctx.issueId, {
+      id: commentId,
+      actor: 'user-z',
+      comment_html: `<image-component src="${PLANE_ASSET_ID}"></image-component>`,
+      created_at: '2026-05-06T12:00:00Z',
+    });
+    addWorkspaceAsset(ctx.world, 'agents', {
+      id: PLANE_ASSET_ID,
+      name: 'bad.png',
+      type: 'image/png',
+      size: 1,
+      asset_url: 'javascript:alert(1)',
+    });
+
+    const out = await discoverAttachments({
+      plane: ctx.plane,
+      minio: ctx.minio,
+      logger: SILENT,
+      workspace: 'agents',
+      projectId: ctx.projectId,
+      issueId: ctx.issueId,
+      planeBucket: PLANE_BUCKET,
+      mcpBucket: MCP_BUCKET,
+      minioEndpoints: MINIO_ENDPOINTS,
+      filters: { source: 'plane_comment_inline', comment_id: commentId },
+    });
+
+    expect(out.items).toEqual([]);
+  });
+
   it('discovers Plane editor image-component assets in issue description', async () => {
     const issue = addIssue(ctx.world, ctx.projectId, {
       name: 'with description image',
