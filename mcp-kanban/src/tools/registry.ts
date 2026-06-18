@@ -687,6 +687,7 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
         fn: async () =>
           await attachFile({
             plane: ctx.plane,
+            minio: ctx.minio,
             cache: ctx.cache,
             workspace: ctx.workspace,
             defaultProjectRef: ctx.defaultProjectSlug,

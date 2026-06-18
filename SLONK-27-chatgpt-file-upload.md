@@ -24,7 +24,7 @@ Requirements:
 
 ## Implementation Notes
 
-Implemented for `attach_file` on top of the current `main` presigned-upload flow.
+Implemented in branch `feature/SLONK-27-chatgpt-file-upload`.
 
 Changed files:
 - `mcp-kanban/src/tools/attach-file/schema.ts`
@@ -42,7 +42,7 @@ Behavior:
   at schema level.
 - The handler validates canonical base64 and size consistency before `MinioClient.putObject`.
 - The Plane comment records filename, size, and generated `object_key`; it does not expose
-  MinIO or presigned URLs for direct uploads.
+  MinIO or presigned URLs.
 - The old presign/complete path remains available.
 
 Verification:
@@ -51,3 +51,4 @@ Verification:
 - `pnpm lint`
 - `pnpm exec vitest run --reporter=dot`
 - `pnpm build`
+

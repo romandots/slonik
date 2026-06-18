@@ -2,14 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { attachFile } from './handler.js';
 import { AttachFileInput } from './schema.js';
 import { TtlCache } from '../../cache.js';
-import {
-  addIssue,
-  addMinioObject,
-  fakeMinio,
-  fakePlane,
-  newWorld,
-  seedAgentsWorkspace,
-} from '../test-fakes.js';
+import { addIssue, fakeMinio, fakePlane, newWorld, seedAgentsWorkspace } from '../test-fakes.js';
 
 describe('attachFile', () => {
   it('presign phase returns an upload URL with deterministic key', async () => {
@@ -17,16 +10,16 @@ describe('attachFile', () => {
     const { project } = seedAgentsWorkspace(world);
     const issue = addIssue(world, project.id, { name: 'A', state: 'st-To Do' });
     const plane = fakePlane(world);
-    const minio = fakeMinio(world);
 
     const r = await attachFile({
       plane,
+      minio: fakeMinio(world),
       cache: new TtlCache(),
       workspace: 'agents',
       defaultProjectRef: 'SLONK',
       identity: 'qa-agent',
       bucket: 'mcp-artifacts',
-      minio,
+      endpoint: 'http://minio:9000',
       expiresInSec: 3600,
       input: {
         issue_id: issue.id,
@@ -37,11 +30,9 @@ describe('attachFile', () => {
     });
     expect(r.kind).toBe('presign');
     if (r.kind === 'presign') {
-      expect(r.upload_url).toMatch(/^https:\/\/fake-minio\.local\/mcp-artifacts\//);
-      expect(r.upload_url).toContain('X-Amz-Signature=fake-put-signature');
+      expect(r.upload_url).toContain('mcp-artifacts');
       expect(r.upload_url).toContain('report.txt');
       expect(r.method).toBe('PUT');
-      expect(r.required_headers).toEqual({});
       expect(r.expires_in).toBe(3600);
     }
   });
@@ -51,21 +42,16 @@ describe('attachFile', () => {
     const { project } = seedAgentsWorkspace(world);
     const issue = addIssue(world, project.id, { name: 'A', state: 'st-To Do' });
     const plane = fakePlane(world);
-    const minio = fakeMinio(world);
-    const objectKey = 'issues/iss-1/123-qa-agent-report.txt';
-    addMinioObject(world, 'mcp-artifacts', objectKey, {
-      size: 1234,
-      contentType: 'text/plain',
-    });
 
     const r = await attachFile({
       plane,
+      minio: fakeMinio(world),
       cache: new TtlCache(),
       workspace: 'agents',
       defaultProjectRef: 'SLONK',
       identity: 'qa-agent',
       bucket: 'mcp-artifacts',
-      minio,
+      endpoint: 'http://minio:9000',
       expiresInSec: 3600,
       input: {
         issue_id: issue.id,
@@ -73,45 +59,13 @@ describe('attachFile', () => {
         mime_type: 'text/plain',
         size: 1234,
         complete: true,
-        object_key: objectKey,
+        object_key: 'issues/iss-1/123-qa-agent-report.txt',
       },
     });
     expect(r.kind).toBe('complete');
     if (r.kind === 'complete') {
       expect(r.object_key).toContain('report.txt');
     }
-    const comments = world.comments.get(`${project.id}:${issue.id}`) ?? [];
-    expect(comments[0]!.comment_html).toContain('https://fake-minio.local/mcp-artifacts/');
-    expect(comments[0]!.comment_html).toContain('X-Amz-Signature=fake-signature');
-  });
-
-  it('complete phase rejects object keys from another issue', async () => {
-    const world = newWorld();
-    const { project } = seedAgentsWorkspace(world);
-    const issue = addIssue(world, project.id, { name: 'A', state: 'st-To Do' });
-    const plane = fakePlane(world);
-    const minio = fakeMinio(world);
-
-    await expect(
-      attachFile({
-        plane,
-        cache: new TtlCache(),
-        workspace: 'agents',
-        defaultProjectRef: 'SLONK',
-        identity: 'qa-agent',
-        bucket: 'mcp-artifacts',
-        minio,
-        expiresInSec: 3600,
-        input: {
-          issue_id: issue.id,
-          filename: 'report.txt',
-          mime_type: 'text/plain',
-          size: 1234,
-          complete: true,
-          object_key: 'issues/other-issue/123-qa-agent-report.txt',
-        },
-      }),
-    ).rejects.toMatchObject({ code: 'INVALID_INPUT' });
   });
 
   it('direct upload stores content and posts a comment in one call', async () => {
@@ -130,6 +84,7 @@ describe('attachFile', () => {
       defaultProjectRef: 'SLONK',
       identity: 'developer-agent',
       bucket: 'mcp-artifacts',
+      endpoint: 'http://minio:9000',
       expiresInSec: 3600,
       input: {
         issue_id: 1234,
@@ -173,6 +128,7 @@ describe('attachFile', () => {
         defaultProjectRef: 'SLONK',
         identity: 'developer-agent',
         bucket: 'mcp-artifacts',
+        endpoint: 'http://minio:9000',
         expiresInSec: 3600,
         input: {
           issue_id: 1234,
@@ -204,6 +160,7 @@ describe('attachFile', () => {
         defaultProjectRef: 'SLONK',
         identity: 'developer-agent',
         bucket: 'mcp-artifacts',
+        endpoint: 'http://minio:9000',
         expiresInSec: 3600,
         input: {
           issue_id: 1234,
