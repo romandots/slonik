@@ -8,6 +8,7 @@
 ## [Unreleased]
 
 ### Added
+<<<<<<< HEAD
 - Добавлен режим прямой загрузки файлов через `attach_file.content_base64` для MCP-клиентов (SLONK-27).
 
 ### Changed
@@ -351,6 +352,8 @@
   — это путь для CI / провижининга. Команда НЕ зовёт Plane сама:
   оператор после неё запускает `make bootstrap`, чтобы заинвайтить
   нового пользователя и записать identity в `mcp_data/identity.sqlite`.
+=======
+>>>>>>> feature/SLONK-6-data-driven-roles-and-workflow
 - **Data-driven маппинг «роль → колонка канбана» через `roles/*.md`
   (SLONK-6).** Список agent-identities и их дефолтные колонки больше не
   захардкожены в коде MCP. Каждая роль описана отдельным

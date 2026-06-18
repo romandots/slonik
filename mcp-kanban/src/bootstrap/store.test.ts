@@ -1,7 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { IdentityStore } from './store.js';
 import Database from 'better-sqlite3';
 
@@ -110,6 +107,9 @@ describe('IdentityStore', () => {
     // затем оборачиваем тем же путём — но IdentityStore::Database() создаст
     // НОВУЮ БД для :memory:. Чтобы протестировать миграцию, открываем
     // временный реальный файл.
+    const { mkdtempSync, rmSync } = require('node:fs') as typeof import('node:fs');
+    const { tmpdir } = require('node:os') as typeof import('node:os');
+    const { join } = require('node:path') as typeof import('node:path');
     const dir = mkdtempSync(join(tmpdir(), 'slonk-store-mig-'));
     const path = join(dir, 'identity.sqlite');
     try {
@@ -156,6 +156,9 @@ describe('IdentityStore', () => {
   });
 
   it('SLONK-6: corrupt state_aliases JSON heals to empty array, does not crash', () => {
+    const { mkdtempSync, rmSync } = require('node:fs') as typeof import('node:fs');
+    const { tmpdir } = require('node:os') as typeof import('node:os');
+    const { join } = require('node:path') as typeof import('node:path');
     const dir = mkdtempSync(join(tmpdir(), 'slonk-store-corrupt-'));
     const path = join(dir, 'identity.sqlite');
     try {
