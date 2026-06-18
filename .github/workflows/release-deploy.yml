@@ -113,7 +113,7 @@ jobs:
           IMAGE_MCP: ${{ env.IMAGE_MCP }}
           GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
           GH_ACTOR: ${{ github.actor }}
-          DEPLOY_DIR: /opt/slonk
+          DEPLOY_DIR: /home/romandots/slonik
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
@@ -159,4 +159,4 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            cd /opt/slonk && make smoke
+            cd "$DEPLOY_DIR" && make smoke

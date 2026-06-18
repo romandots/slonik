@@ -656,7 +656,7 @@ Push в GHCR из workflow — через автоматический `GITHUB_T
 
 ### 12.4 Настройка прод-хоста
 
-- `DEPLOY_DIR` в workflow → `/opt/slonk` (можно поменять через env в workflow).
+- `DEPLOY_DIR` в workflow → `/home/romandots/slonik` (можно поменять через env в workflow).
 - На хосте должен быть `docker compose` (v2), `make`, `.env` с прод-секретами.
 - Перед первым деплоем: `docker login ghcr.io -u <user> --password <GHCR_PULL_TOKEN>`.
 - Branch protection: `Require status checks to pass before merging` → выбрать `lint`, `build`, `test`.
