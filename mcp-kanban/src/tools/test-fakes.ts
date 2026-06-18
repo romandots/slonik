@@ -506,7 +506,7 @@ export function fakeMinio(world: FakeWorld): MinioClient {
       return `https://fake-minio.local/${bucket}/${objectKey}?X-Amz-Signature=fake-signature&X-Amz-Expires=${expirySec}`;
     },
     async presignedPutObject(bucket: string, objectKey: string, expirySec: number): Promise<string> {
-      return `https://fake-minio.local/${bucket}/${objectKey}?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=fake-put-signature&X-Amz-Expires=${expirySec}`;
+      return `https://fake-minio.local/${bucket}/${objectKey}?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Method=PUT&X-Amz-Signature=fake-put-signature&X-Amz-Expires=${expirySec}`;
     },
     async listObjectsV2(bucket: string, prefix: string): Promise<MinioObject[]> {
       if (world.failMinioList) {
