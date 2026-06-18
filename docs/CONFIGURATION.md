@@ -18,18 +18,9 @@ slonk/
 │   └── Caddyfile               # обратный прокси (опц.)
 ├── mcp-kanban/
 │   ├── Dockerfile
-│   ├── bootstrap/                # bind-mount'ится в /app/bootstrap:ro в mcp-kanban (правки без ребилда)
-│   │   ├── manifest.example.yaml # committed pristine-шаблон (workspace/projects/states/labels[/identities legacy])
-│   │   └── manifest.yaml         # локальный конфиг установки, gitignored (cp из *.example.yaml)
-│   └── roles/                    # SLONK-6: identity-роли по `<role>.md` (bind-mount /app/roles:ro)
-│       ├── analyst-agent.md      # коробочные 7 ролей коммитятся в git
-│       ├── developer-agent.md
-│       ├── security-auditor-agent.md
-│       ├── code-review-agent.md
-│       ├── qa-agent.md
-│       ├── doc-agent.md
-│       ├── merger-agent.md
-│       └── README.md             # формат файла + правила gitignore
+│   └── bootstrap/                # bind-mount'ится в /app/bootstrap:ro в mcp-kanban (правки без ребилда)
+│       ├── manifest.example.yaml # committed pristine-шаблон (workspace/projects/states/labels/identities)
+│       └── manifest.yaml         # локальный конфиг установки, gitignored (cp из *.example.yaml)
 ├── prometheus/prometheus.yml
 ├── grafana/provisioning/…
 ├── loki/loki-config.yaml
@@ -151,7 +142,6 @@ Compose автоматически собирает `AMQP_URL` для Celery и�
 | `MCP_RETRY_BACKOFF_MS` | `200` | базовый backoff (5xx — × 2^attempt; 429 — × 2^attempt, capped к 1–30s) |
 | `MCP_PLANE_TIMEOUT_MS` | `10000` | таймаут запроса к Plane |
 | `MCP_METRICS_ENABLED` | `false` | включить `/metrics` (Prometheus) |
-| `MCP_ROLES_DIR` | — | (SLONK-6) путь к директории с `*.md`-файлами agent-ролей. Если пуст — loader ищет директорию рядом с `package.json` (в Docker — `/app/roles`, через bind-mount это `./mcp-kanban/roles`). Менять стоит, только если ты смонтировал roles в нестандартное место. |
 | `MCP_CACHE_MAX_ENTRIES` | `2048` | жёсткий cap на размер `TtlCache` (Plane-ответы read-tools, TTL=10s). При превышении вытесняется самый старый ключ (FIFO). См. [Resource limits for small hosts](#resource-limits-for-small-hosts). |
 | `MCP_SESSION_IDLE_MS` | `1800000` (30 мин) | idle-timeout MCP-сессии: если по `mcp-session-id` нет активности дольше этого срока, janitor закрывает сессию и освобождает McpServer + 22 tool-замыкания. |
 | `MCP_SESSION_GC_INTERVAL_MS` | `60000` (1 мин) | период фонового janitor'а. `0` отключает периодический sweep (сессии чистятся только на graceful shutdown клиента). |
@@ -280,35 +270,18 @@ labels:
   - { name: security,       color: "#7f1d1d" }
   - { name: high-priority,  color: "#b91c1c" }
   - { name: low-priority,   color: "#94a3b8" }
-identities:                                            # SLONK-6: legacy fallback
+identities:
   - { role: analyst-agent,         email: analyst-agent@slonk.local,         default_state: Analysis }
   - { role: developer-agent,       email: developer-agent@slonk.local,       default_state: Development }
   - { role: security-auditor-agent,email: security-auditor-agent@slonk.local,default_state: Security Review }
   - { role: code-review-agent,     email: code-review-agent@slonk.local,     default_state: Code Review }
   - { role: qa-agent,              email: qa-agent@slonk.local,              default_state: Testing }
   - { role: doc-agent,             email: doc-agent@slonk.local,             default_state: Documenting }
-  - { role: merger-agent,          email: merger-agent@slonk.local,          default_state: Merging }
 ```
 
 > `projects[].slug` — внутренний ярлык для отчёта bootstrap; Plane его не
 > хранит. В MCP проект адресуется по `identifier` (`MCP_DEFAULT_PROJECT` /
 > `MCP_ALLOWED_PROJECTS` = `SLONK`), а не по slug.
-
-> **SLONK-6: `identities:` в манифесте — legacy fallback.** Начиная с SLONK-6
-> primary-источник agent-identities — директория
-> `mcp-kanban/roles/`, по одному `*.md`-файлу на роль (с YAML
-> front-matter). Bootstrap читает её первой; на `identities:` падает,
-> только если `roles/` пуста (для совместимости с инсталляциями,
-> обновляющимися с версии без `roles/`). Преимущества `roles/`:
-> кастомные роли (например, `release-agent`) добавляются одним новым
-<<<<<<< HEAD
-> файлом без правки манифеста (быстрее всего — через `make add-role`,
-> интерактивную CLI из SLONK-12); в коробку завозятся `state_aliases`
-=======
-> файлом без правки манифеста; в коробку завозятся `state_aliases`
->>>>>>> feature/SLONK-6-data-driven-roles-and-workflow
-> (синонимы имени колонки для локализованных канбанов); кастомные роли
-> игнорируются git'ом. Подробнее — [USER_GUIDE §6.4](./USER_GUIDE.md#64-кастомные-роли-slonk-6).
 
 ## 5. Сети и порты
 
@@ -349,27 +322,27 @@ identities:                                            # SLONK-6: legacy fallbac
 | `minio` | `192m` | Memory grows linearly with active uploads. |
 | `plane-migrator` | `384m` | one-shot Django migrations, лимит для safety. |
 | `plane-api` | `512m` | gunicorn worker (`GUNICORN_WORKERS=1`); при >1 — поднимать. |
-| `plane-worker` | `768m` | Celery worker; на пиках автоматизаций / mass-update'ов `384m` даёт OOM-kill (SLONK-9). |
+| `plane-worker` | `384m` | Celery worker. |
 | `plane-beat` | `128m` | scheduler-only, minimal footprint. |
 | `plane-web` / `admin` / `space` / `live` | `192m` каждый | Next.js SSR; 128m даёт OOM при build cache warmup. |
 | `plane-proxy` | `96m` | Caddy reverse-proxy. |
 | `mcp-kanban` | `256m` | TtlCache bounded (`MCP_CACHE_MAX_ENTRIES`), MCP-сессии с idle-eviction (`MCP_SESSION_IDLE_MS` + `MCP_MAX_SESSIONS`). |
 
-Итоговая сумма — ~3.9 GiB лимитов. На 4 GB хосте остаётся ~100 MiB для
-ОС и Docker engine — baseline уже не помещается на голом 4 GB-хосте;
-рекомендуется минимум 6 GB даже без overlay'ев (observability/backup).
-Под 8 GB можно поднять лимиты по таблице ниже.
+Итоговая сумма — ~3.3 GB лимитов. На 4 GB хосте остаётся ~700 MB для
+ОС и Docker engine — это рабочая полка. Под 8 GB можно поднять лимиты
+вдвое (см. ниже).
 
-> **Цифры — baseline под тюнинг.** Значения подобраны так, чтобы стек
-> выдерживал лёгкую интерактивную нагрузку (1–2 агента, единичные
-> `make bootstrap`) и типичные пики Celery-автоматизаций без OOM-kill.
-> Изначальный baseline `plane-worker: 384m` (до SLONK-9) ловил OOM-kill
-> на пиках mass-update'ов — наблюдалось в QA SLONK-5 как циклические
-> рестарты `slonk-plane-worker-1` с exit `137`. После SLONK-9 baseline
-> поднят до `768m`. Если в `docker events` видны `oom-kill` на другом
-> сервисе — поднимай его `mem_limit` пропорционально доступной RAM
-> (см. тюнинг ниже). Лимиты в репозитории остаются защитой от
-> unbounded growth, а не «правильным» размером под прод.
+> **Цифры — baseline под тюнинг.** Значения подобраны под пустой стек +
+> лёгкую интерактивную нагрузку (1–2 агента, единичные `make bootstrap`).
+> На реальной нагрузке отдельным сервисам нужно больше: в частности
+> **`plane-worker` (Celery) под пиками автоматизаций / mass-update'ов
+> ловит OOM-kill на `384m`** — наблюдалось в QA SLONK-5 как
+> циклические рестарты `slonk-plane-worker-1` с exit `137`. Если в
+> `docker events` видны `oom-kill` для plane-worker (или другого
+> сервиса) — поднимай его `mem_limit` в первую очередь: `plane-worker`
+> до `512m–768m`, дальше — пропорционально доступной RAM (см. тюнинг
+> ниже). Лимиты в репозитории остаются защитой от unbounded growth, а
+> не «правильным» размером под прод.
 
 #### MCP-kanban memory bounds
 
@@ -409,9 +382,8 @@ identities:                                            # SLONK-6: legacy fallbac
 - **2 GB RAM.** Не пытайся — Plane backend сам по себе не помещается.
 - **4 GB RAM.** Baseline-цифры выше.
 - **8 GB RAM.** Можно удвоить `postgres → 1g`, `plane-api → 1g`,
-  `plane-worker → 1g`, остальные оставить. Это даёт головному
-  worker'у Plane дополнительный запас на длинных пиках (миграции,
-  mass-update) поверх baseline'а в `768m`.
+  `plane-worker → 768m`, остальные оставить. Это даёт головному
+  worker'у Plane дышать на пиках (миграции, mass-update).
 - **16+ GB RAM.** `mem_limit` всё ещё полезен (защита от unbounded
   growth bug'ов в upstream), но цифры можно умножить на 2–4. Альтернатива
   — `mem_reservation` (soft-лимит) + `mem_limit` ×2 от него.
@@ -431,13 +403,9 @@ identity в `X-Agent-Identity` (одна из ролей bootstrap'а: по ум
 `analyst-agent`, `developer-agent`, `security-auditor-agent`,
 `code-review-agent`, `qa-agent`, `doc-agent`, `merger-agent`). Whitelist
 собирается рантайм-овым `IdentityRegistry` из `identity.sqlite` (после
-`make bootstrap`, primary-источник — `mcp-kanban/roles/*.md` с SLONK-6)
-с fallback на `roles/` напрямую и на legacy-секцию `identities:` в
-`bootstrap/manifest.yaml`. Добавить свою роль = `make add-role`
-(интерактивная CLI, SLONK-12) или скопировать `<role>.md`-файл в
-`mcp-kanban/roles/` руками, и затем пере-bootstrap'нуть — правки кода не
-нужны (см. [SPEC.md §5.5](./SPEC.md#55-agent-identity) и
-[USER_GUIDE.md §6.4](./USER_GUIDE.md#64-кастомные-роли-slonk-6)).
+`make bootstrap`) с fallback на `bootstrap/manifest.yaml`, поэтому добавить
+свою роль = поправить `identities:` в манифесте и пере-bootstrap'нуть —
+правки кода не нужны (см. [SPEC.md §5.5](./SPEC.md#55-agent-identity)).
 URL — `http://localhost:8787/mcp` в dev, `https://mcp.slonk.example.com/mcp`
 в прод через caddy (Phase 7).
 
