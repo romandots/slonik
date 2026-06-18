@@ -20,6 +20,7 @@ describe('updateIssue (description handling)', () => {
       cache,
       workspace: 'agents',
       defaultProjectRef: 'SLONK',
+      allowedProjects: ['SLONK'],
       input: { name: 'Initial', description: 'Old body' },
     });
 
@@ -28,6 +29,7 @@ describe('updateIssue (description handling)', () => {
       cache,
       workspace: 'agents',
       defaultProjectRef: 'SLONK',
+      allowedProjects: ['SLONK'],
       input: { issue_id: created.id, description: 'Replaced' },
     });
 
@@ -36,6 +38,7 @@ describe('updateIssue (description handling)', () => {
       cache,
       workspace: 'agents',
       defaultProjectRef: 'SLONK',
+      allowedProjects: ['SLONK'],
       issueRef: created.id,
     });
     // description_body — описание без meta-блока; парсер снимает
@@ -58,6 +61,7 @@ describe('updateIssue (description handling)', () => {
       cache,
       workspace: 'agents',
       defaultProjectRef: 'SLONK',
+      allowedProjects: ['SLONK'],
       input: { name: 'Keep body', description: 'Stay here' },
     });
 
@@ -66,6 +70,7 @@ describe('updateIssue (description handling)', () => {
       cache,
       workspace: 'agents',
       defaultProjectRef: 'SLONK',
+      allowedProjects: ['SLONK'],
       input: { issue_id: created.id, priority: 'high' },
     });
 
@@ -74,6 +79,7 @@ describe('updateIssue (description handling)', () => {
       cache,
       workspace: 'agents',
       defaultProjectRef: 'SLONK',
+      allowedProjects: ['SLONK'],
       issueRef: created.id,
     });
     expect(fetched.description_body).toContain('Stay here');
@@ -90,6 +96,7 @@ describe('updateIssue (description handling)', () => {
       cache,
       workspace: 'agents',
       defaultProjectRef: 'SLONK',
+      allowedProjects: ['SLONK'],
       input: { name: 'X', description: 'old' },
     });
 
@@ -98,6 +105,7 @@ describe('updateIssue (description handling)', () => {
       cache,
       workspace: 'agents',
       defaultProjectRef: 'SLONK',
+      allowedProjects: ['SLONK'],
       input: { issue_id: created.id, description: '<b>bold</b> & "q"' },
     });
 
@@ -106,11 +114,10 @@ describe('updateIssue (description handling)', () => {
       cache,
       workspace: 'agents',
       defaultProjectRef: 'SLONK',
+      allowedProjects: ['SLONK'],
       issueRef: created.id,
     });
-    // <b> is an allowed tag — passed through as real HTML (not escaped).
     expect(fetched.description_raw).toContain('<b>bold</b>');
-    // & and " in the text portion are still HTML-entity-encoded.
     expect(fetched.description_raw).toContain('&amp;');
     expect(fetched.description_raw).toContain('&quot;');
   });
@@ -126,6 +133,7 @@ describe('updateIssue (description handling)', () => {
         cache: new TtlCache(),
         workspace: 'agents',
         defaultProjectRef: 'SLONK',
+        allowedProjects: ['SLONK'],
         input: { issue_id: issue.id },
       }),
     ).rejects.toThrowError(/no fields to update/);
