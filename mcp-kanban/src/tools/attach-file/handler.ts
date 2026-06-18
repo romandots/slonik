@@ -1,6 +1,7 @@
 import type { PlaneClient } from '../../plane-client.js';
 import type { TtlCache } from '../../cache.js';
 import type { AgentIdentity } from '../../identity.js';
+import type { MinioClient } from '../../minio-client.js';
 import { McpError } from '../../errors.js';
 import { resolveProject } from '../project-resolver.js';
 import { parseIssueRef } from '../get-issue/schema.js';
@@ -8,17 +9,12 @@ import { resolveIssueId } from '../update-issue/handler.js';
 import { formatComment } from '../comment-issue/handler.js';
 import type { AttachFileInput } from './schema.js';
 
-// `attach_file` — двухфазная операция (см. SPEC §6.2). v1: Plane API
-// v1.3.0 поддерживает `/issues/{id}/attachments/` с
-// multipart upload, но не выдаёт собственный presigned-URL. Чтобы остаться
-// в спецификации MCP, реализуем минимально:
+// `attach_file` — двухфазная операция (см. SPEC §6.2):
 //
-//   1) Без `complete=true` — отдаём ссылку на endpoint Plane'а, через
-//      который агент пройдёт multipart upload. Это не настоящий S3
-//      presign, но контрактно совместимо: агенту достаточно URL + методу.
-//   2) С `complete=true` и `object_key` — публикуем комментарий с ссылкой
-//      и помечаем issue. Чистая реализация MinIO-presign относится к
-//      Phase 7 (proxy + TLS + S3-policy), здесь — stub.
+//   1) Без `complete=true` — создаём object_key и отдаём настоящий SigV4
+//      presigned PUT URL через public MinIO endpoint.
+//   2) С `complete=true` и `object_key` — проверяем, что объект уже лежит в
+//      MinIO, и публикуем в комментарии временную presigned GET ссылку.
 
 export interface PresignResult {
   kind: 'presign';
@@ -44,8 +40,7 @@ export async function attachFile(deps: {
   identity: AgentIdentity;
   /** MinIO bucket для агент-артефактов (MCP_*). */
   bucket: string;
-  /** Внутренний MinIO endpoint, чтобы агент мог загружать напрямую. */
-  endpoint: string;
+  minio: MinioClient;
   /** TTL presigned (MCP_PLANE_TIMEOUT… не подходит, отдельный SPEC). */
   expiresInSec: number;
   input: AttachFileInput;
@@ -70,7 +65,13 @@ export async function attachFile(deps: {
         message: 'complete=true requires object_key (returned from presign phase)',
       });
     }
-    const url = `${deps.endpoint.replace(/\/$/, '')}/${deps.bucket}/${deps.input.object_key}`;
+    ensureObjectKeyBelongsToIssue(deps.input.object_key, issueId);
+    await deps.minio.statObject(deps.bucket, deps.input.object_key);
+    const url = await deps.minio.presignedGetObject(
+      deps.bucket,
+      deps.input.object_key,
+      deps.expiresInSec,
+    );
     await deps.plane.createIssueComment(deps.workspace, project.id, issueId, {
       comment_html: formatComment(
         deps.identity,
@@ -81,18 +82,19 @@ export async function attachFile(deps: {
     return { kind: 'complete', issue_id: issueId, object_key: deps.input.object_key };
   }
 
-  // Presign phase. v1 stub: deterministic object key, payload-based URL.
-  // Реальный S3 presign — Phase 7 (использует aws4-fetch / minio.presignedPutObject).
+  // Presign phase: deterministic object key + real SigV4 presigned PUT URL.
   const objectKey = makeObjectKey(deps.identity, deps.input.filename, issueId);
-  const uploadUrl = `${deps.endpoint.replace(/\/$/, '')}/${deps.bucket}/${objectKey}`;
+  await deps.minio.ensureBucket(deps.bucket);
+  const uploadUrl = await deps.minio.presignedPutObject(
+    deps.bucket,
+    objectKey,
+    deps.expiresInSec,
+  );
   return {
     kind: 'presign',
     upload_url: uploadUrl,
     method: 'PUT',
-    required_headers: {
-      'Content-Type': deps.input.mime_type,
-      'X-Slonk-Identity': deps.identity,
-    },
+    required_headers: {},
     object_key: objectKey,
     expires_in: deps.expiresInSec,
   };
@@ -102,4 +104,14 @@ function makeObjectKey(identity: AgentIdentity, filename: string, issueId: strin
   const ts = Date.now();
   const safe = filename.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 64);
   return `issues/${issueId}/${ts}-${identity}-${safe}`;
+}
+
+function ensureObjectKeyBelongsToIssue(objectKey: string, issueId: string): void {
+  const expectedPrefix = `issues/${issueId}/`;
+  if (!objectKey.startsWith(expectedPrefix)) {
+    throw new McpError({
+      code: 'INVALID_INPUT',
+      message: 'object_key must be the key returned by attach_file presign for this issue',
+    });
+  }
 }

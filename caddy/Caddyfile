@@ -62,8 +62,8 @@
 	}
 }
 
-# MinIO S3 API наружу (SLONK-21). Нужен, чтобы presigned GET URL'ы из
-# `read_attachment` / `list_attachments` были скачиваемы агентом из
+# MinIO S3 API наружу (SLONK-21/22). Нужен, чтобы presigned GET/PUT URL'ы из
+# `read_attachment` / `list_attachments` / `attach_file` были доступны агенту из
 # интернета. MCP подписывает URL'ы под этот хост через MINIO_PUBLIC_ENDPOINT
 # (= https://{$CADDY_MINIO_DOMAIN}); Caddy терминирует TLS и проксирует на
 # внутренний `minio:9000`.

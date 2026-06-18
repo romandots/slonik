@@ -44,8 +44,7 @@ export interface ToolContext {
   rateLimiter: RateLimiter;
   /** Возвращает plane_user_id текущей identity, если known. */
   resolvePlaneUserId: () => string | null;
-  /** MinIO endpoint и bucket для attach_file. */
-  minioEndpoint: string;
+  /** MinIO bucket для attach_file. */
   minioBucket: string;
   /**
    * MinIO bucket для UI-аплоадов Plane (`MINIO_BUCKET_PLANE`,
