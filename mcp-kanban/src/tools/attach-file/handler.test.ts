@@ -83,4 +83,33 @@ describe('attachFile', () => {
     expect(comments[0]!.comment_html).toContain('https://fake-minio.local/mcp-artifacts/');
     expect(comments[0]!.comment_html).toContain('X-Amz-Signature=fake-signature');
   });
+
+  it('complete phase rejects object keys from another issue', async () => {
+    const world = newWorld();
+    const { project } = seedAgentsWorkspace(world);
+    const issue = addIssue(world, project.id, { name: 'A', state: 'st-To Do' });
+    const plane = fakePlane(world);
+    const minio = fakeMinio(world);
+
+    await expect(
+      attachFile({
+        plane,
+        cache: new TtlCache(),
+        workspace: 'agents',
+        defaultProjectRef: 'SLONK',
+        identity: 'qa-agent',
+        bucket: 'mcp-artifacts',
+        minio,
+        expiresInSec: 3600,
+        input: {
+          issue_id: issue.id,
+          filename: 'report.txt',
+          mime_type: 'text/plain',
+          size: 1234,
+          complete: true,
+          object_key: 'issues/other-issue/123-qa-agent-report.txt',
+        },
+      }),
+    ).rejects.toMatchObject({ code: 'INVALID_INPUT' });
+  });
 });

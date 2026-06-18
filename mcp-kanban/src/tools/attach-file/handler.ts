@@ -65,6 +65,7 @@ export async function attachFile(deps: {
         message: 'complete=true requires object_key (returned from presign phase)',
       });
     }
+    ensureObjectKeyBelongsToIssue(deps.input.object_key, issueId);
     await deps.minio.statObject(deps.bucket, deps.input.object_key);
     const url = await deps.minio.presignedGetObject(
       deps.bucket,
@@ -103,4 +104,14 @@ function makeObjectKey(identity: AgentIdentity, filename: string, issueId: strin
   const ts = Date.now();
   const safe = filename.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 64);
   return `issues/${issueId}/${ts}-${identity}-${safe}`;
+}
+
+function ensureObjectKeyBelongsToIssue(objectKey: string, issueId: string): void {
+  const expectedPrefix = `issues/${issueId}/`;
+  if (!objectKey.startsWith(expectedPrefix)) {
+    throw new McpError({
+      code: 'INVALID_INPUT',
+      message: 'object_key must be the key returned by attach_file presign for this issue',
+    });
+  }
 }
