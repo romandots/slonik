@@ -1,4 +1,7 @@
 import { createHash } from 'node:crypto';
+import type { PlaneClient } from '../../plane-client.js';
+import type { MinioClient } from '../../minio-client.js';
+import type { TtlCache } from '../../cache.js';
 import type { AgentIdentity } from '../../identity.js';
 import type { MinioClient } from '../../minio-client.js';
 import type { PlaneClient } from '../../plane-client.js';
@@ -8,22 +11,35 @@ import { parseIssueRef } from '../get-issue/schema.js';
 import { resolveProject } from '../project-resolver.js';
 import { resolveIssueId } from '../update-issue/handler.js';
 import { formatComment } from '../comment-issue/handler.js';
+import { mcaIdFromObjectKey } from '../../attachments/types.js';
 import type { AttachFileInput } from './schema.js';
 
-// `attach_file` has two existing phases: presign, then complete. Direct upload
-// keeps that flow intact and only short-circuits both phases when content is
-// provided by the MCP client.
+// `attach_file` — двухфазная операция (SPEC §6.2), реализованная поверх
+// реального MinIO presign (SLONK-18):
+//
+//   1) Без `complete=true` — выдаём НАСТОЯЩИЙ presigned PUT URL
+//      (`minio.presignedPutObject`). Агент делает `PUT <upload_url>` с телом
+//      файла напрямую в bucket агент-артефактов. Авторизация — в query-подписи,
+//      обязательных заголовков нет (Content-Type — опциональная подсказка).
+//   2) С `complete=true` и `object_key` — подтверждаем аплоад:
+//      `statObject` проверяет, что файл реально лёг (контракт «complete OK →
+//      файл на месте»), затем регистрируем его как mcp-artifact (он живёт под
+//      префиксом `issues/<id>/`, поэтому виден через `list_attachments` и
+//      резолвится `read_attachment` по стабильному `mca_`-id) и постим
+//      аннотацию-комментарий. Это закрывает прикрепление и к задаче (артефакт),
+//      и к комментарию (аннотация со ссылкой на artifact-id).
 
-type ToolCache = {
-  clear(): void;
-};
-
-export type PresignResult = {
+export interface PresignResult {
   kind: 'presign';
   issue_id: string;
   object_key: string;
   upload_url: string;
-  method: 'PUT' | 'POST';
+  method: 'PUT';
+  /** Подсказка по заголовкам: Content-Type не входит в подпись, но агент
+   *  обычно хочет проставить его при PUT. */
+  required_headers: Record<string, string>;
+  object_key: string;
+  /** Сколько секунд URL валиден. */
   expires_in: number;
   required_headers: Record<string, string>;
 };
@@ -32,25 +48,27 @@ export type CompleteResult = {
   kind: 'complete';
   issue_id: string;
   object_key: string;
-};
-
-export type DirectUploadResult = {
-  kind: 'direct';
-  issue_id: string;
-  object_key: string;
+  /** Стабильный id артефакта — резолвится `read_attachment(attachment_id)`. */
+  attachment_id: string;
+  filename: string;
+  mime_type: string;
   size: number;
-  attachment: PublicAttachment;
-};
+  /** Свежий presigned GET для удобства вызывающего (в комментарий НЕ пишется —
+   *  туда идёт только стабильный artifact-id, чтобы не плодить протухающие
+   *  ссылки и не оставлять X-Amz-Signature в истории задачи). */
+  download_url: string;
+  comment_id: string;
+}
 
 export interface AttachFileDeps {
   plane: PlaneClient;
   minio: MinioClient;
-  cache: ToolCache;
+  cache: TtlCache;
   workspace: string;
   defaultProjectRef: string;
   identity: AgentIdentity;
   bucket: string;
-  endpoint: string;
+  /** TTL presigned URL'ов в секундах. */
   expiresInSec: number;
   input: AttachFileInput;
 }
@@ -83,64 +101,60 @@ export async function attachFile(deps: AttachFileDeps): Promise<PresignResult | 
     if (content.byteLength !== deps.input.size) {
       throw new McpError({
         code: 'INVALID_INPUT',
-        message: `content_base64 decodes to ${content.byteLength} bytes, expected size ${deps.input.size}`,
+        message: 'complete=true requires object_key (returned from the presign phase)',
       });
     }
+    const objectKey = deps.input.object_key;
+    // Защита от подмены чужого/произвольного ключа: complete принимает только
+    // ключи под префиксом этой задачи (тот же неймспейс, что выдаёт presign).
+    const expectedPrefix = `issues/${issueId}/`;
+    if (!objectKey.startsWith(expectedPrefix)) {
+      throw new McpError({
+        code: 'INVALID_INPUT',
+        message: `object_key must live under '${expectedPrefix}' for issue ${issueId}`,
+      });
+    }
+    // Контракт «complete OK → файл на месте»: 404 → NOT_FOUND
+    // («сначала загрузите файл на upload_url»).
+    const stat = await deps.minio.statObject(deps.bucket, objectKey);
+    const attachmentId = mcaIdFromObjectKey(objectKey, sha1);
+    const downloadUrl = await deps.minio.presignedGetObject(deps.bucket, objectKey, deps.expiresInSec);
 
-    await deps.minio.putObject(deps.bucket, objectKey, content, content.byteLength, {
-      'Content-Type': deps.input.mime_type,
+    const size = stat.size > 0 ? stat.size : deps.input.size;
+    const mimeType = stat.contentType ?? deps.input.mime_type;
+    const note = deps.input.note !== undefined ? ` — ${deps.input.note}` : '';
+    const comment = await deps.plane.createIssueComment(deps.workspace, project.id, issueId, {
+      comment_html: formatComment(
+        deps.identity,
+        `attached <code>${escapeHtml(deps.input.filename)}</code> (${size} bytes), ` +
+          `attachment id <code>${attachmentId}</code> — resolve via read_attachment${escapeHtml(note)}`,
+      ),
     });
     await createAttachmentComment(deps, project.id, issueId, objectKey);
     deps.cache.clear();
-    const uploadedAt = new Date().toISOString();
-
     return {
-      kind: 'direct',
+      kind: 'complete',
       issue_id: issueId,
       object_key: objectKey,
-      size: content.byteLength,
-      attachment: {
-        id: mcaIdFromObjectKey(objectKey, sha1),
-        source: 'mcp_artifact',
-        filename: deps.input.filename,
-        mime_type: deps.input.mime_type,
-        size: content.byteLength,
-        uploaded_at: uploadedAt,
-        uploaded_by: deps.identity,
-      },
+      attachment_id: attachmentId,
+      filename: deps.input.filename,
+      mime_type: mimeType,
+      size,
+      download_url: downloadUrl,
+      comment_id: comment.id,
     };
   }
 
-  if (!deps.input.complete) {
-    const objectKey = deps.input.object_key ?? makeObjectKey(issueId, deps.identity, deps.input.filename);
-    return {
-      kind: 'presign',
-      issue_id: issueId,
-      object_key: objectKey,
-      upload_url: objectUrl(deps.endpoint, deps.bucket, objectKey),
-      method: 'PUT',
-      expires_in: deps.expiresInSec,
-      required_headers: {
-        'Content-Type': deps.input.mime_type,
-        'X-Slonk-Identity': deps.identity,
-      },
-    };
-  }
-
-  if (!deps.input.object_key) {
-    throw new McpError({
-      code: 'INVALID_INPUT',
-      message: 'object_key is required when complete=true',
-    });
-  }
-
-  await createAttachmentComment(deps, project.id, issueId, deps.input.object_key);
-  deps.cache.clear();
-
+  // Presign phase: реальный подписанный PUT URL через MinIO.
+  const objectKey = makeObjectKey(deps.identity, deps.input.filename, issueId);
+  const uploadUrl = await deps.minio.presignedPutObject(deps.bucket, objectKey, deps.expiresInSec);
   return {
-    kind: 'complete',
-    issue_id: issueId,
-    object_key: deps.input.object_key,
+    kind: 'presign',
+    upload_url: uploadUrl,
+    method: 'PUT',
+    required_headers: { 'Content-Type': deps.input.mime_type },
+    object_key: objectKey,
+    expires_in: deps.expiresInSec,
   };
 }
 
@@ -181,6 +195,17 @@ function makeObjectKey(issueId: string, identity: AgentIdentity, filename: strin
   return `issues/${issueId}/${ts}-${identity}-${safe}`;
 }
 
-function sha1(value: string): string {
-  return createHash('sha1').update(value).digest('hex');
+function sha1(s: string): string {
+  return createHash('sha1').update(s).digest('hex');
+}
+
+/** Минимальный HTML-escape для значений, которые мы вставляем в comment_html.
+ *  (comment-issue.formatComment санитайзит тело целиком, но attach_file строит
+ *  HTML вручную с <code>/<a>, поэтому экранируем пользовательские куски сами.) */
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
