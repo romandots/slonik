@@ -693,7 +693,6 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
             defaultProjectRef: ctx.defaultProjectSlug,
             identity: ctx.resolveIdentity(),
             bucket: ctx.minioBucket,
-            minio: ctx.minio,
             expiresInSec: ctx.signedUrlExpirationSec,
             input,
           }),
