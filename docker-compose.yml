@@ -226,8 +226,9 @@ services:
   plane-worker:
     image: makeplane/plane-backend:${PLANE_IMAGE_TAG}
     <<: [*restart-policy, *logging]
-    # SLONK-9: 384m давало OOM-kill (exit 137) под Celery-нагрузкой
-    # (notifications, webhooks, mass-update'ы); 768m = +50% запаса.
+    # SLONK-9: 384m давало OOM-kill (exit 137) на пиках Celery-нагрузки
+    # (notifications, webhooks, recurring schedulers, mass-update'ы);
+    # 768m даёт +50% запаса и покрывает наблюдаемый пик. См. docs/CONFIGURATION.md §5.
     mem_limit: 768m
     command: ./bin/docker-entrypoint-worker.sh
     environment:
@@ -369,19 +370,6 @@ services:
       MCP_RETRY_BACKOFF_MS: ${MCP_RETRY_BACKOFF_MS}
       MCP_PLANE_TIMEOUT_MS: ${MCP_PLANE_TIMEOUT_MS}
       MCP_METRICS_ENABLED: ${MCP_METRICS_ENABLED}
-      # OAuth 2.1 AS / multitenant (SLONK-15/SLONK-18). Без проброса этих
-      # переменных config.ts берёт дефолты (OAuth выключен), и /oauth/* +
-      # /.well-known/oauth-* отдают 404 — remote-коннектор claude.ai не может
-      # пройти discovery. MCP_OAUTH_ISSUER должен указывать на внешний HTTPS-URL
-      # (CADDY_MCP_DOMAIN), без trailing slash и без path.
-      MCP_OAUTH_ENABLED: ${MCP_OAUTH_ENABLED:-0}
-      MCP_OAUTH_ISSUER: ${MCP_OAUTH_ISSUER:-}
-      MCP_OAUTH_OPERATOR_IDENTITY: ${MCP_OAUTH_OPERATOR_IDENTITY:-operator}
-      MCP_OAUTH_ACCESS_TTL_SEC: ${MCP_OAUTH_ACCESS_TTL_SEC:-3600}
-      MCP_OAUTH_REFRESH_TTL_SEC: ${MCP_OAUTH_REFRESH_TTL_SEC:-2592000}
-      MCP_OAUTH_CODE_TTL_SEC: ${MCP_OAUTH_CODE_TTL_SEC:-60}
-      MCP_OAUTH_MAX_CLIENTS: ${MCP_OAUTH_MAX_CLIENTS:-50}
-      MCP_OAUTH_STORE_PATH: ${MCP_OAUTH_STORE_PATH:-}
       # SLONK-6: путь к директории `roles/`. По умолчанию пусто — loader
       # ищет рядом с package.json (`/app/roles`).
       MCP_ROLES_DIR: ${MCP_ROLES_DIR:-}
@@ -392,19 +380,10 @@ services:
       MCP_SESSION_GC_INTERVAL_MS: ${MCP_SESSION_GC_INTERVAL_MS:-60000}
       MCP_MAX_SESSIONS: ${MCP_MAX_SESSIONS:-256}
       PLANE_API_BASE_URL: ${PLANE_API_BASE_URL}
-      PLANE_PUBLIC_ENDPOINT: ${PLANE_PUBLIC_ENDPOINT:-${PLANE_APP_BASE_URL}}
       PLANE_API_KEY: ${PLANE_API_KEY:-}
       # Phase 5: attach_file использует bundled-MinIO как S3 backend.
       MINIO_BUCKET_MCP: ${MINIO_BUCKET_MCP}
       MINIO_INTERNAL_ENDPOINT: http://minio:9000
-      # SLONK-14: read_attachment + list_attachments через MinIO SDK.
-      # Креды совпадают с root-creds Plane (общий service-account, v1).
-      # В Phase 7 — разделить read-only policy и отдельные ключи.
-      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-${MINIO_ROOT_USER}}
-      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-${MINIO_ROOT_PASSWORD}}
-      MINIO_BUCKET_PLANE: ${MINIO_BUCKET_PLANE}
-      MINIO_PUBLIC_ENDPOINT: ${MINIO_PUBLIC_ENDPOINT:-}
-      MINIO_USE_SSL: ${MINIO_USE_SSL:-0}
       PLANE_SIGNED_URL_EXPIRATION: ${PLANE_SIGNED_URL_EXPIRATION}
     volumes:
       # Phase 3+: SQLite-стор (identity-map, audit, git_refs) и опц. логи.

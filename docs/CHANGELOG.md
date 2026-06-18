@@ -9,6 +9,16 @@
 
 ### Added
 - Добавлен режим прямой загрузки файлов через `attach_file.content_base64` для MCP-клиентов (SLONK-27).
+
+### Changed
+- **`plane-worker` baseline `mem_limit` поднят `384m → 768m` (SLONK-9).**
+  В SLONK-5 baseline был рассчитан под пустой стек; QA-прогон на живой
+  Celery-нагрузке (notifications, webhooks, recurring schedulers,
+  mass-update'ы) показал циклические OOM-kill'ы `slonk-plane-worker-1`
+  (exit 137). Новое значение даёт +50% к лимиту и покрывает наблюдаемый
+  пик; ремарка про предел 4 GB-хоста и таблица «Тюнинг под другие хосты»
+  в `docs/CONFIGURATION.md §5` синхронизированы (`8 GB RAM` → `plane-worker
+  → 1g`).
 - **Inline-изображения Plane editor в `list_attachments` / `read_attachment` (SLONK-24).**
   Discovery `plane_comment_inline` теперь распознаёт не только прямые MinIO URL,
   но и TipTap/Plane `<image-component src="<asset-uuid>">` в комментариях и
