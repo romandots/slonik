@@ -4,9 +4,9 @@ import type { Config } from './config.js';
 import { McpError } from './errors.js';
 
 // Тонкая обёртка над `minio` npm SDK. Контракт узкий: только те операции,
-// которые реально нужны для read_attachment / list_attachments
-// (SLONK-14). Запись (presignedPutObject и т.п.) намеренно отсутствует —
-// write-side `attach_file` остаётся v1-stub'ом до отдельной задачи.
+// которые реально нужны read- и write-tool'ам — `statObject`,
+// `presignedGetObject`, `listObjectsV2` (read_attachment / list_attachments,
+// SLONK-14) и `presignedPutObject` (write-side `attach_file`, SLONK-18).
 //
 // Все ошибки SDK заворачиваем в `McpError({code: 'STORAGE_UNAVAILABLE'})`,
 // 404 на `statObject` — в `NOT_FOUND`. Это даёт хендлерам единый
@@ -46,6 +46,14 @@ export interface MinioClient {
     metaData?: Record<string, string>,
   ): Promise<void>;
   presignedGetObject(bucket: string, objectKey: string, expirySec: number): Promise<string>;
+  /**
+   * Временный URL для прямого аплоада агентом (HTTP PUT тела файла).
+   * Контракт: получатель делает `PUT <url>` с телом файла; авторизация
+   * закодирована в query-подписи, поэтому дополнительных заголовков не
+   * требуется (Content-Type можно проставить, но он не входит в подпись).
+   * Срок жизни — `expirySec`. Используется write-side `attach_file` (SLONK-18).
+   */
+  presignedPutObject(bucket: string, objectKey: string, expirySec: number): Promise<string>;
   listObjectsV2(bucket: string, prefix: string): Promise<MinioObject[]>;
   /** Health-check: возвращает true, если MinIO доступен (для /health). */
   checkHealth(): Promise<boolean>;
@@ -133,6 +141,16 @@ export class RealMinioClient implements MinioClient {
       return await this.publicClient.presignedGetObject(bucket, objectKey, expirySec);
     } catch (err) {
       throw mapMinioError(err, `presignedGetObject(${bucket}, ${objectKey})`);
+    }
+  }
+
+  async presignedPutObject(bucket: string, objectKey: string, expirySec: number): Promise<string> {
+    try {
+      // Как и GET: PUT-URL должен указывать на внешний endpoint, иначе агент
+      // вне docker-сети не достучится — подписываем через `publicClient`.
+      return await this.publicClient.presignedPutObject(bucket, objectKey, expirySec);
+    } catch (err) {
+      throw mapMinioError(err, `presignedPutObject(${bucket}, ${objectKey})`);
     }
   }
 

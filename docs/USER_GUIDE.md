@@ -104,8 +104,7 @@ openssl rand -hex 32   # → MCP_AUTH_TOKEN
 identifier `CODE_AGENTS`. Если разные команды задач (бэкенд, фронтенд,
 инфра, продукт) должны жить в раздельных канбан-досках с одинаковым
 workflow — добавь их в локальный `mcp-kanban/bootstrap/manifest.yaml`
-(скопированный из `manifest.example.yaml` на шаге 1) и обнови whitelist
-в `.env`:
+(скопированный из `manifest.example.yaml` на шаге 1):
 
 ```yaml
 # mcp-kanban/bootstrap/manifest.yaml
@@ -127,22 +126,27 @@ projects:
 ```env
 # .env
 MCP_DEFAULT_PROJECT=CODE_AGENTS
-MCP_ALLOWED_PROJECTS=CODE_AGENTS,BACKEND,WEB
 ```
 
 После правок выполни:
 
 ```bash
-docker compose up -d mcp-kanban      # 1. подхватить новый MCP_ALLOWED_PROJECTS
+docker compose up -d mcp-kanban      # 1. перезапустить MCP
 make bootstrap                       # 2. идемпотентно докатить проекты
 ```
 
 `docker compose build mcp-kanban` после правок **манифеста** делать не нужно —
 каталог `mcp-kanban/bootstrap/` пробрасывается в контейнер bind-mount'ом
 (`./mcp-kanban/bootstrap:/app/bootstrap:ro`, см. [docker-compose.yml](../docker-compose.yml)).
-Ребилд нужен только если ты меняешь код MCP-сервера. Если же изменился
-`MCP_ALLOWED_PROJECTS` в `.env` — нужен именно `up -d` (env-переменные
-зашиваются в контейнер при старте, не в образ).
+Ребилд нужен только если ты меняешь код MCP-сервера.
+
+> **`MCP_ALLOWED_PROJECTS` — DEPRECATED.** До версии, включающей SLONK-15,
+> это поле перечисляло список разрешённых проектов. Начиная со SLONK-15
+> граница доступа определяется **workspace из OAuth-токена**: агент видит
+> все проекты своего workspace без дополнительных whitelist'ов.
+> `MCP_ALLOWED_PROJECTS` можно не задавать; существующие `.env`-файлы с
+> этой переменной продолжают работать (поле читается, но игнорируется
+> сервером). Поле будет удалено в следующей MAJOR-версии.
 
 Bootstrap идемпотентен — докатит недостающие проекты + те же 12 states /
 14 labels на каждый. Если `manifest.yaml` вообще нет на хосте — bind-mount
@@ -231,6 +235,62 @@ projects/` → «Create Project»). Plane создаст дефолтные 5 st
 
 Все ENV-переменные валидируются `zod`-схемой в `mcp-kanban/src/config.ts` на
 старте — при опечатке MCP не запустится и в лог пойдёт человеко-читаемая ошибка.
+
+### 2.4 Несколько тенантов (multitenant, SLONK-18)
+
+Один инстанс slonk может обслуживать несколько изолированных тенантов — у
+каждого свой Plane workspace, свой Plane API-ключ и свой пароль для
+OAuth-логина. Агенты разных тенантов не видят данные друг друга: workspace
+агента определяется **только** access-токеном, выданным при OAuth-логине, а не
+параметром запроса. Требуется включённый OAuth (`MCP_OAUTH_ENABLED=true`).
+
+Дефолтный workspace (`MCP_DEFAULT_WORKSPACE` + `PLANE_API_KEY` +
+`MCP_AUTH_TOKEN`) регистрируется тенантом автоматически при старте. Чтобы
+добавить **второй** тенант:
+
+1. **Создай его workspace в Plane UI.** Workspace-scoped API-токен не умеет
+   создавать workspaces — заведи workspace руками (`http://localhost:3000` →
+   создать workspace) и выпусти его API-ключ в *Workspace settings → API
+   tokens*.
+
+2. **Зарегистрируй тенанта** в OAuth-сторе:
+
+   ```bash
+   make add-tenant ARGS="--workspace acme --plane-api-key plane_api_acme --password 'S3cret-pass'"
+   ```
+
+   Опусти `--password`, чтобы сгенерировать случайный (покажется один раз —
+   сразу сохрани). Команда идемпотентна: повторный запуск обновляет ключ/пароль
+   тенанта. Пароль хранится только как SHA-256-хэш; ключ и пароль обратно не
+   печатаются.
+
+   > Ключ/пароль во флагах остаются в истории shell и в `ps`. На общем хосте
+   > используй интерактивный режим:
+   > `docker compose run --rm -iT mcp-kanban node dist/server.js add-tenant`.
+
+3. **Инициализируй workspace тенанта** (states / labels / agent-identities)
+   тем же bootstrap с override'ом:
+
+   ```bash
+   make bootstrap ARGS="--workspace acme --plane-api-key plane_api_acme"
+   ```
+
+4. **Подключи агента к тенанту.** Адрес коннектора — обычный `https://<хост>/mcp`
+   (workspace в URL **не указывается**: claude.ai его не пробрасывает). Тенант
+   выбирается на форме логина: в OAuth-флоу на шаге `/oauth/authorize` сервер
+   показывает поле **Workspace** (по умолчанию подставлен `agents`) и поле
+   пароля. Впиши туда `acme` и пароль тенанта `acme` (SLONK-19). Полученный
+   access-token привязан к `acme`; все MCP-вызовы этого агента уходят в проекты
+   workspace `acme` с identity `operator`.
+
+   > Класть `?workspace=acme` в адрес коннектора бесполезно — claude.ai строит
+   > URL авторизации из OAuth-метаданных и query-хвост отбрасывает. Выбор
+   > тенанта — только через поле Workspace на форме логина.
+
+**Смена ключа существующего тенанта** требует рестарта сервера
+(`docker compose up -d mcp-kanban`) — per-workspace PlaneClient кэшируется в
+памяти. Пароль и регистрация *нового* тенанта подхватываются из стора сразу,
+без рестарта.
 
 ## 3. Запуск стека
 
@@ -359,7 +419,7 @@ make bootstrap
 
 1. Создаст workspace `agents` (slug — `MCP_DEFAULT_WORKSPACE`).
 2. Создаст проект «Code Agents — Default Project» с identifier `SLONK`
-   (на него и указывают `MCP_DEFAULT_PROJECT` / `MCP_ALLOWED_PROJECTS`) и
+   (на него указывает `MCP_DEFAULT_PROJECT`) и
    модулями cycles / modules / views / pages.
 3. Приведёт набор состояний канбана к манифесту (11 колонок): `Backlog →
    To Do → Analysis → Development → Security Review → Code Review → Testing →
@@ -400,12 +460,13 @@ curl -fsS -H "Authorization: Bearer $MCP_AUTH_TOKEN" \
   http://localhost:8787/mcp/tools
 ```
 
-В ответе `/mcp/tools` должно быть 22 имени: `who_am_i`, `list_workspaces`,
+В ответе `/mcp/tools` должно быть 24 имени: `who_am_i`, `list_workspaces`,
 `list_projects`, `list_states`, `list_labels`, `list_cycles`, `list_modules`,
 `list_issues`, `get_issue`, `search_issues`, `get_issue_history`,
 `create_issue`, `update_issue`, `transition_issue`, `claim_issue`,
 `release_issue`, `block_issue`, `comment_issue`, `attach_file`,
-`link_git_ref`, `unlink_git_ref`, `find_issues_by_git_ref`.
+`read_attachment`, `list_attachments`, `link_git_ref`, `unlink_git_ref`,
+`find_issues_by_git_ref`.
 
 ## 5. Подключение агентов
 
@@ -565,8 +626,7 @@ Identity заранее зашита в заголовок `X-Agent-Identity` т
 
 Workspace `agents` содержит несколько проектов. Каждый проект — отдельный
 канбан с теми же 11 состояниями и 14 лейблами, но независимым потоком
-задач. Список и identifier'ы проектов — в `MCP_ALLOWED_PROJECTS`
-(`who_am_i` возвращает их в поле `allowed_projects`).
+задач. Список проектов и их identifier'ов — через `list_projects`.
 
 В каждый MCP-вызов, где речь идёт о задаче (`list_issues`,
 `search_issues`, `get_issue`, `create_issue`, `claim_issue`,
@@ -904,7 +964,7 @@ MCP_IDENTITY_STORE_PATH=/path/to/identity.sqlite \
       перезапущен (`docker compose up -d mcp-kanban`).
 - [ ] `make bootstrap` завершился `BOOTSTRAP OK`.
 - [ ] `curl /health` MCP возвращает `{"status":"ok"}` с `plane_reachable: true`.
-- [ ] `curl /mcp/tools` возвращает 22 имени.
+- [ ] `curl /mcp/tools` возвращает 24 имени.
 - [ ] Claude Code (или другой клиент) видит сервер `slonk` со списком tool'ов
       (`/mcp` внутри CLI).
 - [ ] Тестовый `who_am_i` возвращает правильную identity.

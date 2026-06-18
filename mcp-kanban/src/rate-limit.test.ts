@@ -4,7 +4,7 @@ import { McpError } from './errors.js';
 
 describe('RateLimiter', () => {
   it('consumes tokens from global and identity buckets', () => {
-    let now = 0;
+    const now = 0;
     const rl = new RateLimiter({ globalRps: 5, identityRps: 2, now: () => now });
     rl.consume('developer-agent');
     expect(rl.identityTokens('developer-agent')).toBeCloseTo(1);
@@ -12,7 +12,7 @@ describe('RateLimiter', () => {
   });
 
   it('throws RATE_LIMITED when identity bucket runs out', () => {
-    let now = 0;
+    const now = 0;
     const rl = new RateLimiter({ globalRps: 100, identityRps: 2, now: () => now });
     rl.consume('developer-agent');
     rl.consume('developer-agent');
@@ -37,7 +37,7 @@ describe('RateLimiter', () => {
   });
 
   it('global bucket can block even when identity has tokens', () => {
-    let now = 0;
+    const now = 0;
     const rl = new RateLimiter({ globalRps: 1, identityRps: 1000, now: () => now });
     rl.consume('developer-agent');
     expect(() => rl.consume('qa-agent')).toThrowError(/global rate limit/);

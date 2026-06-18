@@ -24,7 +24,6 @@ export async function listAttachments(deps: {
   logger: Logger;
   workspace: string;
   defaultProjectRef: string;
-  allowedProjects: string[];
   planeBucket: string;
   mcpBucket: string;
   minioEndpoints: string[];
@@ -40,7 +39,6 @@ export async function listAttachments(deps: {
         ? { projectRef: parsed.identifier }
         : {}),
     defaultProjectRef: deps.defaultProjectRef,
-    allowedProjects: deps.allowedProjects,
   });
   const issueId = await resolveIssueId(deps.plane, deps.workspace, project, parsed);
 

@@ -1,5 +1,7 @@
 # slonk
 
+[![CI](https://github.com/romandots/slonik/actions/workflows/ci.yml/badge.svg)](https://github.com/romandots/slonik/actions/workflows/ci.yml)
+
 Self-hosted Kanban task tracker для LLM-агентов на базе [Plane](https://plane.so/) +
 собственного MCP-сервера. Один локальный `docker compose up -d` поднимает Plane,
 инфраструктуру и MCP, через который Claude Code, Codex и другие MCP-совместимые

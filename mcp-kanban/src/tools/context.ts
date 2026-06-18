@@ -24,16 +24,15 @@ export interface ToolContext {
   /** Active identity mode из bootstrap-store (либо config-default). */
   resolveIdentityMode: () => 'per_user' | 'single_bot';
   /**
-   * Workspace slug по умолчанию (`MCP_DEFAULT_WORKSPACE`).
+   * Workspace slug текущего тенанта — берётся из OAuth-токена или
+   * из static-token lookup. Никогда не берётся из параметра запроса.
    */
-  defaultWorkspace: string;
+  workspace: string;
   /**
    * Project identifier (например, `SLONK`) или slug — выбирается tool'ом.
    * Тут сохраняем оба, чтобы tool сам резолвил.
    */
   defaultProjectSlug: string;
-  /** Список разрешённых проектов (slug/identifier). */
-  allowedProjects: string[];
   /** Audit log (SQLite). Write-tools обязаны писать сюда каждое действие. */
   audit: AuditLog;
   /**
@@ -45,8 +44,7 @@ export interface ToolContext {
   rateLimiter: RateLimiter;
   /** Возвращает plane_user_id текущей identity, если known. */
   resolvePlaneUserId: () => string | null;
-  /** MinIO endpoint и bucket для attach_file. */
-  minioEndpoint: string;
+  /** MinIO bucket для агент-артефактов (attach_file, mcp_artifact discovery). */
   minioBucket: string;
   /**
    * MinIO bucket для UI-аплоадов Plane (`MINIO_BUCKET_PLANE`,

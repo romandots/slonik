@@ -119,6 +119,14 @@ describe('mcp-kanban HTTP server', () => {
       expect(body.error.code).toBe('UNAUTHORIZED');
     });
 
+    it('does not emit WWW-Authenticate when OAuth is disabled', async () => {
+      // Статичный MCP_AUTH_TOKEN-режим: discovery-заголовок не нужен и не
+      // должен появляться (иначе клиент уйдёт в несуществующий OAuth-флоу).
+      const r = await built.app.inject({ method: 'GET', url: '/mcp/tools' });
+      expect(r.statusCode).toBe(401);
+      expect(r.headers['www-authenticate']).toBeUndefined();
+    });
+
     it('returns 401 with wrong bearer token', async () => {
       const r = await built.app.inject({
         method: 'GET',
@@ -320,6 +328,28 @@ describe('mcp-kanban /mcp session eviction (SLONK-5)', () => {
     expect(built._sessions.size()).toBe(0);
   });
 
+  it('returns 404 (not 400) for an unknown/expired session id on a non-initialize request', async () => {
+    // Регрессия: после eviction (idle/cap/restart) клиент шлёт старый
+    // mcp-session-id с обычным вызовом. Сервер должен ответить 404, чтобы
+    // remote-коннектор гладко переинициализировал сессию, а не трактовал
+    // «Server not initialized» как обрыв соединения.
+    const r = await built.app.inject({
+      method: 'POST',
+      url: '/mcp',
+      headers: {
+        authorization: `Bearer ${TEST_TOKEN}`,
+        'x-agent-identity': 'developer-agent',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        'mcp-session-id': 'session-that-was-evicted',
+      },
+      payload: { jsonrpc: '2.0', id: 7, method: 'tools/list', params: {} },
+    });
+    expect(r.statusCode).toBe(404);
+    const body = JSON.parse(r.body) as { error: { code: number } };
+    expect(body.error.code).toBe(-32001);
+  });
+
   it('caps sessions at MCP_MAX_SESSIONS via LRU eviction', async () => {
     // Открываем 3 сессии подряд при cap=2 → одна должна быть вытеснена.
     await initOneSession();
@@ -419,7 +449,7 @@ describe('OAuth-enabled server', () => {
     store!.saveToken({
       token_hash: createHash('sha256').update(access).digest('hex'),
       kind: 'access', client_id: 'c', identity: 'operator', scope: 'mcp',
-      resource: 'https://slonk.example.com/mcp',
+      resource: 'https://slonk.example.com/mcp', workspace: 'agents',
       expires_at_ms: Date.now() + 3600_000, refresh_chain_id: 'ch',
     });
     const r = await oauthBuilt.app.inject({
@@ -430,6 +460,23 @@ describe('OAuth-enabled server', () => {
     expect(JSON.parse(r.body).tools).toContain('who_am_i');
   });
 
+  it('emits WWW-Authenticate with resource_metadata on 401 (expired/invalid token)', async () => {
+    // Без этого заголовка remote-коннектор не знает, что протухший access-токен
+    // надо обновить через refresh-грант, и показывает периодический обрыв.
+    const r = await oauthBuilt.app.inject({
+      method: 'GET',
+      url: '/mcp/tools',
+      headers: { authorization: 'Bearer not-a-valid-access-token' },
+    });
+    expect(r.statusCode).toBe(401);
+    const wwwAuth = r.headers['www-authenticate'];
+    expect(wwwAuth).toContain('Bearer');
+    expect(wwwAuth).toContain('error="invalid_token"');
+    expect(wwwAuth).toContain(
+      'resource_metadata="https://slonk.example.com/.well-known/oauth-protected-resource"',
+    );
+  });
+
   it('rejects an OAuth access token bound to a different resource (audience mismatch)', async () => {
     const access = 'wrong-audience-token';
     const store = oauthBuilt.oauth;
@@ -437,7 +484,7 @@ describe('OAuth-enabled server', () => {
     store!.saveToken({
       token_hash: createHash('sha256').update(access).digest('hex'),
       kind: 'access', client_id: 'c', identity: 'operator', scope: 'mcp',
-      resource: 'https://attacker.example.com/mcp', // different audience
+      resource: 'https://attacker.example.com/mcp', workspace: 'agents', // different audience
       expires_at_ms: Date.now() + 3600_000, refresh_chain_id: 'ch2',
     });
     const r = await oauthBuilt.app.inject({

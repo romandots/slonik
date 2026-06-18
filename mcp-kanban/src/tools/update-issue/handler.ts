@@ -13,7 +13,6 @@ export async function updateIssue(deps: {
   cache: TtlCache;
   workspace: string;
   defaultProjectRef: string;
-  allowedProjects: string[];
   input: UpdateIssueInput;
 }): Promise<IssueSummary> {
   const parsed = parseIssueRef(deps.input.issue_id);
@@ -26,7 +25,6 @@ export async function updateIssue(deps: {
         ? { projectRef: parsed.identifier }
         : {}),
     defaultProjectRef: deps.defaultProjectRef,
-    allowedProjects: deps.allowedProjects,
   });
 
   const issueId = await resolveIssueId(deps.plane, deps.workspace, project, parsed);

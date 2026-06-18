@@ -1,0 +1,173 @@
+name: Release & Deploy
+
+on:
+  push:
+    branches: [main]
+
+# Never cancel a running deploy — let it finish or fail cleanly.
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_MCP: ghcr.io/romandots/slonk/mcp-kanban
+  IMAGE_BACKUP: ghcr.io/romandots/slonk/backup
+
+jobs:
+  gate:
+    name: Gate (Lint + Build + Test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mcp-kanban
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.1.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: mcp-kanban/.nvmrc
+          cache: pnpm
+          cache-dependency-path: mcp-kanban/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Build
+        run: pnpm build
+
+      - name: Test
+        run: pnpm test
+
+  release:
+    name: Build & Push to GHCR
+    runs-on: ubuntu-latest
+    needs: gate
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read version from package.json
+        id: version
+        run: |
+          VERSION=$(node -p "JSON.parse(require('fs').readFileSync('mcp-kanban/package.json','utf8')).version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Releasing version: $VERSION"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build & push mcp-kanban
+        uses: docker/build-push-action@v6
+        with:
+          context: ./mcp-kanban
+          push: true
+          tags: |
+            ${{ env.IMAGE_MCP }}:${{ steps.version.outputs.version }}
+            ${{ env.IMAGE_MCP }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build & push backup
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backup
+          push: true
+          tags: |
+            ${{ env.IMAGE_BACKUP }}:${{ steps.version.outputs.version }}
+            ${{ env.IMAGE_BACKUP }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: release
+    environment: production
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+          IMAGE_MCP: ${{ env.IMAGE_MCP }}
+          GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
+          GH_ACTOR: ${{ github.actor }}
+          DEPLOY_DIR: /home/romandots/slonik
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          envs: VERSION,IMAGE_MCP,GHCR_PULL_TOKEN,GH_ACTOR,DEPLOY_DIR
+          script: |
+            set -euo pipefail
+            cd "$DEPLOY_DIR"
+
+            # Login to GHCR for pulling
+            echo "$GHCR_PULL_TOKEN" | docker login ghcr.io -u "$GH_ACTOR" --password-stdin
+
+            # Record current tag for rollback
+            PREV_TAG=$(grep "^SLONK_MCP_IMAGE_TAG=" .env 2>/dev/null | cut -d= -f2 | tr -d '"' || echo "")
+            echo "Previous tag: ${PREV_TAG:-<not set>}"
+
+            # Pull new image from GHCR and retag for docker compose
+            docker pull "${IMAGE_MCP}:${VERSION}"
+            docker tag "${IMAGE_MCP}:${VERSION}" "slonk/mcp-kanban:${VERSION}"
+
+            # Deploy with health gate
+            if SLONK_MCP_IMAGE_TAG="$VERSION" docker compose up -d mcp-kanban --wait; then
+              echo "Version $VERSION deployed successfully"
+              # Persist new tag so future manual restarts use it
+              if grep -q "^SLONK_MCP_IMAGE_TAG=" .env; then
+                sed -i "s/^SLONK_MCP_IMAGE_TAG=.*/SLONK_MCP_IMAGE_TAG=$VERSION/" .env
+              else
+                echo "SLONK_MCP_IMAGE_TAG=$VERSION" >> .env
+              fi
+            else
+              echo "Health check failed — rolling back to ${PREV_TAG:-previous}"
+              if [ -n "$PREV_TAG" ]; then
+                SLONK_MCP_IMAGE_TAG="$PREV_TAG" docker compose up -d mcp-kanban
+                echo "Rolled back to $PREV_TAG"
+              fi
+              exit 1
+            fi
+
+      - name: Post-deploy smoke
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            set -euo pipefail
+            # Inline-проверка: не зависит от файлов рабочей копии на хосте
+            # (деплой обновляет образ, но не git-checkout с Makefile/compose).
+            # /health публикуется mcp-kanban на хост-порту 8787, без авторизации.
+            echo "MCP health check (http://localhost:8787/health)..."
+            if curl --fail --silent --show-error --max-time 10 http://localhost:8787/health; then
+              echo
+              echo "✓ MCP отвечает"
+            else
+              echo "✗ MCP недоступен"
+              exit 1
+            fi

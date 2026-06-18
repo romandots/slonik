@@ -8,7 +8,154 @@
 ## [Unreleased]
 
 ### Added
-- Добавлен режим прямой загрузки файлов через `attach_file.content_base64` для MCP-клиентов (SLONK-27).
+- **Реальный MinIO presigned upload в `attach_file` (SLONK-18).** Раньше
+  presign-фаза собирала upload-URL конкатенацией строк (без подписи) — аплоад
+  против реального MinIO провалился бы; теперь `attach_file` выдаёт настоящий
+  подписанный `PUT`-URL через `minio.presignedPutObject`. На фазе `complete`
+  сервер проверяет аплоад (`statObject`), регистрирует объект как mcp-artifact
+  (живёт под `issues/<id>/`, поэтому виден через `list_attachments` и
+  резолвится `read_attachment` по стабильному `mca_`-id) и постит
+  комментарий-аннотацию с artifact-id (без presigned URL — чтобы подпись не
+  оседала в истории задачи). `complete` принимает только `object_key` под
+  префиксом своей задачи. Добавлен метод `presignedPutObject` в `MinioClient`
+  (real + fake). Закрывает прикрепление файлов и к задаче, и к комментариям.
+- **Выбор тенанта в форме OAuth-логина (SLONK-19).** Форма `/oauth/authorize`
+  теперь содержит редактируемое поле **Workspace** (по умолчанию
+  `MCP_DEFAULT_WORKSPACE`): оператор вводит slug тенанта + его пароль. Раньше
+  workspace передавался только через `?workspace=` в query, но remote-коннектор
+  claude.ai его не пробрасывает (строит URL авторизации из OAuth-метаданных и
+  query-хвост отбрасывает) — поэтому выбрать не-дефолтного тенанта через
+  claude.ai было нельзя, форма всегда авторизовала дефолтный workspace по
+  `MCP_AUTH_TOKEN`. Теперь URL коннектора остаётся `…/mcp`, а тенант выбирается
+  в форме. Неизвестный workspace (не дефолтный и без зарегистрированного
+  тенанта) отклоняется (400), чтобы ввод произвольной строки + `MCP_AUTH_TOKEN`
+  не авторизовал к несуществующему workspace. Поле `workspace` валидируется
+  slug-regex + max-length. Инвариант изоляции (workspace из токена) сохранён.
+### Fixed
+- **Периодическая «потеря MCP-подключения» у remote-коннектора claude.ai.**
+  Две независимые причины обрыва, обе чинятся на стороне сервера:
+  - *Протухший OAuth access-токен (раз в `MCP_OAUTH_ACCESS_TTL_SEC`, по
+    умолчанию час).* `/mcp` на невалидный/истёкший Bearer отдавал «голый» 401
+    без заголовка `WWW-Authenticate`. Коннектор по MCP Authorization spec
+    (RFC 9728) ждёт в 401 `Bearer …, resource_metadata="…"`, чтобы запустить
+    discovery и обновить токен по refresh-гранту; без заголовка он трактовал
+    401 как обрыв. Теперь при включённом OAuth 401 содержит
+    `WWW-Authenticate: Bearer error="invalid_token", resource_metadata=<…/.well-known/oauth-protected-resource>`.
+    На клиентах со статичным `MCP_AUTH_TOKEN` заголовок не появляется.
+  - *Вытесненная MCP-сессия.* После eviction (idle-janitor
+    `MCP_SESSION_IDLE_MS`, cap-LRU `MCP_MAX_SESSIONS` или рестарт сервера)
+    клиент слал старый `mcp-session-id`, а сервер молча создавал новый
+    неинициализированный транспорт — SDK отвечал 400 «Server not initialized».
+    Теперь на неизвестный `mcp-session-id` (для не-`initialize` запроса)
+    сервер отдаёт 404, по которому коннектор гладко переоткрывает сессию и
+    повторяет вызов. Это объясняло и «стабильные» падения `get_issue` /
+    `get_issue_history`: как самые «тяжёлые» read-вызовы (lookup задачи по
+    `SLONK-N` + несколько запросов к Plane) они чаще прочих выполнялись первыми
+    после долгой паузы на кодинг и попадали ровно на границу обрыва.
+- **OAuth/multitenant не работали через docker-compose: `MCP_OAUTH_*` не
+  пробрасывались в контейнер `mcp-kanban`.** Сервис задаёт env явным списком, в
+  котором не было ни одной `MCP_OAUTH_*`-переменной — поэтому при
+  `MCP_OAUTH_ENABLED=true` в `.env` внутри контейнера переменная оставалась
+  пустой, `config.ts` брал дефолт `false`, OAuth 2.1 AS не поднимался, и
+  `/oauth/*` + `/.well-known/oauth-*` отдавали 404. Remote-коннектор claude.ai
+  не проходил discovery («Couldn't connect»). Добавлен проброс
+  `MCP_OAUTH_ENABLED`, `MCP_OAUTH_ISSUER`, `MCP_OAUTH_OPERATOR_IDENTITY`,
+  `MCP_OAUTH_ACCESS_TTL_SEC`, `MCP_OAUTH_REFRESH_TTL_SEC`,
+  `MCP_OAUTH_CODE_TTL_SEC`, `MCP_OAUTH_MAX_CLIENTS`, `MCP_OAUTH_STORE_PATH` в
+  `docker-compose.yml` (с дефолтами; `MCP_OAUTH_ENABLED` по умолчанию `0` —
+  backward compat).
+
+### Changed
+- **`plane-worker` baseline `mem_limit` поднят `384m → 768m` (SLONK-9).**
+  QA-прогон выявил циклические OOM-kill'ы (`exit 137`) при Celery-нагрузке
+  (notifications, webhooks, mass-update'ы). Новый лимит даёт +50% запаса.
+  `docs/CONFIGURATION.md §5` обновлён: таблица, сумма лимитов (`~3.9 GiB`),
+  headroom на 4 GB-хосте (`~100 MiB`, рекомендуется минимум 6 GB), секция 8 GB
+  (`plane-worker → 1g`).
+- **`docs/CONFIGURATION.md §12` сжат до сводки** со ссылкой на `DEPLOY.md`
+  (источник правды по выкладке вынесен в отдельный документ). Попутно
+  исправлены неточности §12: `gate` включает `typecheck`; кэш pnpm идёт через
+  `cache: pnpm` в `actions/setup-node` (не `actions/cache`); добавлено
+  упоминание GitHub Environment `production`; `docker login` — через
+  `--password-stdin`.
+- **`DEPLOY_DIR` деплоя переведён `/opt/slonk` → `/home/romandots/slonik`**
+  в `release-deploy.yml` (env deploy-джобы + шаг `Post-deploy smoke`) под
+  фактическое расположение рабочей копии на прод-хосте. `docs/DEPLOY.md`
+  синхронизирован.
+- **Пост-деплой smoke переведён на MCP health-эндпойнт.** Шаг `Post-deploy
+  smoke` в `release-deploy.yml` теперь делает inline-`curl
+  localhost:8787/health` (опубликованный порт mcp-kanban, без авторизации)
+  вместо Plane UI на `localhost:3000` (на проде Plane published только через
+  caddy 80/443 — прежний `make smoke` всегда падал). Шаг намеренно не вызывает
+  `make`: деплой обновляет образ, но не рабочую копию репозитория на хосте,
+  поэтому smoke не должен зависеть от файлов на хосте. В `Makefile` добавлена
+  цель `make smoke-mcp` для ручной/локальной проверки; `make smoke` сохранена.
+  `docs/DEPLOY.md §3.4–3.5` описывают smoke и факт, что деплой не делает
+  `git pull` на хосте.
+
+### Added
+- **Multitenant: CLI `add-tenant` + multi-workspace bootstrap (SLONK-18).**
+  Оператор может регистрировать несколько тенантов на одном инстансе —
+  каждый со своим Plane workspace, своим Plane API-ключом и своим паролем
+  для OAuth-логина. Ядро multitenant (таблица `tenants`, per-workspace
+  `getPlaneClient`, per-tenant пароль на `/oauth/authorize?workspace=<slug>`)
+  было заложено в SLONK-15; SLONK-18 добавляет операторский слой:
+  - Новая команда `node dist/server.js add-tenant` (цель `make add-tenant`,
+    контейнерный запуск, пишет в том `mcp_data/oauth.sqlite`). Флаги
+    `--workspace`, `--plane-api-key`, `--password` (≥8 символов; опусти —
+    сгенерируется и покажется один раз), `--max-clients`, `--store`.
+    Идемпотентна (`ON CONFLICT DO UPDATE`): повторный запуск обновляет
+    ключ/пароль. Пароль хранится только как SHA-256 hex; Plane API-ключ и
+    сырой пароль не эхо-ятся обратно и не логируются.
+  - `bootstrap` принимает `--workspace <slug>` и `--plane-api-key <key>`
+    (`make bootstrap ARGS="--workspace <slug> --plane-api-key <key>"`), чтобы
+    инициализировать states/labels/identities в workspace конкретного
+    тенанта. Без флагов поведение прежнее (workspace из манифеста, ключ из
+    ENV). Slug валидируется regex (`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`) — это и
+    защита от подстановки `../`-сегментов в URL Plane API.
+  - Известное ограничение: смена API-ключа уже работающего тенанта требует
+    рестарта `mcp-kanban` (per-workspace PlaneClient кэшируется). Новый тенант
+    подхватывается при первом запросе.
+  - Документация: `docs/SPEC.md §6.1`, `docs/CONFIGURATION.md`,
+    `docs/USER_GUIDE.md`.
+- **`docs/DEPLOY.md`** — канонический документ по деплою и автодеплою: схема
+  CI/CD-пайплайна, автодеплой на `push: main`, CI на PR, ручной деплой,
+  подготовка прод-хоста (каталог, SSH deploy key, логин в GHCR, свой
+  registry-namespace), GitHub Secrets и Environment `production`, branch
+  protection, версионирование, rollback, troubleshooting. Добавлен в индексы
+  `docs/README.md` и корневой `CLAUDE.md`.
+- **Markdown → HTML в описаниях задач** (SLONK-17). `toPlaneDescriptionHtml` теперь
+  парсит полный CommonMark через `marked`: заголовки, жирный/курсив, списки, блоки кода,
+  цитаты, ссылки. `sanitizeHtml` вынесен в `src/sanitize-html.ts` и используется
+  совместно описаниями и комментариями. `javascript:`-ссылки и `<script>`/`<style>`/
+  `<iframe>` вырезаются. Добавлен passthrough `class="language-*"` для fenced code blocks.
+- **CI/CD на GitHub Actions** (SLONK-16). Два workflow:
+  - `.github/workflows/ci.yml` — PR pipeline: lint + typecheck + build + test (3 параллельных джобы);
+    кэш pnpm-store, Node из `.nvmrc` (22). Красный чек блокирует merge.
+  - `.github/workflows/release-deploy.yml` — Release/Deploy на `push: main`: gate (lint + build + test)
+    → build & push `mcp-kanban` + `backup` в GHCR (`ghcr.io/romandots/slonk/...`)
+    → SSH-deploy на прод с health-gate + rollback при неуспехе → `make smoke`.
+    Concurrency-guard исключает параллельные деплои. Секреты — только через GitHub Secrets.
+  - `mcp-kanban/eslint.config.js` — новый flat-config для ESLint 9 (был отсутствующим);
+    исправлены pre-existing ошибки (`prefer-const`, `no-require-imports`, неиспользуемые импорты).
+- **Multitenant архитектура** (SLONK-15). Workspace = тенант; доступ к проектам workspace
+  определяется OAuth-токеном, а не allow-list. Ключевые изменения:
+  - Новая таблица `tenants` в `oauth.sqlite`: `workspace → plane_api_key + auth_token_hash`.
+    Методы: `registerTenant`, `getTenantByWorkspace`, `getTenantByAuthTokenHash`, `listTenants`.
+  - Поле `workspace` добавлено в `oauth_codes` и `oauth_tokens`; schema migration
+    при старте добавляет колонки к существующим БД (`ALTER TABLE ... ADD COLUMN`).
+  - `PlaneClientFactory` в `server.ts`: per-workspace `PlaneClient`, кэшируется в Map;
+    при старте дефолтный workspace автоматически регистрируется как тенант
+    (backward compat — существующие деплои работают без изменений).
+  - `auth.ts`: `AuthedRequest` теперь несёт `workspace: string`; OAuth-путь извлекает
+    workspace из токена; static-token путь ищет тенанта по хэшу токена, fallback → `MCP_DEFAULT_WORKSPACE`.
+  - `ToolContext`: поле `defaultWorkspace` заменено на `workspace`; убрано `allowedProjects`.
+  - `project-resolver.ts`: убрана проверка allow-list; граница доступа = workspace из токена.
+  - `list_projects`: убрана фильтрация по `allowedProjects`; отдаются все проекты workspace тенанта.
+  - `/oauth/authorize`: принимает опциональный query param `workspace`; форма показывает
+    workspace; пароль валидируется по credential тенанта (hash) или fallback на `MCP_AUTH_TOKEN`.
+  - `MCP_ALLOWED_PROJECTS`: deprecated (поле сохранено для совместимости, игнорируется).
+  - Добавлено 6 тестов для tenant isolation: регистрация, lookup, upsert, workspace в токенах.
 - **Встроенный OAuth 2.1 Authorization Server** для добавления self-hosted slonk
   как remote-коннектора на claude.ai (Phase 11, SLONK-oauth). Реализация следует
   RFC 9728 (Protected Resource Metadata), RFC 8414 (Authorization Server Metadata),

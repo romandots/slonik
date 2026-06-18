@@ -14,7 +14,6 @@ export async function listModules(deps: {
   cache: TtlCache;
   workspace: string;
   defaultProjectRef: string;
-  allowedProjects: string[];
   projectRef?: string;
 }): Promise<ListModulesResult> {
   const project = await resolveProject({
@@ -22,7 +21,6 @@ export async function listModules(deps: {
     workspaceSlug: deps.workspace,
     ...(deps.projectRef !== undefined ? { projectRef: deps.projectRef } : {}),
     defaultProjectRef: deps.defaultProjectRef,
-    allowedProjects: deps.allowedProjects,
   });
   const key = `list_modules:${inputHash({ ws: deps.workspace, pr: project.id })}`;
   const mods = (await deps.cache.memoize(

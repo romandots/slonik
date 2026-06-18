@@ -54,10 +54,10 @@ const ConfigSchema = z.object({
   // SLONK-1, SLONK-2, ...). У Plane-проектов нет отдельного «slug», поэтому
   // resolveProject матчит ref по identifier/name/id — дефолт = identifier.
   MCP_DEFAULT_PROJECT: z.string().min(1).default('SLONK'),
-  // zod v4: default() требует значение post-transform (string[]), а
-  // prefault() — pre-transform (исходную строку, которая прогонится через
-  // .transform). Используем prefault, чтобы дефолт парсился теми же
-  // правилами, что и значение из env.
+  // DEPRECATED: MCP_ALLOWED_PROJECTS больше не ограничивает доступ — граница
+  // доступа к проектам определяется workspace тенанта (из OAuth-токена).
+  // Поле оставлено для обратной совместимости, но игнорируется сервером.
+  // Будет удалено в следующей MAJOR-версии.
   MCP_ALLOWED_PROJECTS: csvList.prefault('SLONK'),
   MCP_AGENT_IDENTITY_MODE: z.enum(['per_user', 'single_bot']).default('per_user'),
   MCP_OPTIONAL_WORKSPACES: Bool01.default(false),

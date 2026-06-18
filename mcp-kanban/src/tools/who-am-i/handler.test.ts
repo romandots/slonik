@@ -7,14 +7,14 @@ describe('whoAmI', () => {
       identity: 'developer-agent',
       agentMode: 'per_user',
       serverVersion: '0.1.0',
-      defaultWorkspace: 'agents',
+      workspace: 'agents',
       defaultProject: 'SLONK',
     });
     expect(result).toEqual({
       identity: 'developer-agent',
       agent_mode: 'per_user',
       server_version: '0.1.0',
-      default_workspace: 'agents',
+      workspace: 'agents',
       default_project: 'SLONK',
     });
   });
@@ -24,7 +24,7 @@ describe('whoAmI', () => {
       identity: 'qa-agent',
       agentMode: 'single_bot',
       serverVersion: '0.1.0',
-      defaultWorkspace: 'agents',
+      workspace: 'agents',
       defaultProject: 'SLONK',
     });
     expect(result.agent_mode).toBe('single_bot');

@@ -495,6 +495,11 @@ export function fakeMinio(world: FakeWorld): MinioClient {
       // редакцию presigned URL'ов в логах.
       return `https://fake-minio.local/${bucket}/${objectKey}?X-Amz-Signature=fake-signature&X-Amz-Expires=${expirySec}`;
     },
+    async presignedPutObject(bucket: string, objectKey: string, expirySec: number): Promise<string> {
+      // Тот же детерминированный signed-URL, но с X-Amz-Method=PUT, чтобы
+      // тесты могли отличить upload- от download-подписи.
+      return `https://fake-minio.local/${bucket}/${objectKey}?X-Amz-Signature=fake-signature&X-Amz-Method=PUT&X-Amz-Expires=${expirySec}`;
+    },
     async listObjectsV2(bucket: string, prefix: string): Promise<MinioObject[]> {
       if (world.failMinioList) {
         throw new McpError({

@@ -1,6 +1,7 @@
 import Fastify, { type FastifyBaseLogger, type FastifyInstance } from 'fastify';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -31,8 +32,9 @@ import { MetricsRegistry } from './metrics.js';
 import formbody from '@fastify/formbody';
 import { OAuthStore } from './oauth/store.js';
 import { registerOAuthRoutes } from './oauth/routes.js';
-import { resourceUri } from './oauth/metadata.js';
+import { resourceUri, protectedResourceMetadataUrl } from './oauth/metadata.js';
 import { hashToken as hashTokenForAuth } from './oauth/crypto.js';
+import { OAUTH_STORE_DEFAULT_PATH } from './oauth/defaults.js';
 
 const SERVER_VERSION = readPackageVersion();
 
@@ -60,7 +62,8 @@ export interface BuildServerOptions {
 
 export const AUDIT_STORE_DEFAULT_PATH = '/mcp_data/audit.sqlite';
 export const GIT_REFS_STORE_DEFAULT_PATH = '/mcp_data/git_refs.sqlite';
-export const OAUTH_STORE_DEFAULT_PATH = '/mcp_data/oauth.sqlite';
+// Источник правды — oauth/defaults.ts; re-export сохраняет публичный API модуля.
+export { OAUTH_STORE_DEFAULT_PATH };
 
 export interface BuiltServer {
   app: FastifyInstance;
@@ -108,6 +111,7 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
     trustProxy: true,
   });
 
+  // PlaneClient для workspace по умолчанию (backward compat + /health endpoint).
   const plane = new PlaneClient({ config, logger });
   const minio: MinioClient =
     opts.minio ??
@@ -159,6 +163,34 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
       })
     : undefined;
 
+  // Auto-регистрируем workspace по умолчанию как тенанта (backward compat).
+  // Если PLANE_API_KEY задан в env — он становится кредами дефолтного workspace.
+  // Повторные запуски идемпотентны (ON CONFLICT DO UPDATE).
+  if (oauth !== undefined && config.PLANE_API_KEY !== undefined) {
+    oauth.registerTenant({
+      workspace: config.MCP_DEFAULT_WORKSPACE,
+      plane_api_key: config.PLANE_API_KEY,
+      auth_token_hash: hashTokenForAuth(config.MCP_AUTH_TOKEN),
+      created_at_ms: Date.now(),
+    });
+    logger.info({ workspace: config.MCP_DEFAULT_WORKSPACE }, 'default tenant registered');
+  }
+
+  // PlaneClient factory: per-workspace клиент, кэшируется в Map.
+  const planeClientCache = new Map<string, PlaneClient>();
+  const getPlaneClient = (workspace: string): PlaneClient => {
+    const cached = planeClientCache.get(workspace);
+    if (cached !== undefined) return cached;
+    const tenant = oauth?.getTenantByWorkspace(workspace);
+    const apiKey = tenant?.plane_api_key ?? config.PLANE_API_KEY;
+    const client =
+      apiKey === config.PLANE_API_KEY
+        ? plane
+        : new PlaneClient({ config: { ...config, PLANE_API_KEY: apiKey }, logger });
+    planeClientCache.set(workspace, client);
+    return client;
+  };
+
   if (oauth !== undefined && config.MCP_OAUTH_ISSUER !== undefined && config.MCP_OAUTH_ISSUER.startsWith('http://')) {
     logger.warn(
       { issuer: config.MCP_OAUTH_ISSUER },
@@ -170,11 +202,15 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
     config.MCP_OAUTH_ISSUER !== undefined ? resourceUri(config.MCP_OAUTH_ISSUER) : undefined;
   const oauthValidator =
     oauth !== undefined
-      ? (token: string): { identity: AgentIdentity; scope: string } | undefined => {
+      ? (token: string): { identity: AgentIdentity; scope: string; workspace: string } | undefined => {
           const row = oauth.validateAccessToken(hashTokenForAuth(token), Date.now());
           if (row === undefined) return undefined;
           if (expectedResource !== undefined && row.resource !== expectedResource) return undefined;
-          return { identity: row.identity, scope: row.scope };
+          return {
+            identity: row.identity,
+            scope: row.scope,
+            workspace: row.workspace || config.MCP_DEFAULT_WORKSPACE,
+          };
         }
       : undefined;
 
@@ -184,8 +220,12 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
 
   const baseAuthOpts = {
     expectedToken: config.MCP_AUTH_TOKEN,
+    defaultWorkspace: config.MCP_DEFAULT_WORKSPACE,
     identityRegistry: effectiveRegistry,
     ...(oauthValidator !== undefined ? { oauthValidator } : {}),
+    ...(oauth !== undefined
+      ? { tenantByAuthTokenHash: (hash: string) => oauth.getTenantByAuthTokenHash(hash) }
+      : {}),
   };
 
   // ---------------- /health ----------------
@@ -253,6 +293,7 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
         store: oauth,
         issuer: config.MCP_OAUTH_ISSUER,
         authToken: config.MCP_AUTH_TOKEN,
+        defaultWorkspace: config.MCP_DEFAULT_WORKSPACE,
         operatorIdentity: config.MCP_OAUTH_OPERATOR_IDENTITY,
         accessTtlSec: config.MCP_OAUTH_ACCESS_TTL_SEC,
         refreshTtlSec: config.MCP_OAUTH_REFRESH_TTL_SEC,
@@ -300,6 +341,7 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
     // выигрывает.
     touchSeq: number;
     identity: AgentIdentity | undefined;
+    workspace: string;
   }
   const sessions = new Map<string, SessionEntry>();
   let sessionTouchSeq = 0;
@@ -369,9 +411,34 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
   app.all('/mcp', async (request, reply) => {
     authenticate(request, reply, baseAuthOpts);
     const identity = (request as unknown as AuthedRequest).identity;
+    const workspace = (request as unknown as AuthedRequest).workspace ?? config.MCP_DEFAULT_WORKSPACE;
 
     const sessionId = headerString(request.headers['mcp-session-id']);
     const entry = sessionId !== undefined ? sessions.get(sessionId) : undefined;
+
+    // Stale/expired session: клиент прислал mcp-session-id, которого у нас уже
+    // нет — сессию вытеснил idle-janitor (MCP_SESSION_IDLE_MS), cap-LRU
+    // (MCP_MAX_SESSIONS) или сервер перезапускался. Раньше мы молча создавали
+    // новый неинициализированный транспорт и звали handleRequest; SDK на
+    // non-initialize запрос без инициализации отвечает 400 «Server not
+    // initialized», и remote-коннектор claude.ai трактует это как обрыв
+    // соединения (периодическая «потеря MCP»). По MCP Streamable HTTP spec на
+    // неизвестный session id надо отвечать 404 — тогда клиент сам гладко
+    // переоткрывает сессию новым initialize и повторяет вызов. Исключение —
+    // сам initialize: при реконнекте он может прийти со «старым» id, его
+    // пропускаем в ветку создания транспорта ниже.
+    if (sessionId !== undefined && entry === undefined && !isInitializeRequest(request.body)) {
+      reply.status(404).send({
+        jsonrpc: '2.0',
+        error: {
+          code: -32001,
+          message: 'Session not found or expired; reinitialize the MCP session',
+        },
+        id: null,
+      });
+      return;
+    }
+
     // transport переприсваивается ниже, если сессия только создаётся (новый
     // StreamableHTTPServerTransport), поэтому остаётся `let`.
     let transport = entry?.transport;
@@ -389,6 +456,7 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
             lastUsedAt: Date.now(),
             touchSeq: nextTouchSeq(),
             identity,
+            workspace,
           });
           logger.info({ session: sid, identity }, 'mcp session opened');
           // enforceMaxSessions запускается ПОСЛЕ insert'а новой записи:
@@ -415,7 +483,7 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
       registerTools(mcp, {
         config,
         serverVersion: SERVER_VERSION,
-        plane,
+        plane: getPlaneClient(workspace),
         cache,
         logger,
         resolveIdentity: () => identity,
@@ -424,16 +492,14 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
           if (stored === 'per_user' || stored === 'single_bot') return stored;
           return config.MCP_AGENT_IDENTITY_MODE;
         },
-        defaultWorkspace: config.MCP_DEFAULT_WORKSPACE,
+        workspace,
         defaultProjectSlug: config.MCP_DEFAULT_PROJECT,
-        allowedProjects: config.MCP_ALLOWED_PROJECTS,
         audit,
         identityStore,
         rateLimiter,
         resolvePlaneUserId: () => identityStore.get(identity)?.plane_user_id ?? null,
         minioBucket: config.MINIO_BUCKET_MCP,
         minioBucketPlane: config.MINIO_BUCKET_PLANE,
-        minioEndpoint: config.MINIO_INTERNAL_ENDPOINT,
         minioEndpoints: collectMinioEndpoints(config),
         minio,
         signedUrlExpirationSec: config.PLANE_SIGNED_URL_EXPIRATION,
@@ -458,6 +524,26 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
   // ---------------- error handling ----------------
   app.setErrorHandler((err, request, reply) => {
     if (err instanceof McpError) {
+      // На 401 с включённым OAuth отдаём WWW-Authenticate с указателем на
+      // resource-metadata (RFC 9728 / MCP Authorization spec). Без него
+      // remote-коннектор claude.ai не понимает, что access-токен протух и
+      // нужно сходить за discovery + refresh — и показывает периодический
+      // «обрыв соединения» каждый раз, когда токен истекает (по умолчанию раз
+      // в час, MCP_OAUTH_ACCESS_TTL_SEC). Заголовок безвреден для клиентов на
+      // статичном MCP_AUTH_TOKEN — они его игнорируют.
+      if (
+        err.code === 'UNAUTHORIZED' &&
+        config.MCP_OAUTH_ENABLED &&
+        config.MCP_OAUTH_ISSUER !== undefined
+      ) {
+        const metadataUrl = protectedResourceMetadataUrl(config.MCP_OAUTH_ISSUER);
+        reply.header(
+          'WWW-Authenticate',
+          `Bearer error="invalid_token", ` +
+            `error_description="The access token is missing, invalid or expired", ` +
+            `resource_metadata="${metadataUrl}"`,
+        );
+      }
       logger.warn(
         { trace_id: request.id, code: err.code, err: err.message },
         'mcp error response',
@@ -664,11 +750,14 @@ async function main(): Promise<void> {
 //   (нет)         — запуск HTTP-сервера (см. main()).
 //   bootstrap     — идемпотентный bootstrap Plane.
 //   add-role      — интерактивно создать новый файл `roles/<role>.md` (SLONK-12).
+//   add-tenant    — зарегистрировать тенанта (workspace+API key+пароль) в OAuth-сторе (SLONK-18).
 async function dispatch(): Promise<void> {
   const cmd = process.argv[2];
   if (cmd === 'bootstrap') {
     const { bootstrapCli } = await import('./bootstrap/cli.js');
-    await bootstrapCli();
+    // SLONK-18: остаток argv — флаги bootstrap (--workspace / --plane-api-key
+    // для multitenant); без них поведение байт-в-байт прежнее.
+    await bootstrapCli({ argv: process.argv.slice(3) });
     return;
   }
   if (cmd === 'add-role') {
@@ -677,8 +766,28 @@ async function dispatch(): Promise<void> {
     await addRoleCli({ argv: process.argv.slice(3) });
     return;
   }
+  if (cmd === 'add-tenant') {
+    const { addTenantCli } = await import('./bootstrap/add-tenant.js');
+    // SLONK-18: регистрация тенанта (workspace + Plane API key + пароль) в
+    // OAuth-сторе для multitenant-режима.
+    try {
+      await addTenantCli({ argv: process.argv.slice(3) });
+    } catch (err) {
+      // `-h/--help` бросает Error(USAGE) (начинается с "Usage:") — это не
+      // ошибка: печатаем справку и выходим с кодом 0. Реальные ошибки ввода
+      // ("Unknown argument: …", zod) — пробрасываем в общий handler (exit 1).
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.startsWith('Usage:')) {
+
+        console.log(msg);
+        return;
+      }
+      throw err;
+    }
+    return;
+  }
   if (cmd !== undefined && cmd !== '') {
-    // eslint-disable-next-line no-console
+     
     console.error(`Unknown command: ${cmd}`);
     process.exit(2);
   }
@@ -690,7 +799,7 @@ const isEntrypoint = process.argv[1] !== undefined
   && import.meta.url === `file://${process.argv[1]}`;
 if (isEntrypoint) {
   dispatch().catch((err) => {
-    // eslint-disable-next-line no-console
+     
     console.error('Fatal startup error:', err);
     process.exit(1);
   });

@@ -27,6 +27,7 @@ Single-tenant, single-node, без HA. Все секреты — в `.env`, в �
 | [SPEC](./docs/SPEC.md) | Контракт MCP API, workflow, ошибки, безопасность |
 | [ARCHITECTURE](./docs/ARCHITECTURE.md) | Сети, контейнеры, потоки данных, угрозы |
 | [CONFIGURATION](./docs/CONFIGURATION.md) | `.env`, compose, bootstrap, версии образов |
+| [DEPLOY](./docs/DEPLOY.md) | Деплой и автодеплой: CI/CD, прод-хост, секреты, rollback |
 | [ROADMAP](./docs/ROADMAP.md) | План фаз и acceptance-критерии |
 | [CONVENTIONS](./docs/CONVENTIONS.md) | Кодстайл, naming, git, тесты |
 | [CHANGELOG](./docs/CHANGELOG.md) | История изменений (Keep a Changelog) |

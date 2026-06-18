@@ -183,7 +183,7 @@ function makeAsker(rl: ReadlineInterface, output: NodeJS.WritableStream): Asker 
     closeErr = new Error('input stream closed before all answers collected');
     // Будим всех ожидающих, пусть упадут с ошибкой, а не висят навсегда.
     while (waiters.length > 0) {
-      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+       
       const w = waiters.shift()!;
       // resolve пустой строкой и пусть валидатор вверху увидит EOF в
       // следующем тике через флаг closed.
@@ -194,7 +194,7 @@ function makeAsker(rl: ReadlineInterface, output: NodeJS.WritableStream): Asker 
   return async (prompt: string): Promise<string> => {
     output.write(prompt);
     if (queue.length > 0) {
-      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+       
       return queue.shift()!;
     }
     if (closed) {
@@ -296,7 +296,7 @@ async function askValidated<T>(
     }
   }
   writeLine(output, `# ${field}: ${hint}`);
-  // eslint-disable-next-line no-constant-condition
+   
   while (true) {
     const raw = (await ask(`${field}: `)).trim();
     if (raw === '') {

@@ -37,7 +37,6 @@ export async function getIssueHistory(deps: {
   cache: TtlCache;
   workspace: string;
   defaultProjectRef: string;
-  allowedProjects: string[];
   issueRef: string;
   projectRef?: string;
 }): Promise<GetIssueHistoryResult> {
@@ -51,7 +50,6 @@ export async function getIssueHistory(deps: {
         ? { projectRef: parsed.identifier }
         : {}),
     defaultProjectRef: deps.defaultProjectRef,
-    allowedProjects: deps.allowedProjects,
   });
 
   const cacheKey = `get_issue_lookup:${inputHash({ ws: deps.workspace, pr: project.id, ref: deps.issueRef })}`;
