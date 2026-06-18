@@ -433,7 +433,7 @@ workspace-scoped API-токен не может создавать workspaces.
 | `release_issue` | Снять с себя + state `To Do` + remove `agent-claimed` |
 | `block_issue` | state `Blocked` + label `agent-blocked` + комментарий с причиной |
 | `comment_issue` | Добавить комментарий (с префиксом identity) |
-| `attach_file` | Загрузить файл к задаче (через MinIO presigned upload) |
+| `attach_file` | Загрузить файл к задаче (через MinIO presigned upload; опционально прямой server-side upload через `content_base64`) |
 | `link_git_ref` | Добавить запись в meta-блок: repo/branch/pr/commit |
 | `unlink_git_ref` | Удалить связь |
 | `find_issues_by_git_ref` | Найти issues по repo/branch/pr/commit (SQLite-индекс, без обращения к Plane) |
