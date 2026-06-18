@@ -639,7 +639,7 @@ docker compose up -d
    - `docker pull ghcr.io/.../mcp-kanban:VERSION`
    - `SLONK_MCP_IMAGE_TAG=VERSION docker compose up -d mcp-kanban --wait`
    - При неуспехе healthcheck — автоматический rollback на предыдущий тег.
-4. **Smoke** — `make smoke` после успешного деплоя.
+4. **Smoke** — inline `curl` к `http://localhost:8787/health` после успешного деплоя.
 
 **Concurrency:** deploy-джоба не запускается параллельно (`cancel-in-progress: false`).
 

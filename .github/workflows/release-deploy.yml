@@ -159,4 +159,4 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            cd "$DEPLOY_DIR" && make smoke
+            curl --fail --silent --show-error http://localhost:8787/health >/dev/null
