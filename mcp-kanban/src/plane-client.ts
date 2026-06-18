@@ -140,6 +140,22 @@ export interface PlaneAttachment {
   created_by?: string;
 }
 
+export interface PlaneWorkspaceAsset {
+  id: string;
+  name?: string;
+  type?: string;
+  size?: number;
+  attributes?: {
+    name?: string;
+    type?: string;
+    size?: number;
+  };
+  asset_url?: string;
+  url?: string;
+  created_at?: string;
+  created_by?: string;
+}
+
 export interface ListResult<T> {
   results: T[];
   // Plane v1.3.0 шлёт opaque cursor в поле `next_cursor`; более ранние
@@ -777,6 +793,16 @@ export class PlaneClient {
       `workspaces/${workspaceSlug}/projects/${projectId}/issues/${issueId}/issue-attachments/`,
     );
     return unwrapList(resp);
+  }
+
+  async getWorkspaceAsset(
+    workspaceSlug: string,
+    assetId: string,
+  ): Promise<PlaneWorkspaceAsset | undefined> {
+    return await this.request<PlaneWorkspaceAsset>(
+      `workspaces/${workspaceSlug}/assets/${assetId}/`,
+      { notFoundOk: true },
+    );
   }
 
   // ---------------- high-level: users / members ----------------

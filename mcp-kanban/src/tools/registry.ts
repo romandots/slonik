@@ -429,6 +429,7 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
           planeBucket: ctx.minioBucketPlane,
           mcpBucket: ctx.minioBucket,
           minioEndpoints: ctx.minioEndpoints,
+          planeAssetEndpoints: ctx.planeAssetEndpoints,
           logger: ctx.logger,
         });
       }),
@@ -793,6 +794,7 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
           planeBucket: ctx.minioBucketPlane,
           mcpBucket: ctx.minioBucket,
           minioEndpoints: ctx.minioEndpoints,
+          planeAssetEndpoints: ctx.planeAssetEndpoints,
           input,
         });
       }),
@@ -827,6 +829,7 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
             planeBucket: ctx.minioBucketPlane,
             mcpBucket: ctx.minioBucket,
             minioEndpoints: ctx.minioEndpoints,
+            planeAssetEndpoints: ctx.planeAssetEndpoints,
             expiresInSec: ctx.signedUrlExpirationSec,
             input,
           }),

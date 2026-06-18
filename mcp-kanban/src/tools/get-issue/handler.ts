@@ -42,6 +42,7 @@ export async function getIssue(deps: {
   planeBucket?: string;
   mcpBucket?: string;
   minioEndpoints?: string[];
+  planeAssetEndpoints?: string[];
   logger?: Logger;
 }): Promise<GetIssueResult> {
   const parsed = parseIssueRef(deps.issueRef);
@@ -121,6 +122,7 @@ export async function getIssue(deps: {
         planeBucket: deps.planeBucket,
         mcpBucket: deps.mcpBucket,
         minioEndpoints: deps.minioEndpoints,
+        planeAssetEndpoints: deps.planeAssetEndpoints ?? [],
         filters: { limit: 3 },
       });
       if (!discovery.partial) {

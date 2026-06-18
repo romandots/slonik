@@ -27,6 +27,7 @@ export async function listAttachments(deps: {
   planeBucket: string;
   mcpBucket: string;
   minioEndpoints: string[];
+  planeAssetEndpoints?: string[];
   input: ListAttachmentsInput;
 }): Promise<ListAttachmentsResult> {
   const parsed = parseIssueRef(deps.input.issue_id);
@@ -64,6 +65,7 @@ export async function listAttachments(deps: {
       planeBucket: deps.planeBucket,
       mcpBucket: deps.mcpBucket,
       minioEndpoints: deps.minioEndpoints,
+      planeAssetEndpoints: deps.planeAssetEndpoints ?? [],
       filters: {
         ...(deps.input.source !== undefined ? { source: deps.input.source } : {}),
         ...(deps.input.comment_id !== undefined ? { comment_id: deps.input.comment_id } : {}),

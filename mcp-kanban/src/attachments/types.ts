@@ -7,10 +7,19 @@ import { McpError } from '../errors.js';
 
 export type AttachmentSource = 'plane_issue' | 'plane_comment_inline' | 'mcp_artifact';
 
-export interface AttachmentStorage {
+export interface MinioAttachmentStorage {
+  kind: 'minio';
   bucket: string;
   object_key: string;
 }
+
+export interface PlaneAssetAttachmentStorage {
+  kind: 'plane_asset';
+  asset_id: string;
+  download_url: string;
+}
+
+export type AttachmentStorage = MinioAttachmentStorage | PlaneAssetAttachmentStorage;
 
 export interface Attachment {
   id: string;

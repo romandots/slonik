@@ -14,6 +14,7 @@ import type {
   PlaneProject,
   PlaneState,
   PlaneUser,
+  PlaneWorkspaceAsset,
   PlaneWorkspace,
 } from '../plane-client.js';
 import type { MinioClient, MinioObject, MinioStat } from '../minio-client.js';
@@ -34,6 +35,8 @@ export interface FakeWorld {
   inviteResponses: Map<string, { id: string; email: string } | Error>;
   /** SLONK-14: UI-attachments Plane по ключу `<projectId>:<issueId>`. */
   planeAttachments: Map<string, PlaneAttachment[]>;
+  /** SLONK-24: workspace assets Plane по ключу `<workspaceSlug>:<assetId>`. */
+  workspaceAssets: Map<string, PlaneWorkspaceAsset>;
   /** SLONK-14: объекты MinIO по ключу `<bucket>:<objectKey>`. */
   minioObjects: Map<string, { size: number; contentType?: string; lastModified?: Date; content?: Buffer }>;
   /** SLONK-14: симулируемые ошибки источников (для partial-failure тестов). */
@@ -58,6 +61,7 @@ export function newWorld(): FakeWorld {
     members: new Map(),
     inviteResponses: new Map(),
     planeAttachments: new Map(),
+    workspaceAssets: new Map(),
     minioObjects: new Map(),
     failPlaneAttachments: false,
     failMinioList: false,
@@ -401,6 +405,9 @@ export function fakePlane(world: FakeWorld): PlaneClient {
       }
       return [...(world.planeAttachments.get(`${projectId}:${issueId}`) ?? [])];
     },
+    async getWorkspaceAsset(ws: string, assetId: string) {
+      return world.workspaceAssets.get(`${ws}:${assetId}`);
+    },
     async createIssueComment(_ws: string, projectId: string, issueId: string, input: { comment_html: string }) {
       const key = `${projectId}:${issueId}`;
       const arr = world.comments.get(key) ?? [];
@@ -539,6 +546,15 @@ export function addPlaneAttachment(
   const arr = world.planeAttachments.get(key) ?? [];
   arr.push(attachment);
   world.planeAttachments.set(key, arr);
+}
+
+/** Seed-хелпер: кладёт workspace asset Plane для image-component refs. */
+export function addWorkspaceAsset(
+  world: FakeWorld,
+  workspaceSlug: string,
+  asset: PlaneWorkspaceAsset,
+): void {
+  world.workspaceAssets.set(`${workspaceSlug}:${asset.id}`, asset);
 }
 
 /** Seed-хелпер: добавляет комментарий с заданным html (для inline-asset парсера). */

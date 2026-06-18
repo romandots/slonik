@@ -24,7 +24,28 @@ export interface CommentAssetsOptions {
   minioEndpoints: string[];
   /** Имя bucket'а Plane (`MINIO_BUCKET_PLANE`). */
   planeBucket: string;
+  /**
+   * Known Plane UI/API origins для absolute asset-API URL'ов.
+   * Editor-native `<image-component src="<asset-uuid>">` не использует
+   * внешний origin и резолвится через Plane API по UUID.
+   */
+  planeAssetEndpoints?: string[];
 }
+
+export type InlineAssetRef =
+  | {
+      kind: 'minio';
+      ref: string;
+      filename: string;
+      mime_type: string;
+      bucket: string;
+      object_key: string;
+    }
+  | {
+      kind: 'plane_asset';
+      ref: string;
+      asset_id: string;
+    };
 
 /**
  * Чистая функция: ничего не вызывает по сети, только парсит HTML +
@@ -40,15 +61,43 @@ export function extractInlineAssets(
   comment: PlaneComment,
   options: CommentAssetsOptions,
 ): Attachment[] {
-  const html = comment.comment_html ?? '';
+  return extractInlineAssetRefs(comment.comment_html ?? '', options)
+    .filter((ref): ref is Extract<InlineAssetRef, { kind: 'minio' }> => ref.kind === 'minio')
+    .map((ref) => ({
+      id: pciIdFromAsset(comment.id, ref.ref, sha1),
+      source: 'plane_comment_inline',
+      filename: ref.filename,
+      mime_type: ref.mime_type,
+      size: 0,
+      uploaded_at: comment.created_at,
+      ...(comment.actor !== undefined && comment.actor.length > 0
+        ? { uploaded_by: comment.actor }
+        : {}),
+      comment_id: comment.id,
+      storage: {
+        kind: 'minio',
+        bucket: ref.bucket,
+        object_key: ref.object_key,
+      },
+    }));
+}
+
+export function extractInlineAssetRefs(
+  html: string,
+  options: CommentAssetsOptions,
+): InlineAssetRef[] {
   if (html.length === 0) return [];
 
-  const allowedOrigins = new Set(
+  const allowedMinioOrigins = new Set(
     options.minioEndpoints
       .map((e) => normaliseOrigin(e))
       .filter((o): o is string => o !== null),
   );
-  if (allowedOrigins.size === 0) return [];
+  const allowedPlaneOrigins = new Set(
+    (options.planeAssetEndpoints ?? [])
+      .map((e) => normaliseOrigin(e))
+      .filter((o): o is string => o !== null),
+  );
 
   const root = parseHtml(html);
   // Источники URL: <img src>, <a href> (на файл в plane-uploads),
@@ -64,13 +113,41 @@ export function extractInlineAssets(
     const href = a.getAttribute('href');
     if (href !== undefined && href !== null) candidates.push(href);
   }
+  for (const image of root.querySelectorAll('image-component')) {
+    for (const attr of ['src', 'asset', 'asset_id'] as const) {
+      const assetId = parsePlaneAssetId(image.getAttribute(attr));
+      if (assetId !== null) {
+        candidates.push(`plane-asset:${assetId}`);
+        break;
+      }
+    }
+  }
 
   const seen = new Set<string>();
-  const out: Attachment[] = [];
+  const out: InlineAssetRef[] = [];
   for (const raw of candidates) {
+    if (raw.startsWith('plane-asset:')) {
+      if (seen.has(raw)) continue;
+      seen.add(raw);
+      out.push({
+        kind: 'plane_asset',
+        ref: raw,
+        asset_id: raw.slice('plane-asset:'.length),
+      });
+      continue;
+    }
+
     const safe = parseSafeUrl(raw);
     if (safe === null) continue;
-    if (!allowedOrigins.has(safe.origin)) continue;
+    const planeAssetId = parsePlaneAssetApiUrl(safe, allowedPlaneOrigins);
+    if (planeAssetId !== null) {
+      if (seen.has(safe.href)) continue;
+      seen.add(safe.href);
+      out.push({ kind: 'plane_asset', ref: safe.href, asset_id: planeAssetId });
+      continue;
+    }
+
+    if (!allowedMinioOrigins.has(safe.origin)) continue;
     // path: /<bucket>/<...key...>. Нормализованный pathname без `..`
     // (parseSafeUrl уже это проверил). Первый сегмент = bucket plane.
     const segments = safe.pathname.split('/').filter((s) => s.length > 0);
@@ -85,20 +162,12 @@ export function extractInlineAssets(
     const filename = decodeFilename(segments[segments.length - 1] ?? objectKey);
     const mimeType = inferMimeFromFilename(filename);
     out.push({
-      id: pciIdFromAsset(comment.id, safe.href, sha1),
-      source: 'plane_comment_inline',
+      kind: 'minio',
+      ref: safe.href,
       filename,
       mime_type: mimeType,
-      size: 0,
-      uploaded_at: comment.created_at,
-      ...(comment.actor !== undefined && comment.actor.length > 0
-        ? { uploaded_by: comment.actor }
-        : {}),
-      comment_id: comment.id,
-      storage: {
-        bucket: options.planeBucket,
-        object_key: objectKey,
-      },
+      bucket: options.planeBucket,
+      object_key: objectKey,
     });
   }
   return out;
@@ -171,6 +240,26 @@ function normaliseOrigin(endpoint: string): string | null {
   } catch {
     return null;
   }
+}
+
+function parsePlaneAssetId(raw: string | undefined | null): string | null {
+  if (raw === undefined || raw === null) return null;
+  const s = raw.trim();
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s)
+    ? s
+    : null;
+}
+
+function parsePlaneAssetApiUrl(
+  safe: { origin: string; pathname: string; href: string },
+  allowedPlaneOrigins: Set<string>,
+): string | null {
+  if (!allowedPlaneOrigins.has(safe.origin)) return null;
+  if (!safe.pathname.startsWith('/api/assets/')) return null;
+  const match = /\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:\/|$)/i.exec(
+    safe.pathname,
+  );
+  return match?.[1] ?? null;
 }
 
 function sha1(s: string): string {

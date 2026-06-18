@@ -7,6 +7,7 @@ import {
   addComment,
   addMinioObject,
   addPlaneAttachment,
+  addWorkspaceAsset,
   fakeMinio,
   fakePlane,
   newWorld,
@@ -19,6 +20,7 @@ const SILENT = pino({ level: 'silent' });
 const PLANE_BUCKET = 'plane-uploads';
 const MCP_BUCKET = 'mcp-artifacts';
 const ENDPOINTS = ['http://minio:9000'];
+const PLANE_ASSET_ID = '55e14ca4-6254-461c-9ca2-a056cadd744d';
 
 const sha1 = (s: string): string => createHash('sha1').update(s).digest('hex');
 
@@ -110,6 +112,40 @@ describe('readAttachment handler', () => {
     });
     expect(result.source).toBe('plane_comment_inline');
     expect(result.audit.bucket).toBe(PLANE_BUCKET);
+  });
+
+  it('works for Plane editor image-component assets (pci_*)', async () => {
+    const ctx = setup();
+    const commentId = '55555555-5555-5555-5555-555555555555';
+    addComment(ctx.world, ctx.project.id, ctx.issue.id, {
+      id: commentId,
+      actor: 'u',
+      comment_html: `<image-component src="${PLANE_ASSET_ID}"></image-component>`,
+      created_at: '2026-01-01T00:00:00Z',
+    });
+    addWorkspaceAsset(ctx.world, 'agents', {
+      id: PLANE_ASSET_ID,
+      name: 'inline-plane.png',
+      type: 'image/png',
+      size: 123,
+      asset_url: 'https://slonk.example/api/assets/v2/download/inline-plane.png',
+    });
+    const pciId = `pci_${commentId}_${sha1(`plane-asset:${PLANE_ASSET_ID}`).slice(0, 12)}`;
+
+    const result = await readAttachment({
+      ...baseDeps(ctx),
+      input: { issue_id: ctx.issue.id, attachment_id: pciId },
+    });
+
+    expect(result.source).toBe('plane_comment_inline');
+    expect(result.download_url).toBe('https://slonk.example/api/assets/v2/download/inline-plane.png');
+    expect(result.filename).toBe('inline-plane.png');
+    expect(result.size).toBe(123);
+    expect(result.audit).toEqual({
+      plane_asset_id: PLANE_ASSET_ID,
+      expires_at: expect.any(String),
+    });
+    expect(JSON.stringify(result.audit)).not.toContain('https://slonk.example');
   });
 
   it('AC #6: NOT_FOUND for syntactically valid but missing pi_*', async () => {

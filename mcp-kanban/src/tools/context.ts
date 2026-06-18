@@ -59,6 +59,11 @@ export interface ToolContext {
    */
   minioEndpoints: string[];
   /**
+   * Known Plane UI/API origins для inline asset-API URL'ов (`/api/assets/...`).
+   * Используется только как origin-whitelist при парсинге HTML.
+   */
+  planeAssetEndpoints: string[];
+  /**
    * MinIO-клиент (presign / stat / list). В тестах подсовывается
    * `FakeMinioClient`. SLONK-14.
    */
