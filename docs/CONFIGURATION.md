@@ -146,6 +146,9 @@ Compose автоматически собирает `AMQP_URL` для Celery и�
 | `MCP_SESSION_IDLE_MS` | `1800000` (30 мин) | idle-timeout MCP-сессии: если по `mcp-session-id` нет активности дольше этого срока, janitor закрывает сессию и освобождает McpServer + 22 tool-замыкания. |
 | `MCP_SESSION_GC_INTERVAL_MS` | `60000` (1 мин) | период фонового janitor'а. `0` отключает периодический sweep (сессии чистятся только на graceful shutdown клиента). |
 | `MCP_MAX_SESSIONS` | `256` | жёсткий cap одновременных сессий. При превышении вытесняется самая старая по `lastUsedAt` (LRU). |
+| `MCP_ATTACH_MAX_BYTES` | `10485760` (10 MiB) | единый лимит размера вложения (`attach_file`, direct + presign). Source-of-truth — раньше дублировался хардкодами в schema/handler (SLONK-31). |
+| `MCP_BODY_LIMIT_BYTES` | _(авто)_ | лимит тела HTTP Fastify. Если не задан — выводится из `MCP_ATTACH_MAX_BYTES * 4/3 + overhead`. Дефолт Fastify (1 MiB) резал тело JSON-RPC и ломал direct-аплоад файлов > ~700 KiB (SLONK-31). |
+| `MCP_ATTACH_ALLOWED_MIME` | _(пусто)_ | MIME-allowlist для direct-аплоада (CSV). Пусто = любые типы; непустой — прочие MIME отвергаются с `INVALID_INPUT` (SLONK-31). |
 
 ### 2.7 Caddy (опц.)
 

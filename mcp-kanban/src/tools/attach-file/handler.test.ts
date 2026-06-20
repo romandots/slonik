@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
 import { attachFile } from './handler.js';
-import { AttachFileInput } from './schema.js';
 import { TtlCache } from '../../cache.js';
 import { McpError } from '../../errors.js';
 import { mcaIdFromObjectKey } from '../../attachments/types.js';
@@ -225,8 +224,9 @@ describe('attachFile', () => {
       defaultProjectRef: 'SLONK',
       identity: 'developer-agent',
       bucket: 'mcp-artifacts',
-      endpoint: 'http://minio:9000',
       expiresInSec: 3600,
+      maxBytes: 10 * 1024 * 1024,
+      allowedMime: [],
       input: {
         issue_id: 1234,
         project: 'SLONK',
@@ -241,6 +241,11 @@ describe('attachFile', () => {
     if (r.kind === 'direct') {
       expect(r.object_key).toContain('chatgpt.txt');
       expect(r.size).toBe(content.byteLength);
+      // A3: direct-результат симметричен complete — несёт стабильный mca_-id
+      // и свежий presigned download_url.
+      expect(r.attachment_id).toBe(mcaIdFromObjectKey(r.object_key, sha1));
+      expect(r.attachment_id).toMatch(/^mca_[0-9a-f]{16}$/);
+      expect(r.download_url).toContain('X-Amz-Signature');
       expect(r.attachment).toMatchObject({
         source: 'mcp_artifact',
         filename: 'chatgpt.txt',
@@ -251,8 +256,13 @@ describe('attachFile', () => {
       expect(world.minioObjects.get(`mcp-artifacts:${r.object_key}`)?.content?.toString('utf8')).toBe(
         'hello from chatgpt',
       );
+      // A4: аннотация несёт стабильный mca_-id, а не сырой object_key или
+      // presigned-URL.
+      const comments = [...world.comments.values()].flat();
+      expect(comments).toHaveLength(1);
+      expect(comments[0]!.comment_html).toContain(r.attachment_id);
+      expect(comments[0]!.comment_html).not.toContain('X-Amz-Signature');
     }
-    expect([...world.comments.values()].flat()).toHaveLength(1);
   });
 
   it('direct upload rejects invalid base64 without storing content', async () => {
@@ -269,8 +279,9 @@ describe('attachFile', () => {
         defaultProjectRef: 'SLONK',
         identity: 'developer-agent',
         bucket: 'mcp-artifacts',
-        endpoint: 'http://minio:9000',
         expiresInSec: 3600,
+        maxBytes: 10 * 1024 * 1024,
+        allowedMime: [],
         input: {
           issue_id: 1234,
           project: 'SLONK',
@@ -301,8 +312,9 @@ describe('attachFile', () => {
         defaultProjectRef: 'SLONK',
         identity: 'developer-agent',
         bucket: 'mcp-artifacts',
-        endpoint: 'http://minio:9000',
         expiresInSec: 3600,
+        maxBytes: 10 * 1024 * 1024,
+        allowedMime: [],
         input: {
           issue_id: 1234,
           project: 'SLONK',
@@ -318,18 +330,100 @@ describe('attachFile', () => {
     expect([...world.comments.values()].flat()).toHaveLength(0);
   });
 
-  it('direct upload schema rejects payloads above encoded size limit', () => {
-    const maxEncodedChars = Math.ceil((10 * 1024 * 1024) / 3) * 4;
+  it('direct upload rejects size above the configured maxBytes (config-driven limit)', async () => {
+    const world = newWorld();
+    const { project } = seedAgentsWorkspace(world);
+    addIssue(world, project.id, { id: 'iss-1', sequence_id: 1234, name: 'Test' });
+    const content = Buffer.from('0123456789', 'utf8'); // 10 bytes
 
-    expect(() =>
-      AttachFileInput.parse({
-        issue_id: 'SLONK-1234',
-        project: 'SLONK',
-        filename: 'too-large.txt',
-        mime_type: 'text/plain',
-        size: 1,
-        content_base64: `${'A'.repeat(maxEncodedChars)}A`,
+    await expect(
+      attachFile({
+        plane: fakePlane(world),
+        minio: fakeMinio(world),
+        cache: new TtlCache(),
+        workspace: 'agents',
+        defaultProjectRef: 'SLONK',
+        identity: 'developer-agent',
+        bucket: 'mcp-artifacts',
+        expiresInSec: 3600,
+        maxBytes: 5, // конфиг-лимит ниже размера файла
+        allowedMime: [],
+        input: {
+          issue_id: 1234,
+          project: 'SLONK',
+          filename: 'too-large.txt',
+          mime_type: 'text/plain',
+          size: content.byteLength,
+          content_base64: content.toString('base64'),
+        },
       }),
-    ).toThrow();
+    ).rejects.toMatchObject({ code: 'INVALID_INPUT' });
+
+    // Файл не сохранён, комментарий не запостен.
+    expect(world.minioObjects.size).toBe(0);
+    expect([...world.comments.values()].flat()).toHaveLength(0);
+  });
+
+  it('direct upload enforces the MIME allowlist when one is configured', async () => {
+    const world = newWorld();
+    const { project } = seedAgentsWorkspace(world);
+    addIssue(world, project.id, { id: 'iss-1', sequence_id: 1234, name: 'Test' });
+    const content = Buffer.from('<svg/>', 'utf8');
+
+    await expect(
+      attachFile({
+        plane: fakePlane(world),
+        minio: fakeMinio(world),
+        cache: new TtlCache(),
+        workspace: 'agents',
+        defaultProjectRef: 'SLONK',
+        identity: 'developer-agent',
+        bucket: 'mcp-artifacts',
+        expiresInSec: 3600,
+        maxBytes: 10 * 1024 * 1024,
+        allowedMime: ['image/png', 'image/jpeg'],
+        input: {
+          issue_id: 1234,
+          project: 'SLONK',
+          filename: 'x.svg',
+          mime_type: 'image/svg+xml',
+          size: content.byteLength,
+          content_base64: content.toString('base64'),
+        },
+      }),
+    ).rejects.toMatchObject({ code: 'INVALID_INPUT' });
+
+    expect(world.minioObjects.size).toBe(0);
+    expect([...world.comments.values()].flat()).toHaveLength(0);
+  });
+
+  it('direct upload accepts a MIME that is in the allowlist', async () => {
+    const world = newWorld();
+    const { project } = seedAgentsWorkspace(world);
+    addIssue(world, project.id, { id: 'iss-1', sequence_id: 1234, name: 'Test' });
+    const content = Buffer.from('png-bytes', 'utf8');
+
+    const r = await attachFile({
+      plane: fakePlane(world),
+      minio: fakeMinio(world),
+      cache: new TtlCache(),
+      workspace: 'agents',
+      defaultProjectRef: 'SLONK',
+      identity: 'developer-agent',
+      bucket: 'mcp-artifacts',
+      expiresInSec: 3600,
+      maxBytes: 10 * 1024 * 1024,
+      allowedMime: ['image/png'],
+      input: {
+        issue_id: 1234,
+        project: 'SLONK',
+        filename: 'pic.png',
+        mime_type: 'image/png',
+        size: content.byteLength,
+        content_base64: content.toString('base64'),
+      },
+    });
+
+    expect(r.kind).toBe('direct');
   });
 });

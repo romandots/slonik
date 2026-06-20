@@ -7,6 +7,20 @@
 
 ## [Unreleased]
 
+### Fixed
+- **Однопроходный direct-аплоад `attach_file` без presigned PUT (SLONK-31).**
+  Direct-режим (`content_base64`) был нерабочим: Fastify создавался без
+  `bodyLimit`, и дефолт 1 MiB резал тело JSON-RPC до ~700 KiB реального файла,
+  хотя контракт обещал 10 MiB. Добавлен `MCP_BODY_LIMIT_BYTES` (по умолчанию
+  выводится из `MCP_ATTACH_MAX_BYTES * 4/3 + overhead`), а 413 от Fastify больше
+  не маскируется под 500 — клиент получает честный `PAYLOAD_TOO_LARGE`. Лимит
+  размера вынесен в единый source-of-truth `MCP_ATTACH_MAX_BYTES` (хардкоды из
+  `schema.ts`/`handler.ts` убраны). Direct-результат теперь симметричен
+  complete: возвращает стабильный `attachment_id` (`mca_…`) и `download_url`,
+  резолвится `read_attachment`. Комментарий-аннотация пишет `mca_`-id (а не
+  сырой `object_key`), filename/note экранируются. Добавлен MIME-allowlist
+  `MCP_ATTACH_ALLOWED_MIME` для direct (пусто = любые типы). SemVer: MINOR.
+
 ### Changed
 - **`plane-worker` baseline `mem_limit` поднят `384m → 768m` (SLONK-9).**
   QA-прогон выявил циклические OOM-kill'ы (`exit 137`) при Celery-нагрузке

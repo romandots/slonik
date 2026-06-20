@@ -70,6 +70,17 @@ export interface ToolContext {
   minio: MinioClient;
   /** TTL presigned URL'ов в секундах. */
   signedUrlExpirationSec: number;
+  /**
+   * Максимальный размер decoded direct-аплоада в байтах
+   * (`MCP_ATTACH_MAX_BYTES`). Единый source-of-truth по лимиту attach_file —
+   * раньше дублировался хардкодами в schema/handler (SLONK-31).
+   */
+  attachMaxBytes: number;
+  /**
+   * MIME-allowlist для direct-аплоада (`MCP_ATTACH_ALLOWED_MIME`). Пусто =
+   * разрешены любые типы (backward compat); непустой — direct отвергает прочие.
+   */
+  attachAllowedMime: string[];
   /** SQLite-индекс git-привязок (Phase 6). */
   gitRefs: GitRefsIndex;
   /** Prometheus-метрики (Phase 8). */
