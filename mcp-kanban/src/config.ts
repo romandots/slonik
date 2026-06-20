@@ -22,6 +22,16 @@ const Bool01 = z
 const PositiveInt = z.coerce.number().int().positive();
 const NonNegativeInt = z.coerce.number().int().nonnegative();
 
+/**
+ * Опциональный положительный int. Принимает undefined ИЛИ пустую строку
+ * (compose часто пробрасывает ${VAR:-} как "") как «не задано», иначе
+ * коэрсит в положительное целое.
+ */
+const optionalPositiveInt = z.preprocess(
+  (v) => (v === undefined || v === '' ? undefined : v),
+  z.coerce.number().int().positive().optional(),
+);
+
 const ConfigSchema = z.object({
   // Сервер
   MCP_SERVER_PORT: PositiveInt.default(8787),
@@ -48,6 +58,21 @@ const ConfigSchema = z.object({
   MINIO_SECRET_KEY: optionalNonEmpty,
   MINIO_USE_SSL: Bool01.default(false),
   PLANE_SIGNED_URL_EXPIRATION: PositiveInt.default(3600),
+
+  // attach_file (SLONK-31): единый source-of-truth по лимитам аплоада.
+  // MCP_ATTACH_MAX_BYTES — максимальный размер декодированного файла
+  // (direct-режим и presign). Раньше дублировался хардкодами в
+  // schema.ts/handler.ts — теперь живёт только здесь.
+  MCP_ATTACH_MAX_BYTES: PositiveInt.default(10 * 1024 * 1024),
+  // Лимит тела HTTP-запроса для Fastify. Должен покрывать base64-раздутие
+  // direct-аплоада (MCP_ATTACH_MAX_BYTES * 4/3) + overhead JSON-RPC-конверта.
+  // Если не задан явно — вычисляется из MCP_ATTACH_MAX_BYTES
+  // (см. `effectiveBodyLimitBytes`). Дефолт Fastify (1 MiB) резал тело
+  // JSON-RPC и ломал direct-аплоад файлов > ~700 KiB.
+  MCP_BODY_LIMIT_BYTES: optionalPositiveInt,
+  // MIME-allowlist для direct-аплоада (CSV). Пусто = разрешены любые типы
+  // (backward compat). Непустой список — direct отвергает прочие MIME.
+  MCP_ATTACH_ALLOWED_MIME: csvList.prefault(''),
 
   // Бизнес-логика
   MCP_DEFAULT_WORKSPACE: z.string().min(1).default('agents'),
@@ -146,6 +171,24 @@ const ConfigSchema = z.object({
 });
 
 export type Config = z.infer<typeof ConfigSchema>;
+
+// Запас сверх base64-раздутого тела файла под JSON-RPC-конверт attach_file
+// (issue_id/filename/mime_type/note/method-обёртка). 64 KiB с лихвой.
+const BODY_LIMIT_OVERHEAD_BYTES = 64 * 1024;
+
+/**
+ * Эффективный лимит тела HTTP для Fastify. Если оператор задал
+ * `MCP_BODY_LIMIT_BYTES` — берём его как есть; иначе выводим из
+ * `MCP_ATTACH_MAX_BYTES`: base64 раздувает байты в ~4/3, плюс overhead под
+ * JSON-RPC-обёртку. Это гарантирует, что схема, обещающая
+ * `MCP_ATTACH_MAX_BYTES`, не режется bodyLimit'ом на транспортном уровне.
+ */
+export function effectiveBodyLimitBytes(config: Config): number {
+  return (
+    config.MCP_BODY_LIMIT_BYTES ??
+    Math.ceil((config.MCP_ATTACH_MAX_BYTES * 4) / 3) + BODY_LIMIT_OVERHEAD_BYTES
+  );
+}
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const result = ConfigSchema.safeParse(env);

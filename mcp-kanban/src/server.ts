@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { authenticate, type AuthedRequest } from './auth.js';
-import { loadConfig, type Config } from './config.js';
+import { loadConfig, effectiveBodyLimitBytes, type Config } from './config.js';
 import { McpError } from './errors.js';
 import { createLogger, type Logger } from './logger.js';
 import { PlaneClient } from './plane-client.js';
@@ -109,6 +109,10 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
     requestIdLogLabel: 'trace_id',
     disableRequestLogging: false,
     trustProxy: true,
+    // Дефолт Fastify (1 MiB) резал тело JSON-RPC и ломал direct-аплоад
+    // attach_file (SLONK-31). Лимит покрывает base64-раздутый
+    // MCP_ATTACH_MAX_BYTES + overhead конверта (см. config.ts).
+    bodyLimit: effectiveBodyLimitBytes(config),
   });
 
   // PlaneClient для workspace по умолчанию (backward compat + /health endpoint).
@@ -504,6 +508,8 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
         planeAssetEndpoints: collectPlaneAssetEndpoints(config),
         minio,
         signedUrlExpirationSec: config.PLANE_SIGNED_URL_EXPIRATION,
+        attachMaxBytes: config.MCP_ATTACH_MAX_BYTES,
+        attachAllowedMime: config.MCP_ATTACH_ALLOWED_MIME,
         gitRefs,
         metrics,
       });
@@ -553,6 +559,24 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
         error: {
           code: err.code,
           message: err.message,
+          trace_id: typeof request.id === 'string' ? request.id : undefined,
+        },
+      });
+      return;
+    }
+    // Fastify сам бросает FST_ERR_CTP_BODY_TOO_LARGE (statusCode 413), когда
+    // тело превышает bodyLimit. Не маскируем его под 500 (SLONK-31, A1):
+    // клиент должен увидеть честный 413, а не «внутреннюю ошибку».
+    const statusCode = (err as { statusCode?: number }).statusCode;
+    if (statusCode === 413) {
+      logger.warn(
+        { trace_id: request.id, code: (err as { code?: string }).code },
+        'request body exceeds bodyLimit',
+      );
+      reply.status(413).send({
+        error: {
+          code: 'PAYLOAD_TOO_LARGE',
+          message: 'Request body exceeds the configured size limit (MCP_BODY_LIMIT_BYTES)',
           trace_id: typeof request.id === 'string' ? request.id : undefined,
         },
       });

@@ -4,6 +4,7 @@ export type ErrorCode =
   | 'IDENTITY_REQUIRED'
   | 'NOT_FOUND'
   | 'CONFLICT'
+  | 'PAYLOAD_TOO_LARGE'
   | 'PLANE_UNAVAILABLE'
   | 'STORAGE_UNAVAILABLE'
   | 'RATE_LIMITED'
@@ -51,6 +52,8 @@ function defaultHttpStatusFor(code: ErrorCode): number {
       return 404;
     case 'CONFLICT':
       return 409;
+    case 'PAYLOAD_TOO_LARGE':
+      return 413;
     case 'RATE_LIMITED':
       return 429;
     case 'PLANE_UNAVAILABLE':

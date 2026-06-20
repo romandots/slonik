@@ -412,6 +412,50 @@ describe('mcp-kanban /metrics enabled', () => {
   });
 });
 
+describe('body size limit (SLONK-31)', () => {
+  let built: BuiltServer;
+  let tmpDir: string;
+
+  beforeAll(async () => {
+    // Малый bodyLimit, чтобы тело было легко превысить в тесте.
+    const config = loadConfig(testEnv({ MCP_BODY_LIMIT_BYTES: '512' }));
+    const logger = createLogger(config);
+    tmpDir = mkdtempSync(join(tmpdir(), 'slonk-mcp-bodylimit-'));
+    const identityStorePath = join(tmpDir, 'identity.sqlite');
+    seedIdentityStore(identityStorePath, ALL_ROLES);
+    built = await buildServer({
+      config,
+      logger,
+      identityStorePath,
+      auditStorePath: join(tmpDir, 'audit.sqlite'),
+      gitRefsStorePath: join(tmpDir, 'git_refs.sqlite'),
+    });
+    await built.app.ready();
+  });
+
+  afterAll(async () => {
+    await built.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('returns 413 PAYLOAD_TOO_LARGE when the body exceeds bodyLimit (not masked as 500)', async () => {
+    const big = 'x'.repeat(2000); // > 512 bytes
+    const r = await built.app.inject({
+      method: 'POST',
+      url: '/mcp',
+      headers: {
+        authorization: `Bearer ${TEST_TOKEN}`,
+        'x-agent-identity': 'developer-agent',
+        'content-type': 'application/json',
+      },
+      payload: { jsonrpc: '2.0', id: 1, method: 'initialize', params: { big } },
+    });
+    expect(r.statusCode).toBe(413);
+    const body = JSON.parse(r.body) as { error: { code: string } };
+    expect(body.error.code).toBe('PAYLOAD_TOO_LARGE');
+  });
+});
+
 describe('OAuth-enabled server', () => {
   let oauthBuilt: BuiltServer;
   let oauthTmp: string;

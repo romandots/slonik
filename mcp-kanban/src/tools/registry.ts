@@ -694,6 +694,8 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
             identity: ctx.resolveIdentity(),
             bucket: ctx.minioBucket,
             expiresInSec: ctx.signedUrlExpirationSec,
+            maxBytes: ctx.attachMaxBytes,
+            allowedMime: ctx.attachAllowedMime,
             input,
           }),
       });

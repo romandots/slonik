@@ -59,6 +59,12 @@ export type DirectUploadResult = {
   kind: 'direct';
   issue_id: string;
   object_key: string;
+  /** Стабильный id артефакта — резолвится `read_attachment(attachment_id)`.
+   *  Симметрично complete-результату (SLONK-31, A3). */
+  attachment_id: string;
+  /** Свежий presigned GET для удобства вызывающего. В комментарий-аннотацию
+   *  НЕ пишется — туда идёт только стабильный mca_-id. */
+  download_url: string;
   size: number;
   attachment: {
     source: 'mcp_artifact';
@@ -79,10 +85,12 @@ export interface AttachFileDeps {
   bucket: string;
   /** TTL presigned URL'ов в секундах. */
   expiresInSec: number;
+  /** Максимальный размер decoded direct-аплоада (MCP_ATTACH_MAX_BYTES). */
+  maxBytes: number;
+  /** MIME-allowlist для direct (MCP_ATTACH_ALLOWED_MIME). Пусто = любые. */
+  allowedMime: string[];
   input: AttachFileInput;
 }
-
-const DIRECT_UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
 
 export async function attachFile(deps: AttachFileDeps): Promise<PresignResult | CompleteResult | DirectUploadResult> {
   const parsed = parseIssueRef(String(deps.input.issue_id));
@@ -99,10 +107,18 @@ export async function attachFile(deps: AttachFileDeps): Promise<PresignResult | 
   const issueId = await resolveIssueId(deps.plane, deps.workspace, project, parsed);
 
   if (deps.input.content_base64) {
-    if (deps.input.size > DIRECT_UPLOAD_MAX_BYTES) {
+    if (deps.input.size > deps.maxBytes) {
       throw new McpError({
         code: 'INVALID_INPUT',
-        message: `direct upload size exceeds ${DIRECT_UPLOAD_MAX_BYTES} bytes`,
+        message: `direct upload size exceeds the configured limit (${deps.maxBytes} bytes)`,
+      });
+    }
+    // MIME-allowlist (A5): пустой список = разрешены любые типы (backward
+    // compat); непустой — отвергаем всё, чего в нём нет.
+    if (deps.allowedMime.length > 0 && !deps.allowedMime.includes(deps.input.mime_type)) {
+      throw new McpError({
+        code: 'INVALID_INPUT',
+        message: `mime_type '${deps.input.mime_type}' is not in the allowed list`,
       });
     }
     const objectKey = makeObjectKey(issueId, deps.identity, deps.input.filename);
@@ -118,13 +134,18 @@ export async function attachFile(deps: AttachFileDeps): Promise<PresignResult | 
       'Content-Type': deps.input.mime_type,
     });
 
-    await createAttachmentComment(deps, project.id, issueId, objectKey);
+    // Симметрично complete (A3): стабильный mca_-id + свежий download_url.
+    const attachmentId = mcaIdFromObjectKey(objectKey, sha1);
+    const downloadUrl = await deps.minio.presignedGetObject(deps.bucket, objectKey, deps.expiresInSec);
+    await createAttachmentComment(deps, project.id, issueId, attachmentId);
     deps.cache.clear();
 
     return {
       kind: 'direct',
       issue_id: issueId,
       object_key: objectKey,
+      attachment_id: attachmentId,
+      download_url: downloadUrl,
       size: content.byteLength,
       attachment: {
         source: 'mcp_artifact',
@@ -202,12 +223,17 @@ async function createAttachmentComment(
   deps: AttachFileDeps,
   projectId: string,
   issueId: string,
-  objectKey: string,
+  attachmentId: string,
 ): Promise<void> {
+  // A4: аннотация унифицирована на стабильный mca_-id (раньше писался сырой
+  // object_key) и резолвится через read_attachment — симметрично complete.
+  // filename/note приходят от агента, поэтому экранируем перед вставкой в HTML.
+  const note = deps.input.note !== undefined ? ` — ${escapeHtml(deps.input.note)}` : '';
   await deps.plane.createIssueComment(deps.workspace, projectId, issueId, {
     comment_html: formatComment(
       deps.identity,
-      `attached <code>${deps.input.filename}</code> (${deps.input.size} bytes) as <code>${objectKey}</code>`,
+      `attached <code>${escapeHtml(deps.input.filename)}</code> (${deps.input.size} bytes), ` +
+        `attachment id <code>${attachmentId}</code> — resolve via read_attachment${note}`,
     ),
   });
 }
