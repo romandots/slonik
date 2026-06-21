@@ -18,7 +18,9 @@ import type {
   PlaneWorkspace,
 } from '../plane-client.js';
 import type { MinioClient, MinioObject, MinioStat } from '../minio-client.js';
+import type { AssetUploader, PresignedPost } from '../plane-asset-upload.js';
 import { McpError } from '../errors.js';
+import { randomUUID } from 'node:crypto';
 
 export interface FakeWorld {
   workspaces: PlaneWorkspace[];
@@ -37,6 +39,11 @@ export interface FakeWorld {
   planeAttachments: Map<string, PlaneAttachment[]>;
   /** SLONK-24: workspace assets Plane по ключу `<workspaceSlug>:<assetId>`. */
   workspaceAssets: Map<string, PlaneWorkspaceAsset>;
+  /** SLONK-32: generic-assets, созданные через createGenericAsset, по asset_id. */
+  genericAssets: Map<
+    string,
+    { asset_id: string; name: string; type: string; size: number; project_id: string; is_uploaded: boolean }
+  >;
   /** SLONK-14: объекты MinIO по ключу `<bucket>:<objectKey>`. */
   minioObjects: Map<string, { size: number; contentType?: string; lastModified?: Date; content?: Buffer }>;
   /** SLONK-14: симулируемые ошибки источников (для partial-failure тестов). */
@@ -62,6 +69,7 @@ export function newWorld(): FakeWorld {
     inviteResponses: new Map(),
     planeAttachments: new Map(),
     workspaceAssets: new Map(),
+    genericAssets: new Map(),
     minioObjects: new Map(),
     failPlaneAttachments: false,
     failMinioList: false,
@@ -408,6 +416,32 @@ export function fakePlane(world: FakeWorld): PlaneClient {
     async getWorkspaceAsset(ws: string, assetId: string) {
       return world.workspaceAssets.get(`${ws}:${assetId}`);
     },
+    async createGenericAsset(
+      _ws: string,
+      input: { name: string; type: string; size: number; project_id: string },
+    ) {
+      const assetId = randomUUID();
+      world.genericAssets.set(assetId, {
+        asset_id: assetId,
+        name: input.name,
+        type: input.type,
+        size: input.size,
+        project_id: input.project_id,
+        is_uploaded: false,
+      });
+      return {
+        upload_data: {
+          url: 'https://minio.example/plane-uploads',
+          fields: { key: `ws/${assetId}-${input.name}`, policy: 'fake-policy' },
+        },
+        asset_id: assetId,
+        asset_url: `https://slonk.example/api/assets/v2/static/${assetId}/`,
+      };
+    },
+    async markGenericAssetUploaded(_ws: string, assetId: string) {
+      const a = world.genericAssets.get(assetId);
+      if (a !== undefined) a.is_uploaded = true;
+    },
     async createIssueComment(_ws: string, projectId: string, issueId: string, input: { comment_html: string }) {
       const key = `${projectId}:${issueId}`;
       const arr = world.comments.get(key) ?? [];
@@ -548,6 +582,23 @@ export function addMinioObject(
     ...(opts.lastModified !== undefined ? { lastModified: opts.lastModified } : {}),
     ...(opts.content !== undefined ? { content: opts.content } : {}),
   });
+}
+
+/**
+ * Фейковый AssetUploader для тестов embed_image (SLONK-32): записывает байты
+ * в `world.minioObjects` под ключом `<fields.key>` (как реальный presigned
+ * POST положил бы их в bucket). Можно заставить падать через `opts.fail`.
+ */
+export function fakeAssetUploader(world: FakeWorld, opts: { fail?: boolean } = {}): AssetUploader {
+  return {
+    async upload(uploadData: PresignedPost, content: Buffer, contentType: string): Promise<void> {
+      if (opts.fail) {
+        throw new McpError({ code: 'STORAGE_UNAVAILABLE', message: 'fake: presigned upload failed' });
+      }
+      const key = uploadData.fields['key'] ?? 'unknown-key';
+      world.minioObjects.set(`uploads:${key}`, { size: content.byteLength, contentType, content });
+    },
+  };
 }
 
 /** Seed-хелпер: кладёт Plane UI-attachment на задачу. */
