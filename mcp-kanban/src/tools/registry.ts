@@ -43,6 +43,8 @@ import { listAttachments } from './list-attachments/handler.js';
 import { ListAttachmentsInput } from './list-attachments/schema.js';
 import { readAttachment } from './read-attachment/handler.js';
 import { ReadAttachmentInput } from './read-attachment/schema.js';
+import { issueRelations } from './issue-relations/handler.js';
+import { IssueRelationsInput } from './issue-relations/schema.js';
 import { hashInput, newTraceId } from '../audit.js';
 
 export type { ToolContext } from './context.js';
@@ -73,6 +75,7 @@ export const REGISTERED_TOOL_NAMES = [
   'find_issues_by_git_ref',
   'list_attachments',
   'read_attachment',
+  'issue_relations',
 ] as const;
 export type RegisteredToolName = (typeof REGISTERED_TOOL_NAMES)[number];
 
@@ -91,6 +94,7 @@ const WRITE_TOOLS = new Set<RegisteredToolName>([
   // логируется как write (один audit-row на вызов, rate-limit на
   // identity), хотя в Plane не пишет.
   'read_attachment',
+  'issue_relations',
 ]);
 
 // MCP SDK ожидает у tool-callback'а возврат с индексной сигнатурой
@@ -844,6 +848,34 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
           void _audit;
           return rest;
         },
+      });
+    },
+  );
+
+  // ---- issue_relations (SLONK-33) ----
+  server.registerTool(
+    'issue_relations',
+    {
+      description:
+        'Manage relations between issues (relates_to, duplicate_of, blocked_by, blocking). ' +
+        'action=list returns all relations; action=add creates one; action=remove deletes one.',
+      inputSchema: IssueRelationsInput.shape,
+    },
+    async (args) => {
+      const input = IssueRelationsInput.parse(args);
+      return await withWriteGuard({
+        ctx,
+        tool: 'issue_relations',
+        input,
+        issueIdFromInput: (i) => (i as typeof input).issue_id,
+        fn: async () =>
+          await issueRelations({
+            plane: ctx.plane,
+            cache: ctx.cache,
+            workspace: ctx.workspace,
+            defaultProjectRef: ctx.defaultProjectSlug,
+            input,
+          }),
       });
     },
   );

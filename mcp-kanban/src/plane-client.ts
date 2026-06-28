@@ -140,6 +140,22 @@ export interface PlaneAttachment {
   created_by?: string;
 }
 
+/**
+ * Plane v1.3.0: GET/POST /workspaces/<slug>/projects/<pid>/issues/<iid>/issue-relation/
+ * DELETE /workspaces/<slug>/projects/<pid>/issues/<iid>/issue-relation/<rel_id>/
+ *
+ * relation_type values: 'relates_to' | 'duplicate_of' | 'blocked_by' | 'blocking'
+ * The `related_issue` field holds the UUID of the other issue.
+ */
+export interface PlaneIssueRelation {
+  id: string;
+  relation_type: 'relates_to' | 'duplicate_of' | 'blocked_by' | 'blocking';
+  issue: string;
+  related_issue: string;
+  project: string;
+  created_at?: string;
+}
+
 export interface PlaneWorkspaceAsset {
   id: string;
   name?: string;
@@ -859,6 +875,43 @@ export class PlaneClient {
       }
       throw err;
     }
+  }
+
+  // ---------------- high-level: issue relations ----------------
+
+  async listIssueRelations(
+    workspaceSlug: string,
+    projectId: string,
+    issueId: string,
+  ): Promise<PlaneIssueRelation[]> {
+    const resp = await this.request<PlaneIssueRelation[] | ListResult<PlaneIssueRelation>>(
+      `workspaces/${workspaceSlug}/projects/${projectId}/issues/${issueId}/issue-relation/`,
+    );
+    return unwrapList(resp);
+  }
+
+  async createIssueRelation(
+    workspaceSlug: string,
+    projectId: string,
+    issueId: string,
+    input: { relation_type: PlaneIssueRelation['relation_type']; related_issue: string },
+  ): Promise<PlaneIssueRelation> {
+    return await this.request<PlaneIssueRelation>(
+      `workspaces/${workspaceSlug}/projects/${projectId}/issues/${issueId}/issue-relation/`,
+      { method: 'POST', body: input },
+    );
+  }
+
+  async deleteIssueRelation(
+    workspaceSlug: string,
+    projectId: string,
+    issueId: string,
+    relationId: string,
+  ): Promise<void> {
+    await this.request<void>(
+      `workspaces/${workspaceSlug}/projects/${projectId}/issues/${issueId}/issue-relation/${relationId}/`,
+      { method: 'DELETE' },
+    );
   }
 }
 

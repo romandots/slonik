@@ -9,6 +9,7 @@ import type {
   PlaneCycle,
   PlaneIssue,
   PlaneIssueActivity,
+  PlaneIssueRelation,
   PlaneLabel,
   PlaneModule,
   PlaneProject,
@@ -39,6 +40,8 @@ export interface FakeWorld {
   workspaceAssets: Map<string, PlaneWorkspaceAsset>;
   /** SLONK-14: объекты MinIO по ключу `<bucket>:<objectKey>`. */
   minioObjects: Map<string, { size: number; contentType?: string; lastModified?: Date; content?: Buffer }>;
+  /** SLONK-33: связи между задачами по ключу `<projectId>:<issueId>`. */
+  relations: Map<string, PlaneIssueRelation[]>;
   /** SLONK-14: симулируемые ошибки источников (для partial-failure тестов). */
   failPlaneAttachments: boolean;
   failMinioList: boolean;
@@ -60,6 +63,7 @@ export function newWorld(): FakeWorld {
     comments: new Map(),
     members: new Map(),
     inviteResponses: new Map(),
+    relations: new Map(),
     planeAttachments: new Map(),
     workspaceAssets: new Map(),
     minioObjects: new Map(),
@@ -433,6 +437,36 @@ export function fakePlane(world: FakeWorld): PlaneClient {
       arr.push({ id: out.id, email: out.email });
       world.members.set(slug, arr);
       return out;
+    },
+    async listIssueRelations(_ws: string, projectId: string, issueId: string) {
+      return [...(world.relations.get(`${projectId}:${issueId}`) ?? [])];
+    },
+    async createIssueRelation(
+      _ws: string,
+      projectId: string,
+      issueId: string,
+      input: { relation_type: PlaneIssueRelation['relation_type']; related_issue: string },
+    ) {
+      const key = `${projectId}:${issueId}`;
+      const arr = world.relations.get(key) ?? [];
+      const rel: PlaneIssueRelation = {
+        id: id('rel'),
+        relation_type: input.relation_type,
+        issue: issueId,
+        related_issue: input.related_issue,
+        project: projectId,
+        created_at: new Date().toISOString(),
+      };
+      arr.push(rel);
+      world.relations.set(key, arr);
+      return rel;
+    },
+    async deleteIssueRelation(_ws: string, projectId: string, issueId: string, relationId: string) {
+      const key = `${projectId}:${issueId}`;
+      const arr = world.relations.get(key) ?? [];
+      const idx = arr.findIndex((r) => r.id === relationId);
+      if (idx !== -1) arr.splice(idx, 1);
+      world.relations.set(key, arr);
     },
   } as unknown as PlaneClient;
   return stub;
