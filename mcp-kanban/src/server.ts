@@ -186,6 +186,22 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
     logger.info({ workspace: config.MCP_DEFAULT_WORKSPACE }, 'default tenant registered');
   }
 
+  // Разовая уборка стора на старте: протухшие коды/токены и клиенты, которыми
+  // никто не пользуется. Раньше в сторе не было ни одного DELETE — записи
+  // копились всё время жизни стенда, а cap клиентов упирался в потолок
+  // навсегда (DCR создаёт клиента на каждое переподключение).
+  if (oauth !== undefined) {
+    const now = Date.now();
+    const pruned = oauth.pruneExpired(now);
+    const evicted = oauth.evictDeadClients(now);
+    if (pruned.codes > 0 || pruned.tokens > 0 || evicted > 0) {
+      logger.info(
+        { expired_codes: pruned.codes, expired_tokens: pruned.tokens, evicted_clients: evicted },
+        'oauth store pruned on startup',
+      );
+    }
+  }
+
   // PlaneClient factory: per-workspace клиент, кэшируется в Map.
   const planeClientCache = new Map<string, PlaneClient>();
   const getPlaneClient = (workspace: string): PlaneClient => {

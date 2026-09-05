@@ -93,12 +93,22 @@ export function registerOAuthRoutes(app: FastifyInstance, deps: OAuthRouteDeps):
         created_at_ms: now(),
       });
     } catch (err) {
+      // Сюда попадаем только когда вытеснение не помогло: все слоты заняты
+      // клиентами с живыми токенами. Полный текст (с подсказкой про
+      // MCP_OAUTH_MAX_CLIENTS) уходит оператору в лог; наружу отдаём
+      // короткое описание без внутренних деталей. Код остаётся 429, но
+      // формулировка больше не обещает, что «само пройдёт со временем»:
+      // без вмешательства оператора не пройдёт.
       reply.status(429);
       deps.logger.warn(
         { err: err instanceof Error ? err.message : String(err) },
-        'oauth client cap reached',
+        'oauth client registration refused: no free client slots',
       );
-      return { error: 'temporarily_unavailable', error_description: 'client registration cap reached' };
+      return {
+        error: 'temporarily_unavailable',
+        error_description:
+          'no free client slots: all registered clients hold live tokens — the server operator must raise the cap or revoke unused clients',
+      };
     }
     reply.status(201);
     return {

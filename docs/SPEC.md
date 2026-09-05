@@ -349,7 +349,7 @@ TipTap'ом безвозвратно — `parseDescription` вернёт пус�
 |---|---|---|---|
 | `/.well-known/oauth-protected-resource` | GET | Метаданные Resource Server (это `/mcp`), указывают на AS и resource URI | RFC 9728 |
 | `/.well-known/oauth-authorization-server` | GET | Метаданные AS: endpoints, поддерживаемые методы (PKCE S256 обязателен), grant'ы | RFC 8414 |
-| `/oauth/register` | POST | Dynamic Client Registration (открыт, rate-limited, capped на `MCP_OAUTH_MAX_CLIENTS`) | RFC 7591 |
+| `/oauth/register` | POST | Dynamic Client Registration (открыт, rate-limited, capped на `MCP_OAUTH_MAX_CLIENTS`; при исчерпании cap сначала вытесняются неиспользуемые клиенты — см. ниже) | RFC 7591 |
 | `/oauth/authorize` | GET | Рендерит HTML-форму логина: поля **Workspace** (slug тенанта; по умолчанию `MCP_DEFAULT_WORKSPACE`) и пароль (= `MCP_AUTH_TOKEN` для дефолтного либо tenant-специфичный). SLONK-19: workspace выбирается в форме, т.к. claude.ai не пробрасывает `?workspace=` | — |
 | `/oauth/authorize` | POST | Проверка пароля (constant-time), выдача single-use authorization code (PKCE S256-bound, TTL = `MCP_OAUTH_CODE_TTL_SEC`); code привязан к workspace | — |
 | `/oauth/token` | POST | Grant: `authorization_code` (PKCE верификация) или `refresh_token` (с ротацией). Возвращает opaque `access_token` + `refresh_token`; токен привязан к workspace | — |
@@ -360,6 +360,22 @@ OAuth flow для claude.ai: discovery → Dynamic Client Registration → `/aut
 authorization code → `/oauth/token` → access token (привязан к этому workspace)
 → `/mcp` с `Authorization: Bearer <access_token>`. Неизвестный workspace
 (не дефолтный и без зарегистрированного тенанта) форма отклоняет.
+
+**Уборка OAuth-стора.** DCR создаёт нового клиента на каждое подключение —
+claude.ai регистрируется заново при каждой переавторизации, — а протухшие
+коды и токены оставались в базе навсегда. Поэтому:
+
+- на старте сервера удаляются истёкшие коды/токены и клиенты, которыми никто
+  не пользуется;
+- при исчерпании `MCP_OAUTH_MAX_CLIENTS` регистрация не отказывает сразу:
+  сначала вытесняются клиенты **без единого живого токена**, начиная с самых
+  старых, вместе с их кодами и токенами.
+
+Клиент моложе часа (`CLIENT_EVICTION_GRACE_MS`) не вытесняется никогда: между
+DCR и обменом кода на токен человек читает форму и вводит пароль, и в этом
+окне у клиента ещё нет токенов — вытеснение сломало бы авторизацию на
+полпути. Отказ (`429`) остаётся, но только когда все слоты заняты клиентами с
+живыми токенами; тогда нужно поднять cap или отозвать неиспользуемые токены.
 
 **Workspace из токена (инвариант безопасности).** Workspace агента берётся
 исключительно из access-token, выданного при авторизации. Параметр workspace

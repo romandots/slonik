@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { OAuthStore } from './store.js';
+import { CLIENT_EVICTION_GRACE_MS } from './defaults.js';
 
 describe('OAuthStore', () => {
   let store: OAuthStore;
@@ -193,5 +194,93 @@ describe('OAuthStore — tenant management', () => {
       workspace: '', expires_at_ms: now + 3600_000, refresh_chain_id: 'ch',
     });
     expect(store.validateAccessToken('tok-empty', now)?.workspace).toBe('');
+  });
+});
+
+describe('OAuthStore — client GC and cap eviction', () => {
+  let store: OAuthStore;
+  beforeEach(() => {
+    store = new OAuthStore({ path: ':memory:', maxClients: 2 });
+  });
+  afterEach(() => store.close());
+
+  const now = 10 * CLIENT_EVICTION_GRACE_MS; // «сейчас» заведомо больше grace
+  const old = now - CLIENT_EVICTION_GRACE_MS - 1; // старше grace — вытесняемый
+  const liveToken = (client_id: string, expires_at_ms: number): void =>
+    store.saveToken({
+      token_hash: `tok-${client_id}`, kind: 'refresh', client_id, identity: 'operator',
+      scope: 'mcp', resource: 'https://slonk/mcp', workspace: '',
+      expires_at_ms, refresh_chain_id: `chain-${client_id}`,
+    });
+
+  it('prunes expired codes and tokens', () => {
+    store.saveToken({
+      token_hash: 'dead', kind: 'access', client_id: 'c1', identity: 'operator',
+      scope: 'mcp', resource: 'https://slonk/mcp', workspace: '',
+      expires_at_ms: now - 1, refresh_chain_id: 'chain1',
+    });
+    store.saveToken({
+      token_hash: 'alive', kind: 'access', client_id: 'c1', identity: 'operator',
+      scope: 'mcp', resource: 'https://slonk/mcp', workspace: '',
+      expires_at_ms: now + 1000, refresh_chain_id: 'chain1',
+    });
+    store.saveCode({
+      code_hash: 'oldcode', client_id: 'c1', redirect_uri: 'https://x/cb',
+      code_challenge: 'ch', identity: 'operator', scope: 'mcp',
+      resource: 'https://slonk/mcp', workspace: '', expires_at_ms: now - 1,
+    });
+
+    expect(store.pruneExpired(now)).toEqual({ codes: 1, tokens: 1 });
+    expect(store.validateAccessToken('alive', now)?.identity).toBe('operator');
+  });
+
+  it('evicts a client with no live tokens once it is older than the grace period', () => {
+    const c = store.registerClient({ client_name: 'stale', redirect_uris: ['https://x/cb'], created_at_ms: old });
+    expect(store.evictDeadClients(now)).toBe(1);
+    expect(store.getClient(c.client_id)).toBeUndefined();
+  });
+
+  it('never evicts a client registered within the grace period', () => {
+    // Клиент между DCR и обменом кода: токенов ещё нет, но вытеснять нельзя.
+    const fresh = store.registerClient({ client_name: 'mid-login', redirect_uris: ['https://x/cb'], created_at_ms: now });
+    expect(store.evictDeadClients(now)).toBe(0);
+    expect(store.getClient(fresh.client_id)).toBeDefined();
+  });
+
+  it('never evicts a client that still holds a live token', () => {
+    const c = store.registerClient({ client_name: 'active', redirect_uris: ['https://x/cb'], created_at_ms: old });
+    liveToken(c.client_id, now + 1000);
+    expect(store.evictDeadClients(now)).toBe(0);
+    expect(store.getClient(c.client_id)).toBeDefined();
+  });
+
+  it('makes room at the cap by evicting the oldest unused client', () => {
+    const stale = store.registerClient({ client_name: 'stale', redirect_uris: ['https://x/cb'], created_at_ms: old });
+    const active = store.registerClient({ client_name: 'active', redirect_uris: ['https://x/cb'], created_at_ms: old + 1 });
+    liveToken(active.client_id, now + 1000);
+
+    // cap=2 исчерпан, но один клиент мёртв — регистрация должна пройти.
+    const fresh = store.registerClient({ client_name: 'new', redirect_uris: ['https://x/cb'], created_at_ms: now });
+
+    expect(store.getClient(stale.client_id)).toBeUndefined();
+    expect(store.getClient(active.client_id)).toBeDefined();
+    expect(store.getClient(fresh.client_id)).toBeDefined();
+  });
+
+  it('drops tokens of an evicted client instead of leaving them orphaned', () => {
+    const stale = store.registerClient({ client_name: 'stale', redirect_uris: ['https://x/cb'], created_at_ms: old });
+    liveToken(stale.client_id, now - 1); // токен уже протух
+    store.evictDeadClients(now);
+    expect(store.validateAccessToken(`tok-${stale.client_id}`, now)).toBeUndefined();
+  });
+
+  it('still refuses when every client is genuinely in use', () => {
+    for (const name of ['a', 'b']) {
+      const c = store.registerClient({ client_name: name, redirect_uris: ['https://x/cb'], created_at_ms: old });
+      liveToken(c.client_id, now + 1000);
+    }
+    expect(() =>
+      store.registerClient({ client_name: 'overflow', redirect_uris: ['https://x/cb'], created_at_ms: now }),
+    ).toThrow(/every registered client still holds a live token/);
   });
 });

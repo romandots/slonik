@@ -282,7 +282,7 @@ Backlog
 
 | Угроза | Митигация |
 |---|---|
-| Dynamic Client Registration spam | Cap на `MCP_OAUTH_MAX_CLIENTS` (default 50) + rate-limit на `/oauth/register` |
+| Dynamic Client Registration spam | Cap на `MCP_OAUTH_MAX_CLIENTS` (default 50) + rate-limit на `/oauth/register`. Cap не превращается в тупик: при исчерпании вытесняются клиенты без живых токенов старше часа, и только если все слоты реально заняты — отказ |
 | Утечка оператор-пароля на `/authorize` | PKCE S256 обязателен (plain rejected); точный match redirect_uri; TLS обязателен (Caddy) |
 | Перехват authorization code | Single-use код (atomically marked used на первое обращение), TTL `MCP_OAUTH_CODE_TTL_SEC` (default 60s) |
 | Ошибка PKCE: принять plain challenge | Валидатор `verifyPkceS256` требует S256-трансформ; plain отклоняется на `/authorize` GET |
