@@ -13,6 +13,7 @@ env:
   REGISTRY: ghcr.io
   IMAGE_MCP: ghcr.io/romandots/slonk/mcp-kanban
   IMAGE_BACKUP: ghcr.io/romandots/slonk/backup
+  IMAGE_PLANE_BACKEND: ghcr.io/romandots/slonk/plane-backend
 
 jobs:
   gate:
@@ -58,6 +59,7 @@ jobs:
       packages: write
     outputs:
       version: ${{ steps.version.outputs.version }}
+      plane_backend_tag: ${{ steps.plane.outputs.patched }}
     steps:
       - uses: actions/checkout@v4
 
@@ -100,6 +102,30 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # SLONK-32: backend Plane — upstream + патч S3Storage. Тег берём из
+      # .env.example, чтобы образ в GHCR всегда соответствовал тому, на что
+      # ссылается compose в этом же коммите. Версия mcp-kanban тут ни при
+      # чём: образ меняется только при бампе upstream или набора патчей.
+      - name: Read Plane image tags from .env.example
+        id: plane
+        run: |
+          UPSTREAM=$(grep -E '^PLANE_IMAGE_TAG=' .env.example | cut -d= -f2)
+          PATCHED=$(grep -E '^PLANE_BACKEND_TAG=' .env.example | cut -d= -f2)
+          test -n "$UPSTREAM" && test -n "$PATCHED"
+          echo "upstream=$UPSTREAM" >> "$GITHUB_OUTPUT"
+          echo "patched=$PATCHED" >> "$GITHUB_OUTPUT"
+
+      - name: Build & push plane-backend (patched)
+        uses: docker/build-push-action@v6
+        with:
+          context: ./plane-backend
+          push: true
+          tags: ${{ env.IMAGE_PLANE_BACKEND }}:${{ steps.plane.outputs.patched }}
+          build-args: |
+            PLANE_IMAGE_TAG=${{ steps.plane.outputs.upstream }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   deploy:
     name: Deploy to Production
     runs-on: ubuntu-latest
@@ -111,6 +137,8 @@ jobs:
         env:
           VERSION: ${{ needs.release.outputs.version }}
           IMAGE_MCP: ${{ env.IMAGE_MCP }}
+          IMAGE_PLANE_BACKEND: ${{ env.IMAGE_PLANE_BACKEND }}
+          PLANE_BACKEND_TAG: ${{ needs.release.outputs.plane_backend_tag }}
           GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
           GH_ACTOR: ${{ github.actor }}
           DEPLOY_DIR: /home/romandots/slonik
@@ -118,7 +146,7 @@ jobs:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          envs: VERSION,IMAGE_MCP,GHCR_PULL_TOKEN,GH_ACTOR,DEPLOY_DIR
+          envs: VERSION,IMAGE_MCP,IMAGE_PLANE_BACKEND,PLANE_BACKEND_TAG,GHCR_PULL_TOKEN,GH_ACTOR,DEPLOY_DIR
           script: |
             set -euo pipefail
             cd "$DEPLOY_DIR"
@@ -126,9 +154,41 @@ jobs:
             # Login to GHCR for pulling
             echo "$GHCR_PULL_TOKEN" | docker login ghcr.io -u "$GH_ACTOR" --password-stdin
 
-            # Record current tag for rollback
+            # SLONK-32: compose теперь ссылается на PLANE_BACKEND_*, поэтому
+            # рабочая копия обязана быть свежей. Синхронизация мягкая: если
+            # каталог не git-клон или ff-only не проходит (локальные правки,
+            # расхождение с main), выкат mcp-kanban идёт как раньше, а backend
+            # пропускается с явным сообщением — молча деплоить из устаревшего
+            # compose хуже, чем не деплоить.
+            BACKEND_DEPLOYABLE=1
+            if git rev-parse --git-dir >/dev/null 2>&1; then
+              if git pull --ff-only; then
+                echo "Working copy synced with origin"
+              else
+                echo "WARNING: git pull --ff-only failed — рабочая копия расходится с main"
+                echo "WARNING: выкат plane-backend пропущен, разберите расхождение руками"
+                BACKEND_DEPLOYABLE=0
+              fi
+            else
+              echo "WARNING: $DEPLOY_DIR не git-клон — выкат plane-backend пропущен"
+              BACKEND_DEPLOYABLE=0
+            fi
+
+            # Значения .env правим через sed с разделителем `|`: в образе есть
+            # слэши (ghcr.io/...), с `/` подстановка бы развалилась.
+            set_env() {
+              if grep -q "^$1=" .env 2>/dev/null; then
+                sed -i "s|^$1=.*|$1=$2|" .env
+              else
+                echo "$1=$2" >> .env
+              fi
+            }
+
+            # Record current tags for rollback (снимаем ДО правки .env)
             PREV_TAG=$(grep "^SLONK_MCP_IMAGE_TAG=" .env 2>/dev/null | cut -d= -f2 | tr -d '"' || echo "")
+            PREV_PLANE_TAG=$(grep "^PLANE_BACKEND_TAG=" .env 2>/dev/null | cut -d= -f2 | tr -d '"' || echo "")
             echo "Previous tag: ${PREV_TAG:-<not set>}"
+            echo "Previous plane-backend tag: ${PREV_PLANE_TAG:-<not set>}"
 
             # Pull new image from GHCR and retag for docker compose
             docker pull "${IMAGE_MCP}:${VERSION}"
@@ -152,11 +212,80 @@ jobs:
               exit 1
             fi
 
+            # ---------------------------------------------------------------
+            # SLONK-32: пропатченный plane-backend.
+            #
+            # Выкат идемпотентен: Plane перезапускается только когда работающий
+            # образ отличается от целевого, иначе каждый push в main ребутил бы
+            # API/worker/beat — в том числе на docs-only коммитах.
+            # ---------------------------------------------------------------
+            if [ "$BACKEND_DEPLOYABLE" != "1" ]; then
+              echo "plane-backend: выкат пропущен (см. WARNING выше)"
+            else
+              TARGET_BACKEND="${IMAGE_PLANE_BACKEND}:${PLANE_BACKEND_TAG}"
+              RUNNING_ID=$(docker compose ps -q plane-api 2>/dev/null || echo "")
+              CURRENT_BACKEND=""
+              if [ -n "$RUNNING_ID" ]; then
+                CURRENT_BACKEND=$(docker inspect --format '{{.Config.Image}}' "$RUNNING_ID" 2>/dev/null || echo "")
+              fi
+
+              if [ "$CURRENT_BACKEND" = "$TARGET_BACKEND" ]; then
+                echo "plane-backend уже на $TARGET_BACKEND — перезапуск не нужен"
+              else
+                echo "plane-backend: ${CURRENT_BACKEND:-<not running>} -> $TARGET_BACKEND"
+                set_env PLANE_BACKEND_IMAGE "$IMAGE_PLANE_BACKEND"
+                set_env PLANE_BACKEND_TAG "$PLANE_BACKEND_TAG"
+
+                docker compose pull plane-migrator plane-api plane-worker plane-beat
+
+                # plane-migrator поднимать отдельно не нужно: plane-api зависит
+                # от него через service_completed_successfully, поэтому compose
+                # сам прогонит миграции и дождётся их завершения.
+                if docker compose up -d plane-api plane-worker plane-beat --wait; then
+                  echo "plane-backend $PLANE_BACKEND_TAG deployed"
+                else
+                  echo "plane-backend health check failed"
+                  if [ -n "$PREV_PLANE_TAG" ] && [ "$PREV_PLANE_TAG" != "$PLANE_BACKEND_TAG" ]; then
+                    echo "Rolling back plane-backend to $PREV_PLANE_TAG"
+                    set_env PLANE_BACKEND_TAG "$PREV_PLANE_TAG"
+                    docker compose up -d plane-api plane-worker plane-beat
+                    echo "Rolled back to $PREV_PLANE_TAG"
+                  else
+                    echo "Откатывать некуда: предыдущего тега в .env нет"
+                  fi
+                  exit 1
+                fi
+              fi
+            fi
+
       - name: Post-deploy smoke
         uses: appleboy/ssh-action@v1
+        env:
+          DEPLOY_DIR: /home/romandots/slonik
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
+          envs: DEPLOY_DIR
           script: |
+            set -euo pipefail
             curl --fail --silent --show-error http://localhost:8787/health >/dev/null
+
+            # SLONK-32: убеждаемся, что backend работает с пропатченным
+            # S3Storage. Без патча сигнатура — (self, request=None), и весь
+            # публичный API ассетов Plane отвечает 500. Проверка мягкая к
+            # состоянию хоста: если backend не наш или не поднят (см. WARNING
+            # на шаге деплоя), молча пропускаем, а не роняем smoke.
+            cd "$DEPLOY_DIR"
+            PLANE_API_ID=$(docker compose ps -q plane-api 2>/dev/null || echo "")
+            if [ -z "$PLANE_API_ID" ]; then
+              echo "plane-api не запущен — проверку патча пропускаем"
+            elif ! docker inspect --format '{{.Config.Image}}' "$PLANE_API_ID" | grep -q 'plane-backend'; then
+              echo "plane-api поднят не из slonk-образа — проверку патча пропускаем"
+            else
+              docker compose exec -T plane-api python3 -c \
+                "import inspect, plane.settings.storage as m; \
+                 sig = str(inspect.signature(m.S3Storage.__init__)); \
+                 assert 'is_server' in sig, 'S3Storage не пропатчен: ' + sig; \
+                 print('S3Storage OK:', sig)"
+            fi

@@ -68,6 +68,31 @@ jobs:
           context: ./mcp-kanban
           push: false
 
+  plane-backend:
+    name: Plane backend patch
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # SLONK-32: сборка сама верифицирует патч — Dockerfile падает, если
+      # storage.py не найден, не пропатчился или upstream изменил сигнатуру.
+      # Держим это в CI, чтобы бамп PLANE_IMAGE_TAG ловился на PR, а не на
+      # проде.
+      - name: Read PLANE_IMAGE_TAG from .env.example
+        id: plane
+        run: |
+          TAG=$(grep -E '^PLANE_IMAGE_TAG=' .env.example | cut -d= -f2)
+          test -n "$TAG"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Docker build smoke (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: ./plane-backend
+          push: false
+          build-args: |
+            PLANE_IMAGE_TAG=${{ steps.plane.outputs.tag }}
+
   test:
     name: Test
     runs-on: ubuntu-latest

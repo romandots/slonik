@@ -61,6 +61,9 @@ slonk/
 │           ├── registry.ts      # регистрация всех tool'ов в McpServer
 │           ├── context.ts       # ToolContext (передаётся в handler'ы)
 │           └── <tool-name>/{schema.ts, handler.ts, handler.test.ts}
+├── plane-backend/               # upstream plane-backend + патч S3Storage (SLONK-32)
+│   ├── Dockerfile               # FROM makeplane/plane-backend:${PLANE_IMAGE_TAG}
+│   └── patches/                 # применяются и верифицируются при сборке
 ├── caddy/                       # Caddyfile для внешнего TLS (Phase 7)
 ├── prometheus/, grafana/, loki/, promtail/  # observability (Phase 8)
 └── backup/                      # Dockerfile + entrypoint.sh + run.sh (Phase 9)
@@ -247,7 +250,8 @@ Removed / Security`), ставит тег `vX.Y.Z` после merge в `main`.
 ## Важные особенности
 
 - **Plane backend — один образ**, четыре сервиса. `plane-api`, `plane-worker`,
-  `plane-beat`, `plane-migrator` собраны из `makeplane/plane-backend:v1.3.0`,
+  `plane-beat`, `plane-migrator` собраны из `slonk/plane-backend`
+  (upstream `makeplane/plane-backend:v1.3.0` + патч `S3Storage`, SLONK-32),
   отличаются только entrypoint'ом.
 - **`plane-proxy` — обязательный front-door**, не опциональный. Фронтенды Plane
   используют same-origin routing с path-префиксами; без `plane-proxy` UI не

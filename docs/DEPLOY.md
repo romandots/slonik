@@ -81,44 +81,106 @@ push в main ──► release-deploy.yml:
 По SSH (`appleboy/ssh-action`) на `DEPLOY_DIR` (`/home/romandots/slonik`):
 
 1. `docker login ghcr.io` через `GHCR_PULL_TOKEN` (`--password-stdin`).
-2. Запоминает текущий `SLONK_MCP_IMAGE_TAG` из `.env` — для rollback.
-3. `docker pull ghcr.io/.../mcp-kanban:VERSION` + ретег в `slonk/mcp-kanban:VERSION`.
-4. `SLONK_MCP_IMAGE_TAG=VERSION docker compose up -d mcp-kanban --wait`:
+2. `git pull --ff-only` в `DEPLOY_DIR` — с SLONK-32 compose ссылается на
+   `PLANE_BACKEND_*`, поэтому рабочая копия обязана быть свежей.
+   Синхронизация **мягкая**: если каталог не git-клон или ff-only не
+   проходит (локальные правки, расхождение с `main`), деплой `mcp-kanban`
+   идёт как раньше, а выкат backend'а пропускается с `WARNING` — молча
+   деплоить из устаревшего compose хуже, чем не деплоить.
+3. Запоминает текущие `SLONK_MCP_IMAGE_TAG` и `PLANE_BACKEND_TAG` из
+   `.env` — для rollback. Снимает их **до** правки `.env`.
+4. `docker pull ghcr.io/.../mcp-kanban:VERSION` + ретег в `slonk/mcp-kanban:VERSION`.
+5. `SLONK_MCP_IMAGE_TAG=VERSION docker compose up -d mcp-kanban --wait`:
    - `--wait` ждёт, пока контейнер не станет `healthy` (health-gate).
    - **успех** → записывает `SLONK_MCP_IMAGE_TAG=VERSION` в `.env`, чтобы
      ручные рестарты тоже поднимали новую версию;
    - **провал** → откат на предыдущий тег (`SLONK_MCP_IMAGE_TAG=PREV docker
      compose up -d mcp-kanban`) и `exit 1`.
+6. **Пропатченный `plane-backend` (SLONK-32).** Шаг **идемпотентен**: образ,
+   с которым сейчас запущен `plane-api`, сравнивается с целевым
+   `${IMAGE_PLANE_BACKEND}:${PLANE_BACKEND_TAG}`, и Plane перезапускается
+   только при расхождении. Без этого каждый push в `main` — включая
+   docs-only коммиты — ребутил бы API/worker/beat. Когда выкат нужен:
+   - прописывает `PLANE_BACKEND_IMAGE` / `PLANE_BACKEND_TAG` в `.env`;
+   - `docker compose pull` backend-сервисов;
+   - `docker compose up -d plane-api plane-worker plane-beat --wait`.
+     Отдельно поднимать `plane-migrator` не нужно: `plane-api` зависит от
+     него через `service_completed_successfully`, поэтому compose сам
+     прогоняет миграции и дожидается их завершения;
+   - **провал** → возврат `PLANE_BACKEND_TAG` на предыдущий, `up -d` и
+     `exit 1`. Если предыдущего тега в `.env` нет (первый выкат с
+     upstream-образа), откатываться некуда — шаг говорит об этом и падает.
 
 ### 3.4 `smoke` — пост-деплой проверка
 
 После успешного деплоя — **inline-curl** к `http://localhost:8787/health`
 (опубликованный порт `mcp-kanban`, эндпойнт без авторизации). Проверяется именно
 то, что деплоится, без завязки на топологию Plane/прокси. Шаг намеренно
-**не** вызывает `make` — деплой обновляет только образ, а не рабочую копию
-репозитория на хосте (см. §3.5), поэтому smoke не должен зависеть от файлов
-на хосте. Падение smoke помечает workflow красным (но контейнер уже поднят).
+**не** вызывает `make`: цели Makefile тянут за собой рабочую копию, а smoke
+должен оставаться максимально независимым. Падение smoke помечает workflow
+красным (но контейнер уже поднят).
+
+Вторая проверка — **что backend работает с пропатченным `S3Storage`**
+(SLONK-32): в `plane-api` выполняется
+`inspect.signature(S3Storage.__init__)`, и smoke падает, если в сигнатуре нет
+`is_server`. Без патча весь публичный API ассетов Plane отвечает 500, а
+внешне это никак не заметно — поэтому проверка встроена в пайплайн, а не
+оставлена на ручной прогон. К состоянию хоста она снисходительна: если
+`plane-api` не поднят или поднят не из slonk-образа (см. `WARNING` на шаге
+деплоя), проверка пропускается, а не роняет smoke.
 
 Для ручной/локальной проверки в `Makefile` есть цели `make smoke-mcp`
 (статус `mcp-kanban` + `/health`) и `make smoke` (Plane UI на
 `localhost:${PLANE_HOST_PORT:-3000}`, где порт Plane опубликован на хост).
 
-### 3.5 Что деплой НЕ обновляет на хосте
+### 3.5 Что деплой обновляет, а что нет
 
-Deploy-джоба делает `docker pull` нового образа и `docker compose up -d
-mcp-kanban` — она **не** трогает git-checkout в `DEPLOY_DIR`. Значит,
-`docker-compose.yml`, overlay-файлы, `Makefile` и `.env` на проде остаются
-теми, что лежат там сейчас. Если изменение затрагивает эти файлы (новый
-сервис/порт в compose, новая переменная в `.env`, изменённая команда в
-`Makefile`), его нужно применить на хосте отдельно:
+**Обновляет автоматически:**
+
+- образ `mcp-kanban` (health-gate + rollback, §3.3);
+- рабочую копию в `DEPLOY_DIR` через `git pull --ff-only` — а значит
+  `docker-compose.yml`, overlay-файлы и `Makefile`;
+- backend-сервисы Plane, когда работающий образ отличается от целевого
+  (SLONK-32);
+- значения `SLONK_MCP_IMAGE_TAG`, `PLANE_BACKEND_IMAGE` и
+  `PLANE_BACKEND_TAG` в `.env` — их деплой прописывает сам.
+
+**Не обновляет:** остальные значения `.env` (в git его нет). Новую
+переменную — новый секрет, новый лимит, новый хост — по-прежнему нужно
+завести на хосте руками, до того как её начнёт требовать compose.
+
+**Если `git pull --ff-only` не проходит** (локальные правки в рабочей
+копии, расхождение с `main`, каталог вообще не git-клон), деплой не падает:
+`mcp-kanban` выкатывается как раньше, а backend пропускается с `WARNING` в
+логе джобы. Разбирать расхождение нужно руками:
 
 ```bash
 cd /home/romandots/slonik
-git pull --ff-only        # если рабочая копия — git-клон
-# или вручную обновить нужные файлы; .env правится руками (в git его нет)
+git status                # посмотреть, что мешает ff-only
+git pull --ff-only
 ```
 
-Сам образ `mcp-kanban` при этом приедет автоматически через пайплайн.
+После этого ближайший push в `main` докатит backend сам; ждать его
+необязательно — можно выкатить вручную:
+
+```bash
+cd /home/romandots/slonik
+docker compose pull plane-migrator plane-api plane-worker plane-beat
+docker compose up -d plane-api plane-worker plane-beat --wait
+```
+
+Проверка, что патч на месте (без него был бы `TypeError` и 500 на всём
+публичном API ассетов):
+
+```bash
+docker compose exec plane-api python3 -c \
+  "import inspect, plane.settings.storage as m; \
+   print(inspect.signature(m.S3Storage.__init__))"
+# ожидаем: (self, request=None, is_server=False)
+```
+
+Ручной rollback — вернуть прежний `PLANE_BACKEND_TAG` в `.env` и повторить
+`up -d`; образы предыдущих тегов остаются в GHCR.
 
 ---
 
@@ -300,7 +362,9 @@ retention-политикой пакета).
 | деплой не стартует на push | push не в `main`, либо required reviewers в `production` ждут approve |
 | образ собрался, но прод на старой версии | `SLONK_MCP_IMAGE_TAG` в `.env` не обновился (провал health-gate → откат) — смотри лог деплоя |
 | smoke красный, контейнер живой | MCP ещё прогревается / порт 8787 не опубликован — проверь `docker compose ps mcp-kanban` и `curl localhost:8787/health` на хосте (см. §3.4) |
-| `make: No rule to make target ...` в smoke | рабочая копия на хосте устарела — деплой не делает `git pull` (см. §3.5); обнови файлы на проде вручную |
+| `make: No rule to make target ...` в smoke | рабочая копия на хосте устарела: `git pull --ff-only` в деплое не прошёл — в логе джобы есть `WARNING` с причиной (см. §3.5) |
+| `WARNING: ... — выкат plane-backend пропущен` | `DEPLOY_DIR` не git-клон либо ff-only упёрся в локальные правки; разбери `git status` на хосте, следующий push докатит backend (§3.5) |
+| smoke падает на `S3Storage не пропатчен` | `plane-api` поднят из образа без патча SLONK-32 — проверь `PLANE_BACKEND_IMAGE`/`PLANE_BACKEND_TAG` в `.env` на хосте и повтори `up -d` |
 
 ---
 

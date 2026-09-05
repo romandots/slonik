@@ -24,6 +24,22 @@
   в Plane UI проверяется на стенде после деплоя (B5).
 
 ### Fixed
+- **Пропатчен `S3Storage` в образе Plane backend — публичный API ассетов
+  больше не отвечает 500 (SLONK-32).** `embed_image` падал на первом же
+  шаге: `POST /api/v1/workspaces/<slug>/assets/` → 500 «Something went
+  wrong please try again later». Причина в upstream: `GenericAssetEndpoint`
+  зовёт `S3Storage(request=request, is_server=True)`, а сигнатура в
+  `plane/settings/storage.py` — только `def __init__(self, request=None)`,
+  то есть `TypeError` на каждом вызове. Тем же способом сломан
+  `GenericAssetEndpoint.get`; UI не задет, потому что ходит через
+  `plane/app/views/asset/v2.py` без этого аргумента. На upstream-ветках
+  `master` и `preview` баг не исправлен, поэтому апгрейд Plane не помогает.
+  Backend-сервисы (`api`/`worker`/`beat`/`migrator`) переведены с
+  upstream-образа на собственный `plane-backend/Dockerfile` — тот же
+  upstream плюс патч, который добавляет параметр и реализует его смысл
+  (server-side presign идёт на внутренний endpoint, а не на хост входящего
+  запроса). Патч верифицируется самой сборкой и падает, если upstream
+  изменит `S3Storage`; фронтенды остаются на upstream-образах. SemVer: PATCH.
 - **`issue_relations` больше не падает с 404 при создании связей (SLONK-35).**
   Инструмент ходил во внутренний (app) роут Plane
   `issues/<id>/issue-relation/`, которого нет под `/api/v1`: любой
@@ -71,6 +87,21 @@
   `MCP_ATTACH_ALLOWED_MIME` для direct (пусто = любые типы). SemVer: MINOR.
 
 ### Changed
+- **Деплой выкатывает backend Plane сам и синхронизирует рабочую копию
+  (SLONK-32).** Раньше deploy-джоба обновляла только образ `mcp-kanban` и
+  намеренно не трогала git-checkout на хосте; теперь она делает
+  `git pull --ff-only` (иначе compose на проде не знал бы про
+  `PLANE_BACKEND_*`), прописывает теги backend-образа в `.env` и поднимает
+  `plane-api`/`worker`/`beat`. Выкат идемпотентен — Plane перезапускается,
+  только когда работающий образ отличается от целевого, поэтому docs-only
+  коммиты больше ничего не ребутят. Провал health-gate откатывает
+  `PLANE_BACKEND_TAG` на предыдущий; если откатываться некуда, джоба честно
+  об этом говорит и падает. Синхронизация рабочей копии мягкая: если
+  ff-only не проходит или каталог не git-клон, `mcp-kanban` выкатывается
+  как раньше, а backend пропускается с `WARNING`. Пост-деплойный smoke
+  дополнен проверкой, что `S3Storage` в работающем `plane-api`
+  действительно пропатчен. Подробности — `docs/DEPLOY.md §3.3–3.5`.
+
 - **`plane-worker` baseline `mem_limit` поднят `384m → 768m` (SLONK-9).**
   QA-прогон выявил циклические OOM-kill'ы (`exit 137`) при Celery-нагрузке
   (notifications, webhooks, mass-update'ы). Новый лимит даёт +50% запаса.

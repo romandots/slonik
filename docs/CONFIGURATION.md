@@ -51,7 +51,9 @@ docker compose --profile backup up -d
 
 | Переменная | Default | Описание |
 |---|---|---|
-| `PLANE_IMAGE_TAG` | `v1.3.0` | Версия upstream-образов `makeplane/plane-*` |
+| `PLANE_IMAGE_TAG` | `v1.3.0` | Версия upstream-образов `makeplane/plane-*` (фронтенды берутся из upstream как есть) |
+| `PLANE_BACKEND_IMAGE` | `slonk/plane-backend` | Репозиторий образа backend'а: локально — локальный build, на проде — `ghcr.io/romandots/slonk/plane-backend` (SLONK-32) |
+| `PLANE_BACKEND_TAG` | `v1.3.0-slonk1` | Тег пропатченного backend'а; обязан соответствовать `PLANE_IMAGE_TAG` (SLONK-32) |
 | `PLANE_DOMAIN` | `http://localhost:3000` | Публичный URL Plane UI (через `plane-proxy`) |
 | `PLANE_HOST_PORT` | `3000` | Хост-порт, на котором публикуется `plane-proxy` (контейнер слушает `:80`) |
 | `PLANE_APP_DOMAIN` | `localhost` | Домен Caddy внутри `plane-proxy`; `localhost` = без TLS |
@@ -189,7 +191,7 @@ PR + строка в [CHANGELOG.md](./CHANGELOG.md).
 | plane-admin | `makeplane/plane-admin` | `v1.3.0` |
 | plane-space | `makeplane/plane-space` | `v1.3.0` |
 | plane-live | `makeplane/plane-live` | `v1.3.0` |
-| plane-api / plane-worker / plane-beat / plane-migrator | `makeplane/plane-backend` | `v1.3.0` |
+| plane-api / plane-worker / plane-beat / plane-migrator | `slonk/plane-backend` (upstream + патч, SLONK-32) | `v1.3.0-slonk1` |
 | plane-proxy | `makeplane/plane-proxy` | `v1.3.0` |
 | postgres | `postgres` | `15.7-alpine` (Plane v1.3.0 testing pin) |
 | redis (Valkey) | `valkey/valkey` | `7.2.11-alpine` |
@@ -202,8 +204,24 @@ PR + строка в [CHANGELOG.md](./CHANGELOG.md).
 | promtail | `grafana/promtail` | `3.3.0` |
 | mcp-kanban | локальный build | `slonk/mcp-kanban:dev` локально, `slonk/mcp-kanban:<git-sha>` в релизах |
 
-Тэг `${PLANE_IMAGE_TAG}` (по умолчанию `v1.3.0`) — один на все шесть Plane-образов.
-Обновление Plane = один bump переменной + проверка acceptance.
+Тэг `${PLANE_IMAGE_TAG}` (по умолчанию `v1.3.0`) — один на все frontend-образы
+Plane (`web`, `admin`, `space`, `live`, `proxy`).
+
+**Backend — не upstream-образ (SLONK-32).** `plane-api`, `plane-worker`,
+`plane-beat` и `plane-migrator` идут из собственного
+`${PLANE_BACKEND_IMAGE}:${PLANE_BACKEND_TAG}`, который собирается из
+[`plane-backend/Dockerfile`](../plane-backend/Dockerfile): тот же upstream
+плюс патч `S3Storage`. Без патча публичный token-API ассетов Plane
+(`POST /api/v1/workspaces/<slug>/assets/`) отвечает 500 на любой запрос —
+upstream зовёт `S3Storage(request=request, is_server=True)`, а такого
+параметра в сигнатуре нет. Ломается `embed_image`; через UI картинки
+грузятся, потому что UI ходит другим маршрутом. Подробный разбор — в шапке
+`plane-backend/patches/0001_s3storage_is_server.py`.
+
+Обновление Plane = bump `PLANE_IMAGE_TAG` **и** `PLANE_BACKEND_TAG`
+(`<upstream>-slonk<N>`) + проверка acceptance. CI собирает пропатченный
+образ на каждом PR, и сборка падает, если upstream изменил `S3Storage`, —
+так бамп версии не проедет молча мимо патча.
 
 ## 4. Bootstrap Plane
 

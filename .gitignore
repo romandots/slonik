@@ -89,3 +89,7 @@ mcp-kanban/schemas/*.json
 # Claude Code session artifacts (loop/cron locks, local settings)
 .claude/worktrees/
 .claude/settings.local.json
+
+# Python bytecode (патчи для plane-backend)
+__pycache__/
+*.pyc

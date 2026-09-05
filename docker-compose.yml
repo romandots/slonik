@@ -175,7 +175,15 @@ services:
   # Plane backend: API, Celery worker, Celery beat, one-shot migrator
   # ---------------------------------------------------------------------------
   plane-migrator:
-    image: makeplane/plane-backend:${PLANE_IMAGE_TAG}
+    image: ${PLANE_BACKEND_IMAGE:-slonk/plane-backend}:${PLANE_BACKEND_TAG}
+    # SLONK-32: backend — не upstream-образ, а upstream + патч S3Storage
+    # (см. plane-backend/Dockerfile). Build объявлен только здесь: migrator
+    # стартует первым, а api/worker/beat переиспользуют собранный образ.
+    build:
+      context: ./plane-backend
+      dockerfile: Dockerfile
+      args:
+        PLANE_IMAGE_TAG: ${PLANE_IMAGE_TAG}
     <<: *logging
     restart: "no"
     mem_limit: 384m
@@ -191,7 +199,7 @@ services:
       - internal_net
 
   plane-api:
-    image: makeplane/plane-backend:${PLANE_IMAGE_TAG}
+    image: ${PLANE_BACKEND_IMAGE:-slonk/plane-backend}:${PLANE_BACKEND_TAG}
     <<: [*restart-policy, *logging]
     # Подходит для GUNICORN_WORKERS=1; при >1 workers — поднимать.
     # См. docs/CONFIGURATION.md «Resource limits for small hosts».
@@ -224,7 +232,7 @@ services:
       start_period: 60s
 
   plane-worker:
-    image: makeplane/plane-backend:${PLANE_IMAGE_TAG}
+    image: ${PLANE_BACKEND_IMAGE:-slonk/plane-backend}:${PLANE_BACKEND_TAG}
     <<: [*restart-policy, *logging]
     # SLONK-9: 384m давало OOM-kill (exit 137) на пиках Celery-нагрузки
     # (notifications, webhooks, recurring schedulers, mass-update'ы);
@@ -242,7 +250,7 @@ services:
       - internal_net
 
   plane-beat:
-    image: makeplane/plane-backend:${PLANE_IMAGE_TAG}
+    image: ${PLANE_BACKEND_IMAGE:-slonk/plane-backend}:${PLANE_BACKEND_TAG}
     <<: [*restart-policy, *logging]
     mem_limit: 128m
     command: ./bin/docker-entrypoint-beat.sh
