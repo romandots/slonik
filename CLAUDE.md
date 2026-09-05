@@ -123,6 +123,9 @@ pnpm dev             # tsx watch src/server.ts (локальная разраб�
 `remove_issues_from_module`) + 3 git
 (`link_git_ref`, `unlink_git_ref`, `find_issues_by_git_ref`).
 
+У `issue_relations` работают `add`/`list`; `remove` публичный API Plane не
+поддерживает — инструмент отвечает `UNSUPPORTED` (см. SPEC §6.2).
+
 ## Конвенции (обязательные)
 
 См. [CONVENTIONS.md](./docs/CONVENTIONS.md). Самое важное при работе с

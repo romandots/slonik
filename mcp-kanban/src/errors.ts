@@ -8,6 +8,7 @@ export type ErrorCode =
   | 'PLANE_UNAVAILABLE'
   | 'STORAGE_UNAVAILABLE'
   | 'RATE_LIMITED'
+  | 'UNSUPPORTED'
   | 'INTERNAL';
 
 export class McpError extends Error {
@@ -56,6 +57,8 @@ function defaultHttpStatusFor(code: ErrorCode): number {
       return 413;
     case 'RATE_LIMITED':
       return 429;
+    case 'UNSUPPORTED':
+      return 501;
     case 'PLANE_UNAVAILABLE':
       return 502;
     case 'STORAGE_UNAVAILABLE':

@@ -1,7 +1,33 @@
 import { z } from 'zod';
+import type { PlaneRelationType } from '../../plane-client.js';
 
-export const RELATION_TYPES = ['relates_to', 'duplicate_of', 'blocked_by', 'blocking'] as const;
+/**
+ * Типы связей, которые принимает публичный API Plane v1.3.0
+ * (`POST work-items/<iid>/relations/`), плюс исторический алиас
+ * `duplicate_of` — он ушёл в контракт вместе с SLONK-33 и остаётся
+ * рабочим, чтобы не ломать уже обученных агентов.
+ *
+ * Направление: тип описывает роль ДРУГОЙ задачи относительно текущей.
+ * `blocked_by` — текущая заблокирована указанной; `blocking` — текущая
+ * блокирует указанную.
+ */
+export const RELATION_TYPES = [
+  'relates_to',
+  'duplicate',
+  'duplicate_of',
+  'blocked_by',
+  'blocking',
+  'start_before',
+  'start_after',
+  'finish_before',
+  'finish_after',
+] as const;
 export type RelationType = (typeof RELATION_TYPES)[number];
+
+/** Алиасы MCP-контракта → словарь Plane. */
+export function toPlaneRelationType(type: RelationType): PlaneRelationType {
+  return type === 'duplicate_of' ? 'duplicate' : type;
+}
 
 export const IssueRelationsInput = z.object({
   issue_id: z.string().min(1),

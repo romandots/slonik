@@ -874,13 +874,17 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
     },
   );
 
-  // ---- issue_relations (SLONK-33) ----
+  // ---- issue_relations (SLONK-33, SLONK-35) ----
   server.registerTool(
     'issue_relations',
     {
       description:
-        'Manage relations between issues (relates_to, duplicate_of, blocked_by, blocking). ' +
-        'action=list returns all relations; action=add creates one; action=remove deletes one.',
+        'Read and create relations between issues. relation_type is the role of the OTHER ' +
+        'issue: relates_to, duplicate, blocked_by (this issue is blocked by it), blocking, ' +
+        'start_before, start_after, finish_before, finish_after. action=list returns every ' +
+        'relation of the issue; action=add creates one (idempotent). action=remove is NOT ' +
+        'supported: the Plane REST API exposes no delete endpoint for relations — drop the ' +
+        'relation in the Plane UI instead.',
       inputSchema: IssueRelationsInput.shape,
     },
     async (args) => {

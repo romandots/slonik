@@ -447,6 +447,7 @@ workspace-scoped API-токен не может создавать workspaces.
 | `link_git_ref` | Добавить запись в meta-блок: repo/branch/pr/commit |
 | `unlink_git_ref` | Удалить связь |
 | `find_issues_by_git_ref` | Найти issues по repo/branch/pr/commit (SQLite-индекс, без обращения к Plane) |
+| `issue_relations` | Связи между задачами: `action=list` / `action=add` (SLONK-33, SLONK-35) |
 | `get_issue_history` | История действий по задаче (Plane activity + MCP audit) |
 | `list_attachments` | Список вложений задачи: Plane UI uploads + inline-asset из комментариев + mcp-artifacts (SLONK-14) |
 | `read_attachment` | Получить presigned MinIO GET URL для вложения; audit-логируется как write (SLONK-14) |
@@ -464,6 +465,29 @@ workspace-scoped API-токен не может создавать workspaces.
 что и `list_attachments`; если discovery возвращает `partial: true` или
 падает целиком — оба поля сбрасываются в `0/[]`, сам `get_issue` не
 падает (логируется warning).
+
+`issue_relations` (SLONK-35): работает поверх публичного роута Plane
+`GET|POST workspaces/<slug>/projects/<pid>/work-items/<iid>/relations/`
+(доступен с Plane v1.3.0). Внутренний роут `issues/<iid>/issue-relation/`
+живёт под `/api/` с session-аутентификацией и по API-ключу отвечает
+`404 Page not found` — использовать его нельзя.
+
+- `relation_type` описывает роль **другой** задачи: `relates_to`,
+  `duplicate` (алиас `duplicate_of` сохранён для обратной совместимости),
+  `blocked_by` (текущая заблокирована указанной), `blocking`,
+  `start_before`, `start_after`, `finish_before`, `finish_after`.
+- `action=add` идемпотентен (Plane создаёт связи с `ignore_conflicts`),
+  «обратные» типы Plane сам разворачивает в каноническую пару: после
+  `add blocking` связь видна как `blocked_by` со стороны второй задачи.
+- `action=list` возвращает плоский список
+  `{ relation_type, related_issue_id, related_issue_key?, related_issue_name? }`.
+  Ключ вида `SLONK-7` проставляется best-effort для задач того же проекта
+  (не более 25 резолвов на вызов), задачи из других проектов остаются с UUID.
+- `action=remove` **не поддерживается**: публичный REST API Plane не
+  экспонирует DELETE для связей. Инструмент возвращает `UNSUPPORTED`
+  (HTTP 501) с подсказкой удалить связь в UI Plane. Тот же `UNSUPPORTED`
+  возвращается, если инсталляция Plane старше v1.3.0 и роут `relations/`
+  отсутствует.
 
 ### 6.3 Схемы параметров
 
@@ -644,6 +668,7 @@ content). Категории:
 | `PLANE_UNAVAILABLE` | Plane API не отвечает / 5xx |
 | `STORAGE_UNAVAILABLE` | MinIO не отвечает (для `read_attachment` — фатально; для `list_attachments` — `partial: true`). SLONK-14 |
 | `RATE_LIMITED` | Сработал внутренний rate limit |
+| `UNSUPPORTED` | Операция не поддерживается установленной версией Plane (HTTP 501); например `issue_relations action=remove`. SLONK-35 |
 | `INTERNAL` | Прочие сбои; пишется в лог с trace_id |
 
 Каждая ошибка содержит `trace_id`, по которому в логах MCP находится контекст.

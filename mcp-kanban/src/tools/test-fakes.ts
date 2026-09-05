@@ -9,7 +9,6 @@ import type {
   PlaneCycle,
   PlaneIssue,
   PlaneIssueActivity,
-  PlaneIssueRelation,
   PlaneLabel,
   PlaneModule,
   PlaneModuleIssue,
@@ -22,6 +21,14 @@ import type {
 } from '../plane-client.js';
 import type { MinioClient, MinioObject, MinioStat } from '../minio-client.js';
 import { McpError } from '../errors.js';
+
+/** Строка таблицы `issue_relations` в Plane: хранится всегда каноническая пара. */
+export interface PlaneRelationRow {
+  issue: string;
+  related_issue: string;
+  relation_type: string;
+  project: string;
+}
 
 export interface FakeWorld {
   workspaces: PlaneWorkspace[];
@@ -42,8 +49,12 @@ export interface FakeWorld {
   workspaceAssets: Map<string, PlaneWorkspaceAsset>;
   /** SLONK-14: объекты MinIO по ключу `<bucket>:<objectKey>`. */
   minioObjects: Map<string, { size: number; contentType?: string; lastModified?: Date; content?: Buffer }>;
-  /** SLONK-33: связи между задачами по ключу `<projectId>:<issueId>`. */
-  relations: Map<string, PlaneIssueRelation[]>;
+  /**
+   * SLONK-33/35: плоское хранилище связей, как в Plane, — одна строка на
+   * пару (issue, related_issue, stored relation_type). Направление и
+   * группировка воспроизводятся в фейке `listIssueRelations`.
+   */
+  relations: PlaneRelationRow[];
   /** SLONK-34: связи «модуль ↔ задача» по ключу `<projectId>:<moduleId>`. */
   moduleIssues: Map<string, PlaneModuleIssue[]>;
   /** SLONK-14: симулируемые ошибки источников (для partial-failure тестов). */
@@ -69,7 +80,7 @@ export function newWorld(): FakeWorld {
     comments: new Map(),
     members: new Map(),
     inviteResponses: new Map(),
-    relations: new Map(),
+    relations: [],
     moduleIssues: new Map(),
     planeAttachments: new Map(),
     workspaceAssets: new Map(),
@@ -517,35 +528,58 @@ export function fakePlane(world: FakeWorld): PlaneClient {
       world.members.set(slug, arr);
       return out;
     },
-    async listIssueRelations(_ws: string, projectId: string, issueId: string) {
-      return [...(world.relations.get(`${projectId}:${issueId}`) ?? [])];
+    async listIssueRelations(_ws: string, _projectId: string, issueId: string) {
+      // Повторяет агрегацию Plane v1.3.0 (`IssueRelationListCreateAPIEndpoint.get`):
+      // группы считаются с точки зрения запрошенной задачи, симметричные
+      // типы (duplicate/relates_to) собираются с обеих сторон.
+      const forward = (type: string): string[] =>
+        world.relations.filter((r) => r.relation_type === type && r.issue === issueId).map((r) => r.related_issue);
+      const backward = (type: string): string[] =>
+        world.relations.filter((r) => r.relation_type === type && r.related_issue === issueId).map((r) => r.issue);
+      return {
+        blocking: backward('blocked_by'),
+        blocked_by: forward('blocked_by'),
+        duplicate: [...new Set([...forward('duplicate'), ...backward('duplicate')])],
+        relates_to: [...new Set([...forward('relates_to'), ...backward('relates_to')])],
+        start_after: backward('start_before'),
+        start_before: forward('start_before'),
+        finish_after: backward('finish_before'),
+        finish_before: forward('finish_before'),
+      };
     },
-    async createIssueRelation(
+    async createIssueRelations(
       _ws: string,
       projectId: string,
       issueId: string,
-      input: { relation_type: PlaneIssueRelation['relation_type']; related_issue: string },
+      input: { relation_type: string; issues: string[] },
     ) {
-      const key = `${projectId}:${issueId}`;
-      const arr = world.relations.get(key) ?? [];
-      const rel: PlaneIssueRelation = {
-        id: id('rel'),
-        relation_type: input.relation_type,
-        issue: issueId,
-        related_issue: input.related_issue,
-        project: projectId,
-        created_at: new Date().toISOString(),
+      // `get_actual_relation` + разворот «обратных» типов — ровно как в
+      // upstream: в БД ложится каноническая пара.
+      const actual: Record<string, string> = {
+        start_after: 'start_before',
+        finish_after: 'finish_before',
+        blocking: 'blocked_by',
       };
-      arr.push(rel);
-      world.relations.set(key, arr);
-      return rel;
-    },
-    async deleteIssueRelation(_ws: string, projectId: string, issueId: string, relationId: string) {
-      const key = `${projectId}:${issueId}`;
-      const arr = world.relations.get(key) ?? [];
-      const idx = arr.findIndex((r) => r.id === relationId);
-      if (idx !== -1) arr.splice(idx, 1);
-      world.relations.set(key, arr);
+      const relationType = actual[input.relation_type] ?? input.relation_type;
+      const isReverse = ['blocking', 'start_after', 'finish_after'].includes(input.relation_type);
+      const created: PlaneRelationRow[] = [];
+      for (const other of input.issues) {
+        const row: PlaneRelationRow = {
+          issue: isReverse ? other : issueId,
+          related_issue: isReverse ? issueId : other,
+          relation_type: relationType,
+          project: projectId,
+        };
+        const exists = world.relations.some(
+          (r) =>
+            r.issue === row.issue &&
+            r.related_issue === row.related_issue &&
+            r.relation_type === row.relation_type,
+        );
+        if (!exists) world.relations.push(row);
+        created.push(row);
+      }
+      return created.map((r) => ({ id: isReverse ? r.issue : r.related_issue, relation_type: r.relation_type }));
     },
   } as unknown as PlaneClient;
   return stub;

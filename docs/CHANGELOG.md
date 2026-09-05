@@ -8,6 +8,22 @@
 ## [Unreleased]
 
 ### Fixed
+- **`issue_relations` больше не падает с 404 при создании связей (SLONK-35).**
+  Инструмент ходил во внутренний (app) роут Plane
+  `issues/<id>/issue-relation/`, которого нет под `/api/v1`: любой
+  `action=add` возвращал `NOT_FOUND` с `Page not found`. Переведён на
+  публичный роут `work-items/<id>/relations/` (Plane v1.3.0+): `GET`
+  отдаёт связи, сгруппированные по типу, `POST` принимает
+  `{relation_type, issues[]}` и сам разворачивает обратные типы. Словарь
+  типов расширен до полного набора Plane (`relates_to`, `duplicate`,
+  `blocked_by`, `blocking`, `start_before/after`, `finish_before/after`);
+  прежний `duplicate_of` работает как алиас `duplicate`. `action=list`
+  дополняет связи человекочитаемым ключом (`SLONK-7`) и именем задачи для
+  того же проекта. `action=remove` теперь честно отвечает новым кодом
+  `UNSUPPORTED` (HTTP 501) — DELETE для связей публичный API Plane не
+  экспонирует; тем же кодом отвечает `list`/`add` на инсталляции старше
+  v1.3.0. Тесты на клиенте фиксируют реальные URL и payload, фейковый
+  Plane в тестах воспроизводит семантику upstream. SemVer: PATCH.
 - **`list_issues` / `search_issues` больше не игнорируют фильтры и запрос (SLONK-37).**
   Публичный list-эндпоинт Plane v1.3.0 молча игнорирует неизвестные
   query-параметры, поэтому `state`, `label` и `search` уезжали на сервер и не
