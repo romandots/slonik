@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import { dirname } from 'node:path';
 import { mkdirSync } from 'node:fs';
 import { generateOpaqueToken } from './crypto.js';
+import { CLIENT_EVICTION_GRACE_MS } from './defaults.js';
 
 // SQLite-стор для встроенного OAuth 2.1 AS. Один файл хранит четыре коллекции:
 //   - tenants:       тенанты (workspace → plane_api_key + auth credentials);
@@ -191,11 +192,91 @@ export class OAuthStore {
 
   // ---- OAuth clients ----
 
+  /** Число зарегистрированных клиентов. */
+  private countClients(): number {
+    return (this.db.prepare('SELECT COUNT(*) AS n FROM oauth_clients').get() as { n: number }).n;
+  }
+
+  /**
+   * Удаляет протухшие коды и токены (без транзакции — вызывается изнутри).
+   *
+   * Поведение не меняется: истёкшую запись `consumeCode`,
+   * `validateAccessToken` и `rotateRefreshToken` и так отвергают по
+   * `expires_at_ms`. Не страдает и reuse-детекция refresh-цепочек — она
+   * работает на живых токенах. Смысл только в том, чтобы база не росла
+   * без границ: за время жизни стенда там накапливаются тысячи мёртвых
+   * строк, а удаления не было вовсе.
+   */
+  private pruneExpiredRows(now_ms: number): { codes: number; tokens: number } {
+    const codes = this.db
+      .prepare('DELETE FROM oauth_codes WHERE expires_at_ms <= @now')
+      .run({ now: now_ms }).changes;
+    const tokens = this.db
+      .prepare('DELETE FROM oauth_tokens WHERE expires_at_ms <= @now')
+      .run({ now: now_ms }).changes;
+    return { codes, tokens };
+  }
+
+  /** Удаляет протухшие коды и токены. Возвращает число удалённых строк. */
+  pruneExpired(now_ms: number): { codes: number; tokens: number } {
+    return this.db.transaction(() => this.pruneExpiredRows(now_ms))();
+  }
+
+  /**
+   * Вытесняет клиентов, которыми никто не пользуется: ни одного живого
+   * токена и возраст больше `CLIENT_EVICTION_GRACE_MS`. Удаляются от самых
+   * старых; вместе с клиентом уходят его коды и токены, чтобы не оставлять
+   * висячих строк.
+   *
+   * `limit` ограничивает число удалений (undefined — все подходящие).
+   * Возвращает, сколько клиентов удалено.
+   */
+  private evictDeadClientRows(now_ms: number, limit?: number): number {
+    const rows = this.db
+      .prepare(
+        `SELECT c.client_id FROM oauth_clients c
+          WHERE c.created_at_ms <= @cutoff
+            AND NOT EXISTS (
+              SELECT 1 FROM oauth_tokens t
+               WHERE t.client_id = c.client_id AND t.expires_at_ms > @now
+            )
+          ORDER BY c.created_at_ms ASC`,
+      )
+      .all({ now: now_ms, cutoff: now_ms - CLIENT_EVICTION_GRACE_MS }) as Array<{ client_id: string }>;
+
+    const victims = limit === undefined ? rows : rows.slice(0, Math.max(limit, 0));
+    for (const { client_id } of victims) {
+      this.db.prepare('DELETE FROM oauth_tokens WHERE client_id = @client_id').run({ client_id });
+      this.db.prepare('DELETE FROM oauth_codes WHERE client_id = @client_id').run({ client_id });
+      this.db.prepare('DELETE FROM oauth_clients WHERE client_id = @client_id').run({ client_id });
+    }
+    return victims.length;
+  }
+
+  /** Публичная обёртка над вытеснением мёртвых клиентов (см. приватный метод). */
+  evictDeadClients(now_ms: number, limit?: number): number {
+    return this.db.transaction(() => this.evictDeadClientRows(now_ms, limit))();
+  }
+
   registerClient(args: { client_name: string; redirect_uris: string[]; created_at_ms: number }): OAuthClientRow {
     const tx = this.db.transaction((): OAuthClientRow => {
-      const count = (this.db.prepare('SELECT COUNT(*) AS n FROM oauth_clients').get() as { n: number }).n;
+      let count = this.countClients();
       if (count >= this.maxClients) {
-        throw new Error(`OAuth client cap reached (${this.maxClients})`);
+        // Cap не должен быть тупиком. DCR создаёт нового клиента на каждое
+        // переподключение (claude.ai — при каждой переавторизации), а
+        // удаления не было вовсе: упёршись в потолок один раз, сервер
+        // переставал принимать новых клиентов навсегда. Поэтому сначала
+        // выбрасываем протухшее и тех, кем никто не пользуется, и только
+        // если места всё равно нет — отказываем.
+        this.pruneExpiredRows(args.created_at_ms);
+        this.evictDeadClientRows(args.created_at_ms, count - this.maxClients + 1);
+        count = this.countClients();
+      }
+      if (count >= this.maxClients) {
+        throw new Error(
+          `OAuth client cap reached (${this.maxClients}): every registered client still holds a live token. ` +
+            'Raise MCP_OAUTH_MAX_CLIENTS or revoke tokens of clients that are no longer used.',
+        );
       }
       const client_id = generateOpaqueToken();
       this.db
