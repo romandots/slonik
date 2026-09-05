@@ -98,6 +98,35 @@ describe('OAuth config', () => {
     expect(cfg.MCP_OAUTH_ISSUER).toBe('https://slonk.example.com');
   });
 
+  // Значения приходят из docker-compose, где каждая MCP_OAUTH_*-переменная
+  // объявлена как `${VAR:-default}`. Оператор, не заполнивший необязательное
+  // поле в `.env`, получает именно дефолт из compose — эти литералы и должны
+  // проходить валидацию. Пустая строка сюда попасть не может: `:-` подменяет
+  // её дефолтом, а Bool01/PositiveInt на '' упали бы.
+  it('accepts the literal defaults docker-compose substitutes', () => {
+    const cfg = loadConfig({
+      ...base,
+      MCP_OAUTH_ENABLED: 'false',
+      MCP_OAUTH_OPERATOR_IDENTITY: 'operator',
+      MCP_OAUTH_ACCESS_TTL_SEC: '3600',
+      MCP_OAUTH_REFRESH_TTL_SEC: '2592000',
+      MCP_OAUTH_CODE_TTL_SEC: '60',
+      MCP_OAUTH_MAX_CLIENTS: '50',
+    });
+    expect(cfg.MCP_OAUTH_ENABLED).toBe(false);
+    expect(cfg.MCP_OAUTH_MAX_CLIENTS).toBe(50);
+  });
+
+  it('treats blank optional OAuth values as unset', () => {
+    const cfg = loadConfig({
+      ...base,
+      MCP_OAUTH_ENABLED: 'true',
+      MCP_OAUTH_ISSUER: 'https://slonk.example.com',
+      MCP_OAUTH_STORE_PATH: '',
+    });
+    expect(cfg.MCP_OAUTH_STORE_PATH).toBeUndefined();
+  });
+
   it('rejects MCP_OAUTH_ISSUER with a path component', () => {
     expect(() => loadConfig({ ...base, MCP_OAUTH_ENABLED: '1', MCP_OAUTH_ISSUER: 'https://slonk.example.com/sub' })).toThrow(/path component/);
   });
