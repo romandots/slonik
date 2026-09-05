@@ -180,6 +180,12 @@ jobs:
               if grep -q "^$1=" .env 2>/dev/null; then
                 sed -i "s|^$1=.*|$1=$2|" .env
               else
+                # `.env` может не заканчиваться переводом строки — тогда
+                # простой append приклеил бы новую переменную к последней
+                # строке файла и незаметно испортил её значение.
+                if [ -s .env ] && [ -n "$(tail -c1 .env)" ]; then
+                  printf '\n' >> .env
+                fi
                 echo "$1=$2" >> .env
               fi
             }
@@ -198,11 +204,7 @@ jobs:
             if SLONK_MCP_IMAGE_TAG="$VERSION" docker compose up -d mcp-kanban --wait; then
               echo "Version $VERSION deployed successfully"
               # Persist new tag so future manual restarts use it
-              if grep -q "^SLONK_MCP_IMAGE_TAG=" .env; then
-                sed -i "s/^SLONK_MCP_IMAGE_TAG=.*/SLONK_MCP_IMAGE_TAG=$VERSION/" .env
-              else
-                echo "SLONK_MCP_IMAGE_TAG=$VERSION" >> .env
-              fi
+              set_env SLONK_MCP_IMAGE_TAG "$VERSION"
             else
               echo "Health check failed — rolling back to ${PREV_TAG:-previous}"
               if [ -n "$PREV_TAG" ]; then
@@ -270,6 +272,24 @@ jobs:
           script: |
             set -euo pipefail
             curl --fail --silent --show-error http://localhost:8787/health >/dev/null
+
+            cd "$DEPLOY_DIR"
+
+            # Если оператор включил OAuth, AS обязан быть поднят: без него
+            # remote-коннектор claude.ai падает на discovery, не доходя до
+            # формы логина, а снаружи сервер выглядит живым (/health 200,
+            # /mcp 401). Именно так испорченная строка в .env один раз уже
+            # выключила OAuth незаметно.
+            if grep -q '^MCP_OAUTH_ENABLED=true' .env 2>/dev/null; then
+              if curl --fail --silent --show-error \
+                   http://localhost:8787/.well-known/oauth-protected-resource >/dev/null; then
+                echo "OAuth discovery OK"
+              else
+                echo "ОШИБКА: MCP_OAUTH_ENABLED=true, но /.well-known/oauth-protected-resource недоступен" >&2
+                echo "Проверь .env: значение переменной могло быть испорчено" >&2
+                exit 1
+              fi
+            fi
 
             # SLONK-32: убеждаемся, что backend работает с пропатченным
             # S3Storage. Без патча сигнатура — (self, request=None), и весь

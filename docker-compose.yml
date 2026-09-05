@@ -378,6 +378,21 @@ services:
       MCP_RETRY_BACKOFF_MS: ${MCP_RETRY_BACKOFF_MS}
       MCP_PLANE_TIMEOUT_MS: ${MCP_PLANE_TIMEOUT_MS}
       MCP_METRICS_ENABLED: ${MCP_METRICS_ENABLED}
+      # OAuth 2.1 AS (remote-коннектор claude.ai). Сервис задаёт env явным
+      # списком, и раньше в нём не было ни одной MCP_OAUTH_*-переменной:
+      # `MCP_OAUTH_ENABLED=true` в `.env` до контейнера не доезжал, config.ts
+      # брал дефолт `false`, AS не поднимался, а `/oauth/*` и
+      # `/.well-known/oauth-*` отдавали 404 — claude.ai не проходил discovery.
+      # Дефолты здесь обязательны: пустая строка не пройдёт zod-валидацию
+      # (Bool01 не принимает '', а PositiveInt от '' даёт 0).
+      MCP_OAUTH_ENABLED: ${MCP_OAUTH_ENABLED:-false}
+      MCP_OAUTH_ISSUER: ${MCP_OAUTH_ISSUER:-}
+      MCP_OAUTH_OPERATOR_IDENTITY: ${MCP_OAUTH_OPERATOR_IDENTITY:-operator}
+      MCP_OAUTH_ACCESS_TTL_SEC: ${MCP_OAUTH_ACCESS_TTL_SEC:-3600}
+      MCP_OAUTH_REFRESH_TTL_SEC: ${MCP_OAUTH_REFRESH_TTL_SEC:-2592000}
+      MCP_OAUTH_CODE_TTL_SEC: ${MCP_OAUTH_CODE_TTL_SEC:-60}
+      MCP_OAUTH_MAX_CLIENTS: ${MCP_OAUTH_MAX_CLIENTS:-50}
+      MCP_OAUTH_STORE_PATH: ${MCP_OAUTH_STORE_PATH:-}
       # SLONK-6: путь к директории `roles/`. По умолчанию пусто — loader
       # ищет рядом с package.json (`/app/roles`).
       MCP_ROLES_DIR: ${MCP_ROLES_DIR:-}
