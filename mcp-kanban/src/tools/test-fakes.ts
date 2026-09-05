@@ -58,6 +58,8 @@ export interface FakeWorld {
   failPlaneAttachments: boolean;
   failMinioList: boolean;
   failPlaneComments: boolean;
+  /** SLONK-37: журнал обращений за страницами задач (для тестов пагинации). */
+  issuePageCalls: Array<{ projectId: string; cursor?: string; perPage: number }>;
   /** Счётчик инкрементальных id для seed данных. */
   nextId: number;
 }
@@ -82,6 +84,7 @@ export function newWorld(): FakeWorld {
     failPlaneAttachments: false,
     failMinioList: false,
     failPlaneComments: false,
+    issuePageCalls: [],
     nextId: 1,
   };
 }
@@ -294,26 +297,34 @@ export function fakePlane(world: FakeWorld): PlaneClient {
     async listModules(_ws: string, projectId: string) {
       return [...(world.modules.get(projectId) ?? [])];
     },
-    async listIssues(_ws: string, projectId: string, filter?: Parameters<PlaneClient['listIssues']>[2]) {
-      let arr = world.issues.get(projectId) ?? [];
-      if (filter?.state !== undefined) {
-        const wanted = Array.isArray(filter.state) ? filter.state : filter.state.split(',');
-        arr = arr.filter((i) => wanted.includes(i.state));
+    // SLONK-37: фейк намеренно НЕ фильтрует и НЕ ищет — ровно как настоящий
+    // Plane v1.3.0, который молча игнорирует любые filter-параметры в
+    // query-string. Раньше фейк фильтровал сам, поэтому тесты list_issues и
+    // search_issues были зелёными при полностью нерабочих фильтрах в
+    // проде. Не добавлять сюда фильтрацию: этот фейк — единственное место,
+    // где тесты видят настоящую (тупую) семантику Plane.
+    async listIssuesPage(
+      _ws: string,
+      projectId: string,
+      opts?: { perPage?: number; cursor?: string },
+    ) {
+      const arr = world.issues.get(projectId) ?? [];
+      const perPage = opts?.perPage ?? 100;
+      const offset = opts?.cursor !== undefined ? Number.parseInt(opts.cursor, 10) : 0;
+      if (!Number.isInteger(offset) || offset < 0) {
+        throw new McpError({ code: 'INVALID_INPUT', message: `bad cursor: ${String(opts?.cursor)}` });
       }
-      if (filter?.labels !== undefined) {
-        const wanted = Array.isArray(filter.labels) ? filter.labels : filter.labels.split(',');
-        arr = arr.filter((i) => i.labels.some((l) => wanted.includes(l)));
-      }
-      if (filter?.search !== undefined) {
-        const q = filter.search.toLowerCase();
-        arr = arr.filter((i) => i.name.toLowerCase().includes(q));
-      }
-      if (filter?.priority !== undefined) {
-        const wanted = Array.isArray(filter.priority) ? filter.priority : filter.priority.split(',');
-        arr = arr.filter((i) => i.priority !== null && wanted.includes(i.priority));
-      }
-      if (filter?.limit !== undefined) arr = arr.slice(0, filter.limit);
-      return arr;
+      world.issuePageCalls.push({
+        projectId,
+        ...(opts?.cursor !== undefined ? { cursor: opts.cursor } : {}),
+        perPage,
+      });
+      const items = arr.slice(offset, offset + perPage);
+      const nextOffset = offset + items.length;
+      return {
+        items,
+        ...(nextOffset < arr.length ? { nextCursor: String(nextOffset) } : {}),
+      };
     },
     async getIssue(_ws: string, projectId: string, issueId: string) {
       return world.issues.get(projectId)?.find((i) => i.id === issueId);
