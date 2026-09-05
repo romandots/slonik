@@ -11,6 +11,8 @@ import type {
   PlaneIssueActivity,
   PlaneLabel,
   PlaneModule,
+  PlaneModuleIssue,
+  PlaneModuleStatus,
   PlaneProject,
   PlaneState,
   PlaneUser,
@@ -47,13 +49,14 @@ export interface FakeWorld {
   workspaceAssets: Map<string, PlaneWorkspaceAsset>;
   /** SLONK-14: объекты MinIO по ключу `<bucket>:<objectKey>`. */
   minioObjects: Map<string, { size: number; contentType?: string; lastModified?: Date; content?: Buffer }>;
-  /** SLONK-33: связи между задачами по ключу `<projectId>:<issueId>`. */
   /**
-   * Плоское хранилище связей, как в Plane: одна строка на пару
-   * (issue, related_issue, stored relation_type). Направление и
+   * SLONK-33/35: плоское хранилище связей, как в Plane, — одна строка на
+   * пару (issue, related_issue, stored relation_type). Направление и
    * группировка воспроизводятся в фейке `listIssueRelations`.
    */
   relations: PlaneRelationRow[];
+  /** SLONK-34: связи «модуль ↔ задача» по ключу `<projectId>:<moduleId>`. */
+  moduleIssues: Map<string, PlaneModuleIssue[]>;
   /** SLONK-14: симулируемые ошибки источников (для partial-failure тестов). */
   failPlaneAttachments: boolean;
   failMinioList: boolean;
@@ -78,6 +81,7 @@ export function newWorld(): FakeWorld {
     members: new Map(),
     inviteResponses: new Map(),
     relations: [],
+    moduleIssues: new Map(),
     planeAttachments: new Map(),
     workspaceAssets: new Map(),
     minioObjects: new Map(),
@@ -296,6 +300,69 @@ export function fakePlane(world: FakeWorld): PlaneClient {
     },
     async listModules(_ws: string, projectId: string) {
       return [...(world.modules.get(projectId) ?? [])];
+    },
+    async createModule(
+      ws: string,
+      projectId: string,
+      input: { name: string; description?: string; status?: PlaneModuleStatus },
+    ) {
+      const m: PlaneModule = {
+        id: id('mod'),
+        name: input.name,
+        ...(input.description !== undefined ? { description: input.description } : {}),
+        ...(input.status !== undefined ? { status: input.status } : {}),
+        total_issues: 0,
+        project: projectId,
+        workspace: ws,
+      };
+      const arr = world.modules.get(projectId) ?? [];
+      arr.push(m);
+      world.modules.set(projectId, arr);
+      return m;
+    },
+    async updateModule(
+      _ws: string,
+      projectId: string,
+      moduleId: string,
+      patch: { name?: string; description?: string; status?: PlaneModuleStatus },
+    ) {
+      const arr = world.modules.get(projectId) ?? [];
+      const idx = arr.findIndex((m) => m.id === moduleId);
+      if (idx === -1) {
+        const { PlaneError } = await import('../errors.js');
+        throw new PlaneError({
+          message: `Plane API PATCH modules/${moduleId}/ failed: 404 not found`,
+          planeStatus: 404,
+        });
+      }
+      const next = { ...arr[idx]!, ...patch };
+      arr[idx] = next;
+      return next;
+    },
+    async listModuleIssues(_ws: string, projectId: string, moduleId: string) {
+      return [...(world.moduleIssues.get(`${projectId}:${moduleId}`) ?? [])];
+    },
+    async addModuleIssues(_ws: string, projectId: string, moduleId: string, issueIds: string[]) {
+      const key = `${projectId}:${moduleId}`;
+      const arr = world.moduleIssues.get(key) ?? [];
+      const created: PlaneModuleIssue[] = [];
+      for (const issueId of issueIds) {
+        if (arr.some((mi) => mi.issue === issueId)) continue;
+        const mi: PlaneModuleIssue = { id: id('mi'), module: moduleId, issue: issueId };
+        arr.push(mi);
+        created.push(mi);
+      }
+      world.moduleIssues.set(key, arr);
+      syncModuleCount(world, projectId, moduleId, arr.length);
+      return created;
+    },
+    async removeModuleIssue(_ws: string, projectId: string, moduleId: string, issueId: string) {
+      const key = `${projectId}:${moduleId}`;
+      const arr = world.moduleIssues.get(key) ?? [];
+      const idx = arr.findIndex((mi) => mi.issue === issueId);
+      if (idx !== -1) arr.splice(idx, 1);
+      world.moduleIssues.set(key, arr);
+      syncModuleCount(world, projectId, moduleId, arr.length);
     },
     // SLONK-37: фейк намеренно НЕ фильтрует и НЕ ищет — ровно как настоящий
     // Plane v1.3.0, который молча игнорирует любые filter-параметры в
@@ -516,6 +583,17 @@ export function fakePlane(world: FakeWorld): PlaneClient {
     },
   } as unknown as PlaneClient;
   return stub;
+}
+
+/** Держит аннотацию `total_issues` в фейке в согласии с module-issues. */
+function syncModuleCount(
+  world: FakeWorld,
+  projectId: string,
+  moduleId: string,
+  count: number,
+): void {
+  const mod = (world.modules.get(projectId) ?? []).find((m) => m.id === moduleId);
+  if (mod !== undefined) mod.total_issues = count;
 }
 
 function stripTags(s: string): string {
