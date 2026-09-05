@@ -30,6 +30,19 @@
   (`plane-worker → 1g`).
 
 ### Added
+- **Инструменты управления модулями: `create_module`, `update_module`,
+  `add_issues_to_module`, `remove_issues_from_module` (SLONK-34).** Раньше MCP
+  давал только `list_modules` — модули можно было читать, но не создавать и не
+  наполнять, и сценарий «создай модуль X и положи в него карточки A, B, C»
+  упирался в ручные действия пользователя в Plane UI. `create_module`
+  идемпотентен по имени (повторный вызов возвращает существующий модуль с
+  `created: false`), `update_module` правит `name`/`description`/`status` и
+  отбивает переименование в уже занятое имя (`CONFLICT`). Инструменты
+  наполнения принимают и человекочитаемые ключи (`SLONK-12`), и UUID, отбивают
+  ключ чужого проекта (`INVALID_INPUT`) и идемпотентны: уже привязанные задачи
+  возвращаются в `already_present`, непривязанные — в `not_in_module`.
+  `list_modules` дополнен `issues_count` — счётчик берётся из аннотации
+  `total_issues` в ответе Plane, без дополнительных запросов. SemVer: MINOR.
 - Добавлен режим прямой загрузки файлов через `attach_file.content_base64` для MCP-клиентов (SLONK-27).
 - **Inline-изображения Plane editor в `list_attachments` / `read_attachment` (SLONK-24).**
   Discovery `plane_comment_inline` теперь распознаёт не только прямые MinIO URL,
