@@ -236,6 +236,20 @@ export interface PlaneWorkspaceAsset {
   created_by?: string;
 }
 
+/**
+ * Ответ token-API `POST /workspaces/<slug>/assets/` (Plane v1.3.0
+ * GenericAssetEndpoint): presigned S3 POST (`upload_data`) + id/URL ассета.
+ * Используется `embed_image` (SLONK-32) для inline-картинок.
+ */
+export interface GenericAssetUpload {
+  upload_data: {
+    url: string;
+    fields: Record<string, string>;
+  };
+  asset_id: string;
+  asset_url: string;
+}
+
 export interface ListResult<T> {
   results: T[];
   // Plane v1.3.0 шлёт opaque cursor в поле `next_cursor`; более ранние
@@ -952,6 +966,39 @@ export class PlaneClient {
       `workspaces/${workspaceSlug}/assets/${assetId}/`,
       { notFoundOk: true },
     );
+  }
+
+  /**
+   * Создаёт generic-asset и получает presigned S3 POST для прямой загрузки
+   * (token-API `GenericAssetEndpoint`, Plane v1.3.0). Шаг 1 из 3 для
+   * inline-картинки (SLONK-32): POST assets → S3 POST → PATCH is_uploaded.
+   */
+  async createGenericAsset(
+    workspaceSlug: string,
+    input: {
+      name: string;
+      type: string;
+      size: number;
+      project_id: string;
+      external_id?: string;
+      external_source?: string;
+    },
+  ): Promise<GenericAssetUpload> {
+    return await this.request<GenericAssetUpload>(`workspaces/${workspaceSlug}/assets/`, {
+      method: 'POST',
+      body: input,
+    });
+  }
+
+  /**
+   * Помечает asset загруженным (`is_uploaded=true`) после успешного S3 POST.
+   * Шаг 3 из 3 (SLONK-32). Plane отвечает 204 No Content.
+   */
+  async markGenericAssetUploaded(workspaceSlug: string, assetId: string): Promise<void> {
+    await this.request<void>(`workspaces/${workspaceSlug}/assets/${assetId}/`, {
+      method: 'PATCH',
+      body: { is_uploaded: true },
+    });
   }
 
   // ---------------- high-level: users / members ----------------

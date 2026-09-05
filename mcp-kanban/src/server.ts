@@ -12,6 +12,7 @@ import { McpError } from './errors.js';
 import { createLogger, type Logger } from './logger.js';
 import { PlaneClient } from './plane-client.js';
 import { RealMinioClient, type MinioClient } from './minio-client.js';
+import { createFetchAssetUploader, type AssetUploader } from './plane-asset-upload.js';
 import { registerTools, REGISTERED_TOOL_NAMES } from './tools/registry.js';
 import { TtlCache } from './cache.js';
 import {
@@ -58,6 +59,8 @@ export interface BuildServerOptions {
    * `RealMinioClient` поверх `minio` SDK. SLONK-14.
    */
   minio?: MinioClient;
+  /** Инъекция загрузчика presigned POST для тестов (embed_image). */
+  assetUploader?: AssetUploader;
 }
 
 export const AUDIT_STORE_DEFAULT_PATH = '/mcp_data/audit.sqlite';
@@ -123,6 +126,9 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
       config,
       logger,
     });
+  // Загрузчик presigned S3 POST для embed_image (SLONK-32). Не требует MinIO
+  // SDK — это обычный multipart POST по URL из Plane.
+  const assetUploader = opts.assetUploader ?? createFetchAssetUploader();
   const cache = new TtlCache({
     ttlMs: 10_000,
     maxEntries: config.MCP_CACHE_MAX_ENTRIES,
@@ -507,6 +513,7 @@ export async function buildServer(opts: BuildServerOptions): Promise<BuiltServer
         minioEndpoints: collectMinioEndpoints(config),
         planeAssetEndpoints: collectPlaneAssetEndpoints(config),
         minio,
+        assetUploader,
         signedUrlExpirationSec: config.PLANE_SIGNED_URL_EXPIRATION,
         attachMaxBytes: config.MCP_ATTACH_MAX_BYTES,
         attachAllowedMime: config.MCP_ATTACH_ALLOWED_MIME,

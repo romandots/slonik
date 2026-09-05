@@ -9,6 +9,7 @@ import type { RateLimiter } from '../rate-limit.js';
 import type { GitRefsIndex } from '../git-refs.js';
 import type { MetricsRegistry } from '../metrics.js';
 import type { MinioClient } from '../minio-client.js';
+import type { AssetUploader } from '../plane-asset-upload.js';
 
 // Shared context для всех MCP tool'ов. Содержит то, что tool'ам нужно:
 // конфиг, идентичность вызывающего, обёртку Plane API, общий кеш.
@@ -68,6 +69,11 @@ export interface ToolContext {
    * `FakeMinioClient`. SLONK-14.
    */
   minio: MinioClient;
+  /**
+   * Загрузчик байтов через presigned S3 POST, выданный Plane
+   * (`embed_image`, SLONK-32). В тестах — фейк без сети.
+   */
+  assetUploader: AssetUploader;
   /** TTL presigned URL'ов в секундах. */
   signedUrlExpirationSec: number;
   /**

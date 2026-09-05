@@ -33,6 +33,8 @@ import { commentIssue } from './comment-issue/handler.js';
 import { CommentIssueInput } from './comment-issue/schema.js';
 import { attachFile } from './attach-file/handler.js';
 import { AttachFileInput } from './attach-file/schema.js';
+import { embedImage } from './embed-image/handler.js';
+import { EmbedImageInput } from './embed-image/schema.js';
 import { linkGitRef } from './link-git-ref/handler.js';
 import { LinkGitRefInput, LinkGitRefShape } from './link-git-ref/schema.js';
 import { unlinkGitRef } from './unlink-git-ref/handler.js';
@@ -78,6 +80,7 @@ export const REGISTERED_TOOL_NAMES = [
   'block_issue',
   'comment_issue',
   'attach_file',
+  'embed_image',
   'link_git_ref',
   'unlink_git_ref',
   'find_issues_by_git_ref',
@@ -100,6 +103,7 @@ const WRITE_TOOLS = new Set<RegisteredToolName>([
   'block_issue',
   'comment_issue',
   'attach_file',
+  'embed_image',
   'link_git_ref',
   'unlink_git_ref',
   // SLONK-14: read_attachment отдаёт presigned URL — каждый вызов
@@ -722,6 +726,36 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
             expiresInSec: ctx.signedUrlExpirationSec,
             maxBytes: ctx.attachMaxBytes,
             allowedMime: ctx.attachAllowedMime,
+            input,
+          }),
+      });
+    },
+  );
+
+  // ---- embed_image ----
+  server.registerTool(
+    'embed_image',
+    {
+      description:
+        'Embed a raster image (png/jpeg/gif/webp) into an issue description or a new comment so it renders inline in the Plane UI.',
+      inputSchema: EmbedImageInput.shape,
+    },
+    async (args) => {
+      const input = EmbedImageInput.parse(args);
+      return await withWriteGuard({
+        ctx,
+        tool: 'embed_image',
+        input,
+        issueIdFromInput: (i) => String((i as typeof input).issue_id),
+        fn: async () =>
+          await embedImage({
+            plane: ctx.plane,
+            uploader: ctx.assetUploader,
+            cache: ctx.cache,
+            workspace: ctx.workspace,
+            defaultProjectRef: ctx.defaultProjectSlug,
+            identity: ctx.resolveIdentity(),
+            maxBytes: ctx.attachMaxBytes,
             input,
           }),
       });

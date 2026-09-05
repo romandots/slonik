@@ -7,6 +7,22 @@
 
 ## [Unreleased]
 
+### Added
+- **MCP-тул `embed_image` — inline-картинки в задачах Plane (SLONK-32).**
+  Агент может встроить растровую картинку в описание задачи или в новый
+  комментарий так, что человек видит её в Plane UI (а не текстовую ссылку).
+  Реализован подтверждённый по исходнику Plane v1.3.0 протокол загрузки
+  file-asset через token-API: `POST /workspaces/<slug>/assets/` →
+  presigned S3 POST → `PATCH .../<asset_id>/ {is_uploaded:true}`, затем вставка
+  inline-узла `<image-component src="<asset_id>">` (description — read-modify-write
+  через get+update, без затирания; comment — новый комментарий). `PlaneClient`
+  получил `createGenericAsset`/`markGenericAssetUploaded`; загрузка байтов — через
+  инъектируемый `AssetUploader` (presigned POST). Безопасность: только растровые
+  `png/jpeg/gif/webp`, `image/svg+xml` отклоняется (stored-XSS); caption
+  экранируется; `asset_id` валидируется как UUID; лимит размера — общий
+  `MCP_ATTACH_MAX_BYTES`. SemVer: MINOR. Замечание: визуальный рендер inline-узла
+  в Plane UI проверяется на стенде после деплоя (B5).
+
 ### Fixed
 - **`issue_relations` больше не падает с 404 при создании связей (SLONK-35).**
   Инструмент ходил во внутренний (app) роут Plane
