@@ -230,16 +230,21 @@ function extractNextCursor<T>(resp: ListResult<T>): string | undefined {
   return candidate;
 }
 
-export interface ListIssuesFilter {
-  state?: string | string[];
-  state__name?: string | string[];
-  labels?: string | string[];
-  assignees?: string | string[];
-  cycle?: string;
-  module?: string;
-  search?: string;
-  priority?: string | string[];
-  limit?: number;
+/**
+ * Одна страница списка задач проекта.
+ *
+ * SLONK-37: у Plane v1.3.0 публичный list-эндпоинт задач **не фильтрует**.
+ * Любые `state` / `labels` / `search` в query-string он молча игнорирует и
+ * отдаёт «последние N задач проекта». Поэтому клиент их и не отправляет:
+ * единственные параметры здесь — размер страницы и курсор, а вся фильтрация
+ * живёт слоем выше (`src/tools/list-issues/filter.ts`). Не возвращать сюда
+ * filter-поля: их наличие в сигнатуре — приглашение снова поверить, что
+ * сервер отфильтрует.
+ */
+export interface IssuePage {
+  items: PlaneIssue[];
+  /** Курсор следующей страницы; `undefined` — страниц больше нет. */
+  nextCursor?: string;
 }
 
 interface RequestOptions {
@@ -717,31 +722,33 @@ export class PlaneClient {
 
   // ---------------- high-level: issues ----------------
 
-  async listIssues(
+  /**
+   * Одна страница задач проекта в порядке Plane (`created_at DESC`).
+   *
+   * Никаких фильтров: см. комментарий к `IssuePage`. Вызывающий обходит
+   * страницы курсором и фильтрует сам.
+   */
+  async listIssuesPage(
     workspaceSlug: string,
     projectId: string,
-    filter: ListIssuesFilter = {},
-  ): Promise<PlaneIssue[]> {
+    opts: { perPage?: number; cursor?: string } = {},
+  ): Promise<IssuePage> {
     const query: Record<string, string | number | undefined> = {};
-    const merge = (k: string, v: string | string[] | undefined): void => {
-      if (v === undefined) return;
-      query[k] = Array.isArray(v) ? v.join(',') : v;
-    };
-    merge('state', filter.state);
-    merge('state__name', filter.state__name);
-    merge('labels', filter.labels);
-    merge('assignees', filter.assignees);
-    merge('priority', filter.priority);
-    if (filter.cycle !== undefined) query['cycle'] = filter.cycle;
-    if (filter.module !== undefined) query['module'] = filter.module;
-    if (filter.search !== undefined) query['search'] = filter.search;
-    if (filter.limit !== undefined) query['per_page'] = filter.limit;
+    if (opts.perPage !== undefined) query['per_page'] = opts.perPage;
+    if (opts.cursor !== undefined) query['cursor'] = opts.cursor;
 
     const resp = await this.request<ListResult<PlaneIssue> | PlaneIssue[]>(
       `workspaces/${workspaceSlug}/projects/${projectId}/issues/`,
       { query },
     );
-    return Array.isArray(resp) ? resp : resp.results;
+    // Плоский массив (pre-1.3 shape) пагинации не имеет — это единственная
+    // страница.
+    if (Array.isArray(resp)) return { items: resp };
+    const nextCursor = extractNextCursor(resp);
+    return {
+      items: resp.results,
+      ...(nextCursor !== undefined ? { nextCursor } : {}),
+    };
   }
 
   async getIssue(

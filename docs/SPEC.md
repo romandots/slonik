@@ -433,9 +433,9 @@ workspace-scoped API-токен не может создавать workspaces.
 | `list_labels` | Лейблы проекта |
 | `list_cycles` | Активные/прошедшие циклы (sprints) |
 | `list_modules` | Модули (epics) + `issues_count` (SLONK-34) |
-| `list_issues` | Поиск задач по фильтрам |
+| `list_issues` | Выборка задач по фильтрам state/label/assignee/priority (+ курсорная пагинация) |
 | `get_issue` | Полные детали задачи + meta-блок + связи |
-| `search_issues` | Полнотекстовый поиск по title/description/comments |
+| `search_issues` | Полнотекстовый поиск по title/ключу/description (+ курсорная пагинация) |
 | `create_issue` | Создать новую задачу |
 | `update_issue` | Изменить поля (title, description, priority, assignees, labels) |
 | `transition_issue` | Перевести задачу в новый state |
@@ -469,6 +469,54 @@ workspace-scoped API-токен не может создавать workspaces.
 
 Все tools используют JSON Schema; полные схемы — в `mcp-kanban/schemas/`.
 Ключевые контракты:
+
+`list_issues` / `search_issues` (SLONK-37)
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "project":  { "type": "string" },
+    "state":    { "description": "Имя или UUID состояния; массив — OR" },
+    "label":    { "description": "Имя или UUID лейбла; массив — OR" },
+    "assignee": { "description": "UUID участника, e-mail или display_name; массив — OR" },
+    "priority": { "description": "urgent|high|medium|low|none; массив — OR" },
+    "limit":    { "type": "integer", "maximum": 200, "description": "по умолчанию 50" },
+    "cursor":   { "type": "string", "description": "`next_cursor` предыдущего вызова" }
+  }
+}
+```
+
+**Фильтрация — на стороне MCP, не Plane.** Публичный list-эндпоинт Plane
+v1.3.0 неизвестные query-параметры молча игнорирует: `state`, `labels`,
+`search` уезжали на сервер и не делали ничего, а инструмент отдавал
+«последние N задач проекта» — ответ, неотличимый от честного. Поэтому
+`mcp-kanban` тянет у Plane только страницы (`per_page` + `cursor`), а
+решение «подходит / не подходит» принимает сам
+(`src/tools/list-issues/filter.ts`).
+
+Следствия контракта:
+
+- **Разные фильтры — разные ответы.** Комбинация фильтров — AND, значения
+  внутри одного фильтра — OR.
+- **Неизвестное состояние, приоритет или исполнитель — `INVALID_INPUT`** с
+  перечислением допустимых значений. Тихо вернуть «всё подряд» нельзя.
+- **Неизвестный лейбл — пустая выборка**, а не ошибка и не вся доска:
+  «задач с таким лейблом нет» — корректный ответ, лейблы заводятся по ходу
+  работы.
+- **Фильтр по `cycle`/`module`** работает, только если Plane отдаёт это поле
+  в теле задачи; иначе — `INVALID_INPUT` с объяснением, а не пустая выдача
+  «по техническим причинам».
+- **Пагинация.** Ответ содержит `has_more`, `scanned` и (если есть
+  продолжение) непрозрачный `next_cursor`. Курсор указывает на конкретную
+  позицию внутри страницы Plane, поэтому обход не теряет и не дублирует
+  задачи. За один вызов просматривается не больше
+  `MAX_PAGES_PER_CALL × PAGE_SIZE` (10 × 100) задач: если разрежённый фильтр
+  не набрал `limit`, возвращается `has_more: true` и курсор — доска любой
+  длины перечисляется целиком за несколько вызовов.
+- **`search_issues`** ищет подстроку (case-insensitive) по заголовку, ключу
+  (`SLONK-37`) и телу задачи с вырезанной HTML-разметкой. Комментарии не
+  индексируются: это отдельный запрос к Plane на каждую задачу.
 
 `claim_issue`
 
