@@ -59,13 +59,43 @@ export interface PlaneCycle {
   workspace: string;
 }
 
+/**
+ * Plane module (эпик-контейнер для задач).
+ *
+ * `total_issues` / `completed_issues` Plane отдаёт аннотациями в
+ * `ModuleSerializer` — если апстрим их не вернул, поля просто отсутствуют
+ * (доп. запросов ради счётчика не делаем, см. SLONK-34).
+ */
 export interface PlaneModule {
   id: string;
   name: string;
   description?: string;
   status?: string;
+  total_issues?: number;
+  completed_issues?: number;
   project: string;
   workspace: string;
+}
+
+/** Допустимые значения `status` модуля в Plane v1.3.0. */
+export const PLANE_MODULE_STATUSES = [
+  'backlog',
+  'planned',
+  'in-progress',
+  'paused',
+  'completed',
+  'cancelled',
+] as const;
+export type PlaneModuleStatus = (typeof PLANE_MODULE_STATUSES)[number];
+
+/**
+ * Связка «модуль ↔ задача» (Plane endpoint `module-issues`).
+ * DELETE адресуется по UUID *задачи*, а не по `id` самой связки.
+ */
+export interface PlaneModuleIssue {
+  id: string;
+  module: string;
+  issue: string;
 }
 
 export interface PlaneIssue {
@@ -625,6 +655,68 @@ export class PlaneClient {
       await this.request<PlaneModule[] | ListResult<PlaneModule>>(
         `workspaces/${workspaceSlug}/projects/${projectId}/modules/`,
       ),
+    );
+  }
+
+  async createModule(
+    workspaceSlug: string,
+    projectId: string,
+    input: { name: string; description?: string; status?: PlaneModuleStatus },
+  ): Promise<PlaneModule> {
+    return await this.request<PlaneModule>(
+      `workspaces/${workspaceSlug}/projects/${projectId}/modules/`,
+      { method: 'POST', body: input },
+    );
+  }
+
+  async updateModule(
+    workspaceSlug: string,
+    projectId: string,
+    moduleId: string,
+    patch: { name?: string; description?: string; status?: PlaneModuleStatus },
+  ): Promise<PlaneModule> {
+    return await this.request<PlaneModule>(
+      `workspaces/${workspaceSlug}/projects/${projectId}/modules/${moduleId}/`,
+      { method: 'PATCH', body: patch },
+    );
+  }
+
+  async listModuleIssues(
+    workspaceSlug: string,
+    projectId: string,
+    moduleId: string,
+  ): Promise<PlaneModuleIssue[]> {
+    return unwrapList(
+      await this.request<PlaneModuleIssue[] | ListResult<PlaneModuleIssue>>(
+        `workspaces/${workspaceSlug}/projects/${projectId}/modules/${moduleId}/module-issues/`,
+      ),
+    );
+  }
+
+  /** Plane принимает пачку UUID разом: `{ issues: [...] }`. */
+  async addModuleIssues(
+    workspaceSlug: string,
+    projectId: string,
+    moduleId: string,
+    issueIds: string[],
+  ): Promise<PlaneModuleIssue[]> {
+    return unwrapList(
+      await this.request<PlaneModuleIssue[] | ListResult<PlaneModuleIssue>>(
+        `workspaces/${workspaceSlug}/projects/${projectId}/modules/${moduleId}/module-issues/`,
+        { method: 'POST', body: { issues: issueIds } },
+      ),
+    );
+  }
+
+  async removeModuleIssue(
+    workspaceSlug: string,
+    projectId: string,
+    moduleId: string,
+    issueId: string,
+  ): Promise<void> {
+    await this.request<void>(
+      `workspaces/${workspaceSlug}/projects/${projectId}/modules/${moduleId}/module-issues/${issueId}/`,
+      { method: 'DELETE' },
     );
   }
 

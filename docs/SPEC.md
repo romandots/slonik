@@ -432,7 +432,7 @@ workspace-scoped API-токен не может создавать workspaces.
 | `list_states` | Состояния проекта (для UI/выбора при transition) |
 | `list_labels` | Лейблы проекта |
 | `list_cycles` | Активные/прошедшие циклы (sprints) |
-| `list_modules` | Модули (epics) |
+| `list_modules` | Модули (epics) + `issues_count` (SLONK-34) |
 | `list_issues` | Выборка задач по фильтрам state/label/assignee/priority (+ курсорная пагинация) |
 | `get_issue` | Полные детали задачи + meta-блок + связи |
 | `search_issues` | Полнотекстовый поиск по title/ключу/description (+ курсорная пагинация) |
@@ -450,6 +450,11 @@ workspace-scoped API-токен не может создавать workspaces.
 | `get_issue_history` | История действий по задаче (Plane activity + MCP audit) |
 | `list_attachments` | Список вложений задачи: Plane UI uploads + inline-asset из комментариев + mcp-artifacts (SLONK-14) |
 | `read_attachment` | Получить presigned MinIO GET URL для вложения; audit-логируется как write (SLONK-14) |
+| `create_module` | Создать модуль; идемпотентно по имени (SLONK-34) |
+| `update_module` | Изменить `name`/`description`/`status` модуля (SLONK-34) |
+| `add_issues_to_module` | Привязать задачи к модулю; идемпотентно (SLONK-34) |
+| `remove_issues_from_module` | Открепить задачи от модуля; идемпотентно (SLONK-34) |
+| `issue_relations` | Связи между задачами: `relates_to` / `duplicate_of` / `blocked_by` / `blocking` (SLONK-33) |
 | `who_am_i` | Вернуть текущую identity и её права |
 
 `get_issue` (SLONK-14): обратносовместимо расширен двумя полями:
@@ -559,6 +564,70 @@ v1.3.0 неизвестные query-параметры молча игнорир
   }
 }
 ```
+
+`create_module` (SLONK-34)
+
+```json
+{
+  "type": "object",
+  "required": ["name"],
+  "properties": {
+    "name":        { "type": "string", "maxLength": 255, "description": "Имя модуля; матчинг существующего — case-insensitive + trim" },
+    "description": { "type": "string" },
+    "status":      { "type": "string", "enum": ["backlog", "planned", "in-progress", "paused", "completed", "cancelled"] },
+    "project":     { "type": "string", "description": "Plane project identifier; иначе MCP_DEFAULT_PROJECT" }
+  }
+}
+```
+
+Идемпотентен по имени: если модуль с таким именем уже есть, Plane не
+дёргается на запись, а в ответе приходит существующий модуль с
+`created: false`.
+
+`update_module` (SLONK-34)
+
+```json
+{
+  "type": "object",
+  "required": ["module"],
+  "properties": {
+    "module":      { "type": "string", "description": "Имя модуля или его UUID" },
+    "name":        { "type": "string", "maxLength": 255 },
+    "description": { "type": "string" },
+    "status":      { "type": "string", "enum": ["backlog", "planned", "in-progress", "paused", "completed", "cancelled"] },
+    "project":     { "type": "string" }
+  }
+}
+```
+
+Хотя бы одно из `name`/`description`/`status` обязательно, иначе
+`INVALID_INPUT`. Переименование в уже занятое имя отбивается `CONFLICT` —
+Plane такой дубль принимает молча, а он ломает резолв модуля по имени.
+
+`add_issues_to_module` / `remove_issues_from_module` (SLONK-34)
+
+```json
+{
+  "type": "object",
+  "required": ["module", "issue_ids"],
+  "properties": {
+    "module":    { "type": "string", "description": "Имя модуля или его UUID" },
+    "issue_ids": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100,
+      "items": { "type": "string", "description": "Ключ задачи (PROJ-123) или UUID" }
+    },
+    "project":   { "type": "string" }
+  }
+}
+```
+
+Оба инструмента идемпотентны и никогда не падают на повторе: `add`
+возвращает `{ added, already_present, issues_count }`, `remove` —
+`{ removed, not_in_module, issues_count }`. Модуль живёт внутри одного
+проекта, поэтому ключ с чужим префиксом (`OTHER-1` при проекте `SLONK`)
+отбивается `INVALID_INPUT`, а не резолвится молча в `SLONK-1`.
 
 ### 6.4 Обработка ошибок
 

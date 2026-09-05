@@ -3,10 +3,35 @@ import type { TtlCache } from '../../cache.js';
 import { inputHash } from '../../cache.js';
 import { resolveProject } from '../project-resolver.js';
 
+export interface ModuleSummary {
+  id: string;
+  name: string;
+  description?: string;
+  status?: string;
+  /**
+   * Количество карточек в модуле. Берём из аннотации `total_issues`,
+   * которую Plane отдаёт прямо в списке модулей — дополнительных запросов
+   * ради счётчика не делаем. Если апстрим поле не вернул, оно отсутствует
+   * (SLONK-34).
+   */
+  issues_count?: number;
+}
+
 export interface ListModulesResult {
   workspace: string;
   project: { id: string; identifier: string };
-  modules: Array<Pick<PlaneModule, 'id' | 'name' | 'description' | 'status'>>;
+  modules: ModuleSummary[];
+}
+
+/** Единый маппинг Plane-модуля в ответ tool'а (используется всеми module-tools). */
+export function summariseModule(m: PlaneModule): ModuleSummary {
+  return {
+    id: m.id,
+    name: m.name,
+    ...(m.description !== undefined ? { description: m.description } : {}),
+    ...(m.status !== undefined ? { status: m.status } : {}),
+    ...(m.total_issues !== undefined ? { issues_count: m.total_issues } : {}),
+  };
 }
 
 export async function listModules(deps: {
@@ -30,11 +55,6 @@ export async function listModules(deps: {
   return {
     workspace: deps.workspace,
     project: { id: project.id, identifier: project.identifier },
-    modules: mods.map((m) => ({
-      id: m.id,
-      name: m.name,
-      ...(m.description !== undefined ? { description: m.description } : {}),
-      ...(m.status !== undefined ? { status: m.status } : {}),
-    })),
+    modules: mods.map(summariseModule),
   };
 }
