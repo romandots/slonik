@@ -141,19 +141,53 @@ export interface PlaneAttachment {
 }
 
 /**
- * Plane v1.3.0: GET/POST /workspaces/<slug>/projects/<pid>/issues/<iid>/issue-relation/
- * DELETE /workspaces/<slug>/projects/<pid>/issues/<iid>/issue-relation/<rel_id>/
+ * Связи между задачами в публичном REST API Plane v1.3.0 (SLONK-35).
  *
- * relation_type values: 'relates_to' | 'duplicate_of' | 'blocked_by' | 'blocking'
- * The `related_issue` field holds the UUID of the other issue.
+ * Единственный публичный роут — `work-items/<iid>/relations/`, и только
+ * `GET` + `POST`. Внутренний (app) роут `issues/<iid>/issue-relation/`
+ * живёт под `/api/` с session-аутентификацией и по API-ключу отдаёт 404
+ * («Page not found»), поэтому им пользоваться нельзя.
+ *
+ * `GET` отдаёт не список записей, а связи, сгруппированные по типу с
+ * точки зрения запрошенной задачи: массивы UUID'ов других задач.
+ * `DELETE` публичный API не экспонирует вовсе — удаление связи возможно
+ * только через UI Plane (см. `UNSUPPORTED` в issue_relations).
  */
-export interface PlaneIssueRelation {
+export type PlaneRelationType =
+  | 'blocking'
+  | 'blocked_by'
+  | 'duplicate'
+  | 'relates_to'
+  | 'start_before'
+  | 'start_after'
+  | 'finish_before'
+  | 'finish_after';
+
+export const PLANE_RELATION_TYPES: readonly PlaneRelationType[] = [
+  'blocking',
+  'blocked_by',
+  'duplicate',
+  'relates_to',
+  'start_before',
+  'start_after',
+  'finish_before',
+  'finish_after',
+] as const;
+
+/** Ответ `GET work-items/<iid>/relations/`: UUID'ы задач по каждому типу. */
+export type PlaneIssueRelationGroups = Record<PlaneRelationType, string[]>;
+
+/**
+ * Элемент ответа `POST work-items/<iid>/relations/`. Plane отдаёт не
+ * запись связи, а сериализованную «другую» задачу: id/name/sequence_id/
+ * project_id + relation_type в том виде, в каком связь легла в БД.
+ */
+export interface PlaneCreatedRelation {
   id: string;
-  relation_type: 'relates_to' | 'duplicate_of' | 'blocked_by' | 'blocking';
-  issue: string;
-  related_issue: string;
-  project: string;
-  created_at?: string;
+  name?: string;
+  sequence_id?: number;
+  project_id?: string;
+  relation_type?: string;
 }
 
 export interface PlaneWorkspaceAsset {
@@ -879,39 +913,48 @@ export class PlaneClient {
 
   // ---------------- high-level: issue relations ----------------
 
+  /**
+   * `GET workspaces/<slug>/projects/<pid>/work-items/<iid>/relations/`.
+   *
+   * Отсутствующие в ответе группы нормализуем в пустые массивы, чтобы
+   * потребителю не приходилось различать «нет связей» и «ключа нет».
+   */
   async listIssueRelations(
     workspaceSlug: string,
     projectId: string,
     issueId: string,
-  ): Promise<PlaneIssueRelation[]> {
-    const resp = await this.request<PlaneIssueRelation[] | ListResult<PlaneIssueRelation>>(
-      `workspaces/${workspaceSlug}/projects/${projectId}/issues/${issueId}/issue-relation/`,
+  ): Promise<PlaneIssueRelationGroups> {
+    const resp = await this.request<Partial<Record<string, unknown>>>(
+      `workspaces/${workspaceSlug}/projects/${projectId}/work-items/${issueId}/relations/`,
     );
-    return unwrapList(resp);
+    const groups = {} as PlaneIssueRelationGroups;
+    for (const key of PLANE_RELATION_TYPES) {
+      const value = resp[key];
+      groups[key] = Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : [];
+    }
+    return groups;
   }
 
-  async createIssueRelation(
+  /**
+   * `POST workspaces/<slug>/projects/<pid>/work-items/<iid>/relations/`
+   * с телом `{ relation_type, issues: [uuid, ...] }`.
+   *
+   * Plane сам разворачивает «обратные» типы (`blocking`, `start_after`,
+   * `finish_after`) в хранимую пару, поэтому здесь ничего инвертировать
+   * не нужно. Повторный вызов идемпотентен: bulk_create идёт с
+   * `ignore_conflicts=True`.
+   */
+  async createIssueRelations(
     workspaceSlug: string,
     projectId: string,
     issueId: string,
-    input: { relation_type: PlaneIssueRelation['relation_type']; related_issue: string },
-  ): Promise<PlaneIssueRelation> {
-    return await this.request<PlaneIssueRelation>(
-      `workspaces/${workspaceSlug}/projects/${projectId}/issues/${issueId}/issue-relation/`,
+    input: { relation_type: PlaneRelationType; issues: string[] },
+  ): Promise<PlaneCreatedRelation[]> {
+    const resp = await this.request<PlaneCreatedRelation[] | ListResult<PlaneCreatedRelation>>(
+      `workspaces/${workspaceSlug}/projects/${projectId}/work-items/${issueId}/relations/`,
       { method: 'POST', body: input },
     );
-  }
-
-  async deleteIssueRelation(
-    workspaceSlug: string,
-    projectId: string,
-    issueId: string,
-    relationId: string,
-  ): Promise<void> {
-    await this.request<void>(
-      `workspaces/${workspaceSlug}/projects/${projectId}/issues/${issueId}/issue-relation/${relationId}/`,
-      { method: 'DELETE' },
-    );
+    return unwrapList(resp);
   }
 }
 

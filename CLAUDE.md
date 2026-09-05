@@ -114,12 +114,14 @@ pnpm dev             # tsx watch src/server.ts (локальная разраб�
 
 ## Текущее состояние
 
-В коде на сегодня — **24 MCP tool'а**: `who_am_i` + 11 read (`list_*`,
+В коде на сегодня — **25 MCP tool'ов**: `who_am_i` + 11 read (`list_*`,
 `get_issue`, `search_issues`, `get_issue_history`, `list_attachments`) +
 9 write (`create_issue`, `update_issue`, `transition_issue`,
 `claim_issue`, `release_issue`, `block_issue`, `comment_issue`,
 `attach_file`, `read_attachment` — аудитится как write) + 3 git
-(`link_git_ref`, `unlink_git_ref`, `find_issues_by_git_ref`).
+(`link_git_ref`, `unlink_git_ref`, `find_issues_by_git_ref`) +
+`issue_relations` (связи между задачами; `add`/`list`, `remove` не
+поддерживается публичным API Plane — см. SPEC §6.2).
 
 ## Конвенции (обязательные)
 

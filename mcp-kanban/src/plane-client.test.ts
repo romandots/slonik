@@ -226,3 +226,46 @@ describe('PlaneClient.getIssueBySequenceId — paginated early-exit (SLONK-5)', 
     expect(calls[1]?.url).toMatch(/cursor=right/);
   });
 });
+
+// SLONK-35: связи создавались через внутренний (app) роут
+// `issues/<id>/issue-relation/`, которого нет под `/api/v1` — Plane
+// отвечал 404 «Page not found». Публичный роут — `work-items/<id>/relations/`.
+describe('PlaneClient — issue relations (SLONK-35)', () => {
+  it('lists relations from the public work-items route and fills missing groups', async () => {
+    const { client, calls } = makeClient([
+      jsonResp(200, {
+        blocked_by: ['iss-2'],
+        relates_to: ['iss-3'],
+      }),
+    ]);
+    const groups = await client.listIssueRelations('agents', 'proj-1', 'iss-1');
+
+    expect(calls[0]?.url).toBe(
+      'http://plane-api/api/v1/workspaces/agents/projects/proj-1/work-items/iss-1/relations/',
+    );
+    expect(groups.blocked_by).toEqual(['iss-2']);
+    expect(groups.relates_to).toEqual(['iss-3']);
+    expect(groups.blocking).toEqual([]);
+    expect(groups.duplicate).toEqual([]);
+  });
+
+  it('creates relations with the {relation_type, issues[]} payload Plane expects', async () => {
+    const { client, calls } = makeClient([
+      jsonResp(201, [{ id: 'iss-2', relation_type: 'blocked_by' }]),
+    ]);
+    const created = await client.createIssueRelations('agents', 'proj-1', 'iss-1', {
+      relation_type: 'blocked_by',
+      issues: ['iss-2'],
+    });
+
+    expect(calls[0]?.url).toBe(
+      'http://plane-api/api/v1/workspaces/agents/projects/proj-1/work-items/iss-1/relations/',
+    );
+    expect(calls[0]?.init?.method).toBe('POST');
+    expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({
+      relation_type: 'blocked_by',
+      issues: ['iss-2'],
+    });
+    expect(created).toEqual([{ id: 'iss-2', relation_type: 'blocked_by' }]);
+  });
+});
