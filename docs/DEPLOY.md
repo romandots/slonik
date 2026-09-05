@@ -120,6 +120,35 @@ git pull --ff-only        # если рабочая копия — git-клон
 
 Сам образ `mcp-kanban` при этом приедет автоматически через пайплайн.
 
+**Пропатченный `plane-backend` тоже не выкатывается автоматически
+(SLONK-32).** Пайплайн его собирает и публикует в GHCR, но deploy-джоба
+поднимает только `mcp-kanban` — перезапуск API/worker/beat и прогон
+миграций осознанно оставлены ручным шагом. После изменения
+`PLANE_BACKEND_TAG` (или набора патчей) выкатывать так:
+
+```bash
+cd /home/romandots/slonik
+git pull --ff-only                        # подтянуть compose и .env.example
+
+# PLANE_BACKEND_IMAGE=ghcr.io/romandots/slonk/plane-backend и актуальный
+# PLANE_BACKEND_TAG должны быть прописаны в .env (в git его нет)
+docker compose pull plane-migrator plane-api plane-worker plane-beat
+docker compose up -d plane-migrator
+docker compose up -d plane-api plane-worker plane-beat --wait
+```
+
+Проверка, что патч на месте (без него был бы `TypeError`):
+
+```bash
+docker compose exec plane-api python3 -c \
+  "import inspect, plane.settings.storage as m; \
+   print(inspect.signature(m.S3Storage.__init__))"
+# ожидаем: (self, request=None, is_server=False)
+```
+
+Rollback — вернуть прежний `PLANE_BACKEND_TAG` в `.env` и повторить
+`up -d`; образы предыдущих тегов остаются в GHCR.
+
 ---
 
 ## 4. CI на PR — `ci.yml`

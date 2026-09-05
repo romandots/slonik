@@ -13,6 +13,7 @@ env:
   REGISTRY: ghcr.io
   IMAGE_MCP: ghcr.io/romandots/slonk/mcp-kanban
   IMAGE_BACKUP: ghcr.io/romandots/slonk/backup
+  IMAGE_PLANE_BACKEND: ghcr.io/romandots/slonk/plane-backend
 
 jobs:
   gate:
@@ -97,6 +98,30 @@ jobs:
           tags: |
             ${{ env.IMAGE_BACKUP }}:${{ steps.version.outputs.version }}
             ${{ env.IMAGE_BACKUP }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # SLONK-32: backend Plane — upstream + патч S3Storage. Тег берём из
+      # .env.example, чтобы образ в GHCR всегда соответствовал тому, на что
+      # ссылается compose в этом же коммите. Версия mcp-kanban тут ни при
+      # чём: образ меняется только при бампе upstream или набора патчей.
+      - name: Read Plane image tags from .env.example
+        id: plane
+        run: |
+          UPSTREAM=$(grep -E '^PLANE_IMAGE_TAG=' .env.example | cut -d= -f2)
+          PATCHED=$(grep -E '^PLANE_BACKEND_TAG=' .env.example | cut -d= -f2)
+          test -n "$UPSTREAM" && test -n "$PATCHED"
+          echo "upstream=$UPSTREAM" >> "$GITHUB_OUTPUT"
+          echo "patched=$PATCHED" >> "$GITHUB_OUTPUT"
+
+      - name: Build & push plane-backend (patched)
+        uses: docker/build-push-action@v6
+        with:
+          context: ./plane-backend
+          push: true
+          tags: ${{ env.IMAGE_PLANE_BACKEND }}:${{ steps.plane.outputs.patched }}
+          build-args: |
+            PLANE_IMAGE_TAG=${{ steps.plane.outputs.upstream }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

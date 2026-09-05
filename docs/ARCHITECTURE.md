@@ -102,10 +102,10 @@ Bridge-сеть без публикации портов на хост в баз
 | `plane-admin` | `makeplane/plane-admin:v1.3.0` | `unless-stopped` | `plane-api` (healthy) |
 | `plane-space` | `makeplane/plane-space:v1.3.0` | `unless-stopped` | `plane-api` (healthy) |
 | `plane-live` | `makeplane/plane-live:v1.3.0` | `unless-stopped` | `plane-api` (healthy), `redis` |
-| `plane-api` | `makeplane/plane-backend:v1.3.0` | `unless-stopped` | `postgres`, `redis`, `rabbitmq`, `minio` (все healthy), `plane-migrator` (completed) |
-| `plane-worker` | `makeplane/plane-backend:v1.3.0` | `unless-stopped` | `plane-api`, `plane-migrator` |
-| `plane-beat` | `makeplane/plane-backend:v1.3.0` | `unless-stopped` | `plane-api`, `plane-migrator` |
-| `plane-migrator` | `makeplane/plane-backend:v1.3.0` | `"no"` (one-shot) | `postgres`, `redis` (healthy) |
+| `plane-api` | `slonk/plane-backend:v1.3.0-slonk1` | `unless-stopped` | `postgres`, `redis`, `rabbitmq`, `minio` (все healthy), `plane-migrator` (completed) |
+| `plane-worker` | `slonk/plane-backend:v1.3.0-slonk1` | `unless-stopped` | `plane-api`, `plane-migrator` |
+| `plane-beat` | `slonk/plane-backend:v1.3.0-slonk1` | `unless-stopped` | `plane-api`, `plane-migrator` |
+| `plane-migrator` | `slonk/plane-backend:v1.3.0-slonk1` | `"no"` (one-shot) | `postgres`, `redis` (healthy) |
 | `postgres` | `postgres:15.7-alpine` | `unless-stopped` | — |
 | `redis` | `valkey/valkey:7.2.11-alpine` | `unless-stopped` | — |
 | `rabbitmq` | `rabbitmq:3.13.6-management-alpine` | `unless-stopped` | — |
@@ -122,7 +122,9 @@ Bridge-сеть без публикации портов на хост в баз
 
 **Plane backend под капотом — один образ.** Сервисы `plane-api`, `plane-worker`,
 `plane-beat`, `plane-migrator` поднимаются из одного и того же
-`makeplane/plane-backend:v1.3.0`; различаются только командой entrypoint'а
+`slonk/plane-backend:v1.3.0-slonk1` — это upstream
+`makeplane/plane-backend:v1.3.0` плюс патч `S3Storage` (SLONK-32, см.
+`plane-backend/Dockerfile`); различаются только командой entrypoint'а
 (`docker-entrypoint-{api,worker,beat,migrator}.sh`).
 
 **plane-proxy — обязательный front-door, не опциональный.** Фронтенды Plane

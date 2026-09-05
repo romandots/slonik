@@ -7,6 +7,25 @@
 
 ## [Unreleased]
 
+### Fixed
+- **Пропатчен `S3Storage` в образе Plane backend — публичный API ассетов
+  больше не отвечает 500 (SLONK-32).** `embed_image` падал на первом же
+  шаге: `POST /api/v1/workspaces/<slug>/assets/` → 500 «Something went
+  wrong please try again later». Причина в upstream: `GenericAssetEndpoint`
+  зовёт `S3Storage(request=request, is_server=True)`, а сигнатура в
+  `plane/settings/storage.py` — только `def __init__(self, request=None)`,
+  то есть `TypeError` на каждом вызове. Тем же способом сломан
+  `GenericAssetEndpoint.get`; UI не задет, потому что ходит через
+  `plane/app/views/asset/v2.py` без этого аргумента. На upstream-ветках
+  `master` и `preview` баг не исправлен, поэтому апгрейд Plane не помогает.
+  Backend-сервисы (`api`/`worker`/`beat`/`migrator`) переведены с
+  upstream-образа на собственный `plane-backend/Dockerfile` — тот же
+  upstream плюс патч, который добавляет параметр и реализует его смысл
+  (server-side presign идёт на внутренний endpoint, а не на хост входящего
+  запроса). Патч верифицируется самой сборкой и падает, если upstream
+  изменит `S3Storage`; фронтенды остаются на upstream-образах. Выкат на
+  прод — ручной шаг, см. `docs/DEPLOY.md §3.5`. SemVer: PATCH.
+
 ### Added
 - **MCP-тул `embed_image` — inline-картинки в задачах Plane (SLONK-32).**
   Агент может встроить растровую картинку в описание задачи или в новый
