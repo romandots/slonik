@@ -395,7 +395,10 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
   server.registerTool(
     'list_issues',
     {
-      description: 'Search issues by state/label/assignee/cycle/priority filters.',
+      description:
+        'List issues filtered by state/label/assignee/priority. Filters are exact: '+
+        'an unknown state or priority is an error, an unknown label yields an empty list. '+
+        'Boards longer than `limit` are walked page by page via `next_cursor`.',
       inputSchema: ListIssuesInput.shape,
     },
     async (args) =>
@@ -443,7 +446,9 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
   server.registerTool(
     'search_issues',
     {
-      description: 'Full-text search across issue title/description/comments.',
+      description:
+        'Full-text search across issue title, key (PROJ-123) and description. '+
+        'Comments are not indexed. Paginated via `next_cursor`.',
       inputSchema: SearchIssuesInput.shape,
     },
     async (args) =>
@@ -456,6 +461,7 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
           defaultProjectRef: ctx.defaultProjectSlug,
           query: input.query,
           ...(input.limit !== undefined ? { limit: input.limit } : {}),
+          ...(input.cursor !== undefined ? { cursor: input.cursor } : {}),
           ...(input.project !== undefined ? { projectRef: input.project } : {}),
         });
       }),

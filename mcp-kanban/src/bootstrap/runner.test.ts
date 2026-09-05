@@ -196,8 +196,8 @@ function fakePlane(world: FakeWorld): PlaneClient {
     async listModules(): Promise<PlaneModule[]> {
       return [];
     },
-    async listIssues(): Promise<PlaneIssue[]> {
-      return [];
+    async listIssuesPage(): Promise<{ items: PlaneIssue[] }> {
+      return { items: [] };
     },
     async checkHealth() {
       return { reachable: true, status: 200, latencyMs: 1 };
