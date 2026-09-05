@@ -59,13 +59,43 @@ export interface PlaneCycle {
   workspace: string;
 }
 
+/**
+ * Plane module (эпик-контейнер для задач).
+ *
+ * `total_issues` / `completed_issues` Plane отдаёт аннотациями в
+ * `ModuleSerializer` — если апстрим их не вернул, поля просто отсутствуют
+ * (доп. запросов ради счётчика не делаем, см. SLONK-34).
+ */
 export interface PlaneModule {
   id: string;
   name: string;
   description?: string;
   status?: string;
+  total_issues?: number;
+  completed_issues?: number;
   project: string;
   workspace: string;
+}
+
+/** Допустимые значения `status` модуля в Plane v1.3.0. */
+export const PLANE_MODULE_STATUSES = [
+  'backlog',
+  'planned',
+  'in-progress',
+  'paused',
+  'completed',
+  'cancelled',
+] as const;
+export type PlaneModuleStatus = (typeof PLANE_MODULE_STATUSES)[number];
+
+/**
+ * Связка «модуль ↔ задача» (Plane endpoint `module-issues`).
+ * DELETE адресуется по UUID *задачи*, а не по `id` самой связки.
+ */
+export interface PlaneModuleIssue {
+  id: string;
+  module: string;
+  issue: string;
 }
 
 export interface PlaneIssue {
@@ -140,6 +170,22 @@ export interface PlaneAttachment {
   created_by?: string;
 }
 
+/**
+ * Plane v1.3.0: GET/POST /workspaces/<slug>/projects/<pid>/issues/<iid>/issue-relation/
+ * DELETE /workspaces/<slug>/projects/<pid>/issues/<iid>/issue-relation/<rel_id>/
+ *
+ * relation_type values: 'relates_to' | 'duplicate_of' | 'blocked_by' | 'blocking'
+ * The `related_issue` field holds the UUID of the other issue.
+ */
+export interface PlaneIssueRelation {
+  id: string;
+  relation_type: 'relates_to' | 'duplicate_of' | 'blocked_by' | 'blocking';
+  issue: string;
+  related_issue: string;
+  project: string;
+  created_at?: string;
+}
+
 export interface PlaneWorkspaceAsset {
   id: string;
   name?: string;
@@ -198,16 +244,21 @@ function extractNextCursor<T>(resp: ListResult<T>): string | undefined {
   return candidate;
 }
 
-export interface ListIssuesFilter {
-  state?: string | string[];
-  state__name?: string | string[];
-  labels?: string | string[];
-  assignees?: string | string[];
-  cycle?: string;
-  module?: string;
-  search?: string;
-  priority?: string | string[];
-  limit?: number;
+/**
+ * Одна страница списка задач проекта.
+ *
+ * SLONK-37: у Plane v1.3.0 публичный list-эндпоинт задач **не фильтрует**.
+ * Любые `state` / `labels` / `search` в query-string он молча игнорирует и
+ * отдаёт «последние N задач проекта». Поэтому клиент их и не отправляет:
+ * единственные параметры здесь — размер страницы и курсор, а вся фильтрация
+ * живёт слоем выше (`src/tools/list-issues/filter.ts`). Не возвращать сюда
+ * filter-поля: их наличие в сигнатуре — приглашение снова поверить, что
+ * сервер отфильтрует.
+ */
+export interface IssuePage {
+  items: PlaneIssue[];
+  /** Курсор следующей страницы; `undefined` — страниц больше нет. */
+  nextCursor?: string;
 }
 
 interface RequestOptions {
@@ -621,33 +672,97 @@ export class PlaneClient {
     );
   }
 
-  // ---------------- high-level: issues ----------------
-
-  async listIssues(
+  async createModule(
     workspaceSlug: string,
     projectId: string,
-    filter: ListIssuesFilter = {},
-  ): Promise<PlaneIssue[]> {
+    input: { name: string; description?: string; status?: PlaneModuleStatus },
+  ): Promise<PlaneModule> {
+    return await this.request<PlaneModule>(
+      `workspaces/${workspaceSlug}/projects/${projectId}/modules/`,
+      { method: 'POST', body: input },
+    );
+  }
+
+  async updateModule(
+    workspaceSlug: string,
+    projectId: string,
+    moduleId: string,
+    patch: { name?: string; description?: string; status?: PlaneModuleStatus },
+  ): Promise<PlaneModule> {
+    return await this.request<PlaneModule>(
+      `workspaces/${workspaceSlug}/projects/${projectId}/modules/${moduleId}/`,
+      { method: 'PATCH', body: patch },
+    );
+  }
+
+  async listModuleIssues(
+    workspaceSlug: string,
+    projectId: string,
+    moduleId: string,
+  ): Promise<PlaneModuleIssue[]> {
+    return unwrapList(
+      await this.request<PlaneModuleIssue[] | ListResult<PlaneModuleIssue>>(
+        `workspaces/${workspaceSlug}/projects/${projectId}/modules/${moduleId}/module-issues/`,
+      ),
+    );
+  }
+
+  /** Plane принимает пачку UUID разом: `{ issues: [...] }`. */
+  async addModuleIssues(
+    workspaceSlug: string,
+    projectId: string,
+    moduleId: string,
+    issueIds: string[],
+  ): Promise<PlaneModuleIssue[]> {
+    return unwrapList(
+      await this.request<PlaneModuleIssue[] | ListResult<PlaneModuleIssue>>(
+        `workspaces/${workspaceSlug}/projects/${projectId}/modules/${moduleId}/module-issues/`,
+        { method: 'POST', body: { issues: issueIds } },
+      ),
+    );
+  }
+
+  async removeModuleIssue(
+    workspaceSlug: string,
+    projectId: string,
+    moduleId: string,
+    issueId: string,
+  ): Promise<void> {
+    await this.request<void>(
+      `workspaces/${workspaceSlug}/projects/${projectId}/modules/${moduleId}/module-issues/${issueId}/`,
+      { method: 'DELETE' },
+    );
+  }
+
+  // ---------------- high-level: issues ----------------
+
+  /**
+   * Одна страница задач проекта в порядке Plane (`created_at DESC`).
+   *
+   * Никаких фильтров: см. комментарий к `IssuePage`. Вызывающий обходит
+   * страницы курсором и фильтрует сам.
+   */
+  async listIssuesPage(
+    workspaceSlug: string,
+    projectId: string,
+    opts: { perPage?: number; cursor?: string } = {},
+  ): Promise<IssuePage> {
     const query: Record<string, string | number | undefined> = {};
-    const merge = (k: string, v: string | string[] | undefined): void => {
-      if (v === undefined) return;
-      query[k] = Array.isArray(v) ? v.join(',') : v;
-    };
-    merge('state', filter.state);
-    merge('state__name', filter.state__name);
-    merge('labels', filter.labels);
-    merge('assignees', filter.assignees);
-    merge('priority', filter.priority);
-    if (filter.cycle !== undefined) query['cycle'] = filter.cycle;
-    if (filter.module !== undefined) query['module'] = filter.module;
-    if (filter.search !== undefined) query['search'] = filter.search;
-    if (filter.limit !== undefined) query['per_page'] = filter.limit;
+    if (opts.perPage !== undefined) query['per_page'] = opts.perPage;
+    if (opts.cursor !== undefined) query['cursor'] = opts.cursor;
 
     const resp = await this.request<ListResult<PlaneIssue> | PlaneIssue[]>(
       `workspaces/${workspaceSlug}/projects/${projectId}/issues/`,
       { query },
     );
-    return Array.isArray(resp) ? resp : resp.results;
+    // Плоский массив (pre-1.3 shape) пагинации не имеет — это единственная
+    // страница.
+    if (Array.isArray(resp)) return { items: resp };
+    const nextCursor = extractNextCursor(resp);
+    return {
+      items: resp.results,
+      ...(nextCursor !== undefined ? { nextCursor } : {}),
+    };
   }
 
   async getIssue(
@@ -906,6 +1021,43 @@ export class PlaneClient {
       }
       throw err;
     }
+  }
+
+  // ---------------- high-level: issue relations ----------------
+
+  async listIssueRelations(
+    workspaceSlug: string,
+    projectId: string,
+    issueId: string,
+  ): Promise<PlaneIssueRelation[]> {
+    const resp = await this.request<PlaneIssueRelation[] | ListResult<PlaneIssueRelation>>(
+      `workspaces/${workspaceSlug}/projects/${projectId}/issues/${issueId}/issue-relation/`,
+    );
+    return unwrapList(resp);
+  }
+
+  async createIssueRelation(
+    workspaceSlug: string,
+    projectId: string,
+    issueId: string,
+    input: { relation_type: PlaneIssueRelation['relation_type']; related_issue: string },
+  ): Promise<PlaneIssueRelation> {
+    return await this.request<PlaneIssueRelation>(
+      `workspaces/${workspaceSlug}/projects/${projectId}/issues/${issueId}/issue-relation/`,
+      { method: 'POST', body: input },
+    );
+  }
+
+  async deleteIssueRelation(
+    workspaceSlug: string,
+    projectId: string,
+    issueId: string,
+    relationId: string,
+  ): Promise<void> {
+    await this.request<void>(
+      `workspaces/${workspaceSlug}/projects/${projectId}/issues/${issueId}/issue-relation/${relationId}/`,
+      { method: 'DELETE' },
+    );
   }
 }
 

@@ -9,8 +9,11 @@ import type {
   PlaneCycle,
   PlaneIssue,
   PlaneIssueActivity,
+  PlaneIssueRelation,
   PlaneLabel,
   PlaneModule,
+  PlaneModuleIssue,
+  PlaneModuleStatus,
   PlaneProject,
   PlaneState,
   PlaneUser,
@@ -46,10 +49,16 @@ export interface FakeWorld {
   >;
   /** SLONK-14: объекты MinIO по ключу `<bucket>:<objectKey>`. */
   minioObjects: Map<string, { size: number; contentType?: string; lastModified?: Date; content?: Buffer }>;
+  /** SLONK-33: связи между задачами по ключу `<projectId>:<issueId>`. */
+  relations: Map<string, PlaneIssueRelation[]>;
+  /** SLONK-34: связи «модуль ↔ задача» по ключу `<projectId>:<moduleId>`. */
+  moduleIssues: Map<string, PlaneModuleIssue[]>;
   /** SLONK-14: симулируемые ошибки источников (для partial-failure тестов). */
   failPlaneAttachments: boolean;
   failMinioList: boolean;
   failPlaneComments: boolean;
+  /** SLONK-37: журнал обращений за страницами задач (для тестов пагинации). */
+  issuePageCalls: Array<{ projectId: string; cursor?: string; perPage: number }>;
   /** Счётчик инкрементальных id для seed данных. */
   nextId: number;
 }
@@ -67,6 +76,8 @@ export function newWorld(): FakeWorld {
     comments: new Map(),
     members: new Map(),
     inviteResponses: new Map(),
+    relations: new Map(),
+    moduleIssues: new Map(),
     planeAttachments: new Map(),
     workspaceAssets: new Map(),
     genericAssets: new Map(),
@@ -74,6 +85,7 @@ export function newWorld(): FakeWorld {
     failPlaneAttachments: false,
     failMinioList: false,
     failPlaneComments: false,
+    issuePageCalls: [],
     nextId: 1,
   };
 }
@@ -286,26 +298,97 @@ export function fakePlane(world: FakeWorld): PlaneClient {
     async listModules(_ws: string, projectId: string) {
       return [...(world.modules.get(projectId) ?? [])];
     },
-    async listIssues(_ws: string, projectId: string, filter?: Parameters<PlaneClient['listIssues']>[2]) {
-      let arr = world.issues.get(projectId) ?? [];
-      if (filter?.state !== undefined) {
-        const wanted = Array.isArray(filter.state) ? filter.state : filter.state.split(',');
-        arr = arr.filter((i) => wanted.includes(i.state));
+    async createModule(
+      ws: string,
+      projectId: string,
+      input: { name: string; description?: string; status?: PlaneModuleStatus },
+    ) {
+      const m: PlaneModule = {
+        id: id('mod'),
+        name: input.name,
+        ...(input.description !== undefined ? { description: input.description } : {}),
+        ...(input.status !== undefined ? { status: input.status } : {}),
+        total_issues: 0,
+        project: projectId,
+        workspace: ws,
+      };
+      const arr = world.modules.get(projectId) ?? [];
+      arr.push(m);
+      world.modules.set(projectId, arr);
+      return m;
+    },
+    async updateModule(
+      _ws: string,
+      projectId: string,
+      moduleId: string,
+      patch: { name?: string; description?: string; status?: PlaneModuleStatus },
+    ) {
+      const arr = world.modules.get(projectId) ?? [];
+      const idx = arr.findIndex((m) => m.id === moduleId);
+      if (idx === -1) {
+        const { PlaneError } = await import('../errors.js');
+        throw new PlaneError({
+          message: `Plane API PATCH modules/${moduleId}/ failed: 404 not found`,
+          planeStatus: 404,
+        });
       }
-      if (filter?.labels !== undefined) {
-        const wanted = Array.isArray(filter.labels) ? filter.labels : filter.labels.split(',');
-        arr = arr.filter((i) => i.labels.some((l) => wanted.includes(l)));
+      const next = { ...arr[idx]!, ...patch };
+      arr[idx] = next;
+      return next;
+    },
+    async listModuleIssues(_ws: string, projectId: string, moduleId: string) {
+      return [...(world.moduleIssues.get(`${projectId}:${moduleId}`) ?? [])];
+    },
+    async addModuleIssues(_ws: string, projectId: string, moduleId: string, issueIds: string[]) {
+      const key = `${projectId}:${moduleId}`;
+      const arr = world.moduleIssues.get(key) ?? [];
+      const created: PlaneModuleIssue[] = [];
+      for (const issueId of issueIds) {
+        if (arr.some((mi) => mi.issue === issueId)) continue;
+        const mi: PlaneModuleIssue = { id: id('mi'), module: moduleId, issue: issueId };
+        arr.push(mi);
+        created.push(mi);
       }
-      if (filter?.search !== undefined) {
-        const q = filter.search.toLowerCase();
-        arr = arr.filter((i) => i.name.toLowerCase().includes(q));
+      world.moduleIssues.set(key, arr);
+      syncModuleCount(world, projectId, moduleId, arr.length);
+      return created;
+    },
+    async removeModuleIssue(_ws: string, projectId: string, moduleId: string, issueId: string) {
+      const key = `${projectId}:${moduleId}`;
+      const arr = world.moduleIssues.get(key) ?? [];
+      const idx = arr.findIndex((mi) => mi.issue === issueId);
+      if (idx !== -1) arr.splice(idx, 1);
+      world.moduleIssues.set(key, arr);
+      syncModuleCount(world, projectId, moduleId, arr.length);
+    },
+    // SLONK-37: фейк намеренно НЕ фильтрует и НЕ ищет — ровно как настоящий
+    // Plane v1.3.0, который молча игнорирует любые filter-параметры в
+    // query-string. Раньше фейк фильтровал сам, поэтому тесты list_issues и
+    // search_issues были зелёными при полностью нерабочих фильтрах в
+    // проде. Не добавлять сюда фильтрацию: этот фейк — единственное место,
+    // где тесты видят настоящую (тупую) семантику Plane.
+    async listIssuesPage(
+      _ws: string,
+      projectId: string,
+      opts?: { perPage?: number; cursor?: string },
+    ) {
+      const arr = world.issues.get(projectId) ?? [];
+      const perPage = opts?.perPage ?? 100;
+      const offset = opts?.cursor !== undefined ? Number.parseInt(opts.cursor, 10) : 0;
+      if (!Number.isInteger(offset) || offset < 0) {
+        throw new McpError({ code: 'INVALID_INPUT', message: `bad cursor: ${String(opts?.cursor)}` });
       }
-      if (filter?.priority !== undefined) {
-        const wanted = Array.isArray(filter.priority) ? filter.priority : filter.priority.split(',');
-        arr = arr.filter((i) => i.priority !== null && wanted.includes(i.priority));
-      }
-      if (filter?.limit !== undefined) arr = arr.slice(0, filter.limit);
-      return arr;
+      world.issuePageCalls.push({
+        projectId,
+        ...(opts?.cursor !== undefined ? { cursor: opts.cursor } : {}),
+        perPage,
+      });
+      const items = arr.slice(offset, offset + perPage);
+      const nextOffset = offset + items.length;
+      return {
+        items,
+        ...(nextOffset < arr.length ? { nextCursor: String(nextOffset) } : {}),
+      };
     },
     async getIssue(_ws: string, projectId: string, issueId: string) {
       return world.issues.get(projectId)?.find((i) => i.id === issueId);
@@ -468,8 +551,49 @@ export function fakePlane(world: FakeWorld): PlaneClient {
       world.members.set(slug, arr);
       return out;
     },
+    async listIssueRelations(_ws: string, projectId: string, issueId: string) {
+      return [...(world.relations.get(`${projectId}:${issueId}`) ?? [])];
+    },
+    async createIssueRelation(
+      _ws: string,
+      projectId: string,
+      issueId: string,
+      input: { relation_type: PlaneIssueRelation['relation_type']; related_issue: string },
+    ) {
+      const key = `${projectId}:${issueId}`;
+      const arr = world.relations.get(key) ?? [];
+      const rel: PlaneIssueRelation = {
+        id: id('rel'),
+        relation_type: input.relation_type,
+        issue: issueId,
+        related_issue: input.related_issue,
+        project: projectId,
+        created_at: new Date().toISOString(),
+      };
+      arr.push(rel);
+      world.relations.set(key, arr);
+      return rel;
+    },
+    async deleteIssueRelation(_ws: string, projectId: string, issueId: string, relationId: string) {
+      const key = `${projectId}:${issueId}`;
+      const arr = world.relations.get(key) ?? [];
+      const idx = arr.findIndex((r) => r.id === relationId);
+      if (idx !== -1) arr.splice(idx, 1);
+      world.relations.set(key, arr);
+    },
   } as unknown as PlaneClient;
   return stub;
+}
+
+/** Держит аннотацию `total_issues` в фейке в согласии с module-issues. */
+function syncModuleCount(
+  world: FakeWorld,
+  projectId: string,
+  moduleId: string,
+  count: number,
+): void {
+  const mod = (world.modules.get(projectId) ?? []).find((m) => m.id === moduleId);
+  if (mod !== undefined) mod.total_issues = count;
 }
 
 function stripTags(s: string): string {

@@ -460,13 +460,15 @@ curl -fsS -H "Authorization: Bearer $MCP_AUTH_TOKEN" \
   http://localhost:8787/mcp/tools
 ```
 
-В ответе `/mcp/tools` должно быть 24 имени: `who_am_i`, `list_workspaces`,
+В ответе `/mcp/tools` должно быть 30 имён: `who_am_i`, `list_workspaces`,
 `list_projects`, `list_states`, `list_labels`, `list_cycles`, `list_modules`,
 `list_issues`, `get_issue`, `search_issues`, `get_issue_history`,
 `create_issue`, `update_issue`, `transition_issue`, `claim_issue`,
 `release_issue`, `block_issue`, `comment_issue`, `attach_file`,
-`read_attachment`, `list_attachments`, `link_git_ref`, `unlink_git_ref`,
-`find_issues_by_git_ref`.
+`embed_image`, `read_attachment`, `list_attachments`, `link_git_ref`,
+`unlink_git_ref`, `find_issues_by_git_ref`, `issue_relations`,
+`create_module`, `update_module`, `add_issues_to_module`,
+`remove_issues_from_module`.
 
 ## 5. Подключение агентов
 
@@ -677,9 +679,12 @@ Testing → Documenting → Merging → Done
 
 ## Жизненный цикл задачи (твой обязательный сценарий)
 
-1. **Найти работу.** `list_issues({ state: "To Do", labels: ["agent-ready"] })`
-   или `search_issues` по ключевому слову. Не бери задачу с лейблом
-   `needs-human` без явного указания человека.
+1. **Найти работу.** `list_issues({ state: "To Do", label: "agent-ready" })`
+   или `search_issues` по ключевому слову. Фильтр — параметр запроса, а не
+   постфильтр по выдаче: опечатка в имени состояния вернёт ошибку, а не
+   «всю доску». Если в ответе `has_more: true` — доска длиннее выдачи,
+   дочитай её, передав `next_cursor` обратно в `cursor`. Не бери задачу с
+   лейблом `needs-human` без явного указания человека.
 2. **Взять в работу.** `claim_issue({ issue_id })`. Если возврат `CONFLICT` —
    задачу уже забрал другой агент, ищи следующую.
 3. **Понять контекст.** `get_issue({ issue_id })` — прочитай title,

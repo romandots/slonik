@@ -45,6 +45,16 @@ import { listAttachments } from './list-attachments/handler.js';
 import { ListAttachmentsInput } from './list-attachments/schema.js';
 import { readAttachment } from './read-attachment/handler.js';
 import { ReadAttachmentInput } from './read-attachment/schema.js';
+import { issueRelations } from './issue-relations/handler.js';
+import { IssueRelationsInput } from './issue-relations/schema.js';
+import { createModule } from './create-module/handler.js';
+import { CreateModuleInput } from './create-module/schema.js';
+import { updateModule } from './update-module/handler.js';
+import { UpdateModuleInput } from './update-module/schema.js';
+import { addIssuesToModule } from './add-issues-to-module/handler.js';
+import { AddIssuesToModuleInput } from './add-issues-to-module/schema.js';
+import { removeIssuesFromModule } from './remove-issues-from-module/handler.js';
+import { RemoveIssuesFromModuleInput } from './remove-issues-from-module/schema.js';
 import { hashInput, newTraceId } from '../audit.js';
 
 export type { ToolContext } from './context.js';
@@ -76,6 +86,11 @@ export const REGISTERED_TOOL_NAMES = [
   'find_issues_by_git_ref',
   'list_attachments',
   'read_attachment',
+  'issue_relations',
+  'create_module',
+  'update_module',
+  'add_issues_to_module',
+  'remove_issues_from_module',
 ] as const;
 export type RegisteredToolName = (typeof REGISTERED_TOOL_NAMES)[number];
 
@@ -95,6 +110,11 @@ const WRITE_TOOLS = new Set<RegisteredToolName>([
   // логируется как write (один audit-row на вызов, rate-limit на
   // identity), хотя в Plane не пишет.
   'read_attachment',
+  'issue_relations',
+  'create_module',
+  'update_module',
+  'add_issues_to_module',
+  'remove_issues_from_module',
 ]);
 
 // MCP SDK ожидает у tool-callback'а возврат с индексной сигнатурой
@@ -395,7 +415,10 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
   server.registerTool(
     'list_issues',
     {
-      description: 'Search issues by state/label/assignee/cycle/priority filters.',
+      description:
+        'List issues filtered by state/label/assignee/priority. Filters are exact: '+
+        'an unknown state or priority is an error, an unknown label yields an empty list. '+
+        'Boards longer than `limit` are walked page by page via `next_cursor`.',
       inputSchema: ListIssuesInput.shape,
     },
     async (args) =>
@@ -443,7 +466,9 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
   server.registerTool(
     'search_issues',
     {
-      description: 'Full-text search across issue title/description/comments.',
+      description:
+        'Full-text search across issue title, key (PROJ-123) and description. '+
+        'Comments are not indexed. Paginated via `next_cursor`.',
       inputSchema: SearchIssuesInput.shape,
     },
     async (args) =>
@@ -456,6 +481,7 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
           defaultProjectRef: ctx.defaultProjectSlug,
           query: input.query,
           ...(input.limit !== undefined ? { limit: input.limit } : {}),
+          ...(input.cursor !== undefined ? { cursor: input.cursor } : {}),
           ...(input.project !== undefined ? { projectRef: input.project } : {}),
         });
       }),
@@ -878,6 +904,141 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
           void _audit;
           return rest;
         },
+      });
+    },
+  );
+
+  // ---- issue_relations (SLONK-33) ----
+  server.registerTool(
+    'issue_relations',
+    {
+      description:
+        'Manage relations between issues (relates_to, duplicate_of, blocked_by, blocking). ' +
+        'action=list returns all relations; action=add creates one; action=remove deletes one.',
+      inputSchema: IssueRelationsInput.shape,
+    },
+    async (args) => {
+      const input = IssueRelationsInput.parse(args);
+      return await withWriteGuard({
+        ctx,
+        tool: 'issue_relations',
+        input,
+        issueIdFromInput: (i) => (i as typeof input).issue_id,
+        fn: async () =>
+          await issueRelations({
+            plane: ctx.plane,
+            cache: ctx.cache,
+            workspace: ctx.workspace,
+            defaultProjectRef: ctx.defaultProjectSlug,
+            input,
+          }),
+      });
+    },
+  );
+
+  // ---- create_module (SLONK-34) ----
+  server.registerTool(
+    'create_module',
+    {
+      description:
+        'Create a module (epic container) in the resolved project. Idempotent by name: ' +
+        'calling it again with the same name returns the existing module (created=false).',
+      inputSchema: CreateModuleInput.shape,
+    },
+    async (args) => {
+      const input = CreateModuleInput.parse(args);
+      return await withWriteGuard({
+        ctx,
+        tool: 'create_module',
+        input,
+        fn: async () =>
+          await createModule({
+            plane: ctx.plane,
+            cache: ctx.cache,
+            workspace: ctx.workspace,
+            defaultProjectRef: ctx.defaultProjectSlug,
+            input,
+          }),
+      });
+    },
+  );
+
+  // ---- update_module (SLONK-34) ----
+  server.registerTool(
+    'update_module',
+    {
+      description:
+        'Update a module (name/description/status). The module is referenced by name or UUID.',
+      inputSchema: UpdateModuleInput.shape,
+    },
+    async (args) => {
+      const input = UpdateModuleInput.parse(args);
+      return await withWriteGuard({
+        ctx,
+        tool: 'update_module',
+        input,
+        fn: async () =>
+          await updateModule({
+            plane: ctx.plane,
+            cache: ctx.cache,
+            workspace: ctx.workspace,
+            defaultProjectRef: ctx.defaultProjectSlug,
+            input,
+          }),
+      });
+    },
+  );
+
+  // ---- add_issues_to_module (SLONK-34) ----
+  server.registerTool(
+    'add_issues_to_module',
+    {
+      description:
+        'Add issues to a module. Issues are referenced by key (SLONK-12) or UUID; ' +
+        'issues already in the module are reported as already_present, not duplicated.',
+      inputSchema: AddIssuesToModuleInput.shape,
+    },
+    async (args) => {
+      const input = AddIssuesToModuleInput.parse(args);
+      return await withWriteGuard({
+        ctx,
+        tool: 'add_issues_to_module',
+        input,
+        fn: async () =>
+          await addIssuesToModule({
+            plane: ctx.plane,
+            cache: ctx.cache,
+            workspace: ctx.workspace,
+            defaultProjectRef: ctx.defaultProjectSlug,
+            input,
+          }),
+      });
+    },
+  );
+
+  // ---- remove_issues_from_module (SLONK-34) ----
+  server.registerTool(
+    'remove_issues_from_module',
+    {
+      description:
+        'Detach issues from a module. Issues are referenced by key (SLONK-12) or UUID; ' +
+        'issues that are not in the module are reported as not_in_module.',
+      inputSchema: RemoveIssuesFromModuleInput.shape,
+    },
+    async (args) => {
+      const input = RemoveIssuesFromModuleInput.parse(args);
+      return await withWriteGuard({
+        ctx,
+        tool: 'remove_issues_from_module',
+        input,
+        fn: async () =>
+          await removeIssuesFromModule({
+            plane: ctx.plane,
+            cache: ctx.cache,
+            workspace: ctx.workspace,
+            defaultProjectRef: ctx.defaultProjectSlug,
+            input,
+          }),
       });
     },
   );
